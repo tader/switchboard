@@ -106,7 +106,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `POST /api/admin/plugins/install` `{repo, ref?, path?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` | Install/update from GitHub |
 | `POST /api/admin/plugins/:id/reload`, `PATCH /api/admin/plugins/:id` `{enabled}`, `GET/PUT /api/admin/plugins/:id/settings`, `DELETE /api/admin/plugins/:id` | |
 | `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/:id`, `POST /api/admin/users/:id/invite` | Admin: users |
-| `GET /api/audit`, `GET /api/audit/:id`, `GET /api/audit/facets` | Activity log. Filters: `connection`, `client` (token id or `web`), `status` (`2xx`…`5xx`, `error` or a code), `method`, `source`, `q`, `from`/`to` (ms); `sort` (`time`, `duration`, `status`, `size`), `order`, `limit`, `offset`. Not readable with tokens limited to connections. |
+| `GET /api/audit`, `GET /api/audit/:id`, `GET /api/audit/facets`, `GET /api/audit/histogram?by=…` | Activity log. Filters: `connection`, `client` (token id or `web`), `status` (`2xx`…`5xx`, `error` or a code), `method`, `source`, `q`, `from`/`to` (ms); `sort` (`time`, `duration`, `status`, `size`), `order`, `limit`, `offset`. Not readable with tokens limited to connections. |
 | `DELETE /api/me/token` | Revoke the token making the request |
 | `GET /api/openapi.json` | OpenAPI description of this API |
 
@@ -116,7 +116,7 @@ Apps (such as another Switchboard or an MCP client) can get a Switchboard token 
 
 ### Activity
 
-Every request through Switchboard is logged per user, whether it goes through the proxy, the call API, a saved call or the console. So is every raw access token handed out: requests made with that token go to the service directly and do not appear afterwards. Each entry records time, client (API token or web console), connection, method, URL, status, duration and sizes, IP and user agent, plus the request headers and the first 4 KB of the request body. Secrets are masked before anything is stored: credentials Switchboard added, and values with secret-looking names (token, secret, password, api_key, …) in query strings, headers and JSON or form bodies. Response bodies are not kept. Browse it on the *Activity* page, or from a connection's or token's menu.
+Every request through Switchboard is logged per user, whether it goes through the proxy, the call API, a saved call or the console. So is every raw access token handed out: requests made with that token go to the service directly and do not appear afterwards. Each entry records time, client (API token or web console), connection, method, URL, status, duration and sizes, IP and user agent, plus the request headers and the first 4 KB of the request body. Secrets are masked before anything is stored: credentials Switchboard added, and values with secret-looking names (token, secret, password, api_key, …) in query strings, headers and JSON or form bodies. Response bodies are not kept. Browse it on the *Activity* page, or from a connection's or token's menu. A stacked chart above the table shows requests over time, broken down by connection, client, method, status or URL (ids in paths are grouped as `{id}`); drag across it, or click a column, to zoom in, which also filters the table.
 
 ### Docs
 

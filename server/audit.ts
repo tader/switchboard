@@ -272,3 +272,110 @@ export function prune() {
   if (!config.auditRetentionDays) return;
   run('DELETE FROM audit_log WHERE created_at < ?', now() - config.auditRetentionDays * 86400_000);
 }
+
+// --- histogram (activity over time) ---
+
+export type Breakdown = 'connection' | 'client' | 'method' | 'status' | 'url';
+
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
+/** Bucket sizes that read naturally on a time axis. */
+const INTERVALS = [MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN, HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
+const MAX_SERIES = 7;
+
+/** Groups URLs by path, with ids collapsed, so e.g. one series covers every /messages/{id}. */
+export function urlGroup(url: string | null): string {
+  if (!url) return '—';
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return url;
+  }
+  const path = u.pathname
+    .split('/')
+    .map((seg) => {
+      const s = decodeURIComponent(seg);
+      // Numbers, uuids, and long opaque tokens (message ids, item ids) are ids, not names.
+      return /^\d+$/.test(s) || /^[0-9a-f-]{20,}$/i.test(s) || (s.length >= 20 && /^[\w=+.-]+$/.test(s) && /\d/.test(s)) ? '{id}' : seg;
+    })
+    .join('/');
+  return u.host + path;
+}
+
+const KEY: Record<Exclude<Breakdown, 'url'>, { key: string; label: string }> = {
+  connection: { key: "COALESCE(connection_id, '—')", label: "COALESCE(connection_name, '—')" },
+  client: { key: "COALESCE(token_id, 'web')", label: "COALESCE(token_name, 'Web console')" },
+  method: { key: "COALESCE(method, '—')", label: "COALESCE(method, '—')" },
+  status: {
+    key: `CASE WHEN status IS NULL THEN 'failed' WHEN status < 300 THEN '2xx' WHEN status < 400 THEN '3xx' WHEN status < 500 THEN '4xx' ELSE '5xx' END`,
+    label: `CASE WHEN status IS NULL THEN 'failed' WHEN status < 300 THEN '2xx' WHEN status < 400 THEN '3xx' WHEN status < 500 THEN '4xx' ELSE '5xx' END`,
+  },
+};
+
+export function auditHistogram(userId: string, q: AuditQuery & { by?: string; tz?: number; buckets?: number }) {
+  const by = (q.by ?? 'connection') as Breakdown;
+  if (!['connection', 'client', 'method', 'status', 'url'].includes(by)) throw badRequest('by must be connection, client, method, status or url');
+  const w = where(userId, { ...q, sort: undefined, order: undefined });
+  const to = q.to ?? now();
+  let from = q.from;
+  if (!from) {
+    const first = one<{ t: number | null }>(`SELECT MIN(created_at) AS t FROM audit_log WHERE ${w.sql}`, ...w.params)?.t;
+    from = first ?? to - DAY;
+  }
+  const target = Math.min(Math.max(Number(q.buckets) || 60, 10), 200);
+  // Some slack, so "last hour" gets minutes even though "now" has moved on a little.
+  const interval = INTERVALS.find((i) => (to - from!) / i <= target * 1.1) ?? INTERVALS.at(-1)!;
+  // Buckets start on local boundaries (midnight, the hour), using the viewer's UTC offset in minutes.
+  const shift = -(Number(q.tz) || 0) * MIN;
+  const start = Math.floor((from + shift) / interval) * interval - shift;
+
+  const bucketSql = `(CAST((created_at + ${shift}) / ${interval} AS INTEGER) * ${interval} - ${shift})`;
+  let rows: { b: number; k: string; l: string; n: number }[];
+  if (by === 'url') {
+    const path = `CASE WHEN instr(url, '?') > 0 THEN substr(url, 1, instr(url, '?') - 1) ELSE url END`;
+    const raw = all<{ b: number; u: string; n: number }>(`SELECT ${bucketSql} AS b, ${path} AS u, COUNT(*) AS n FROM audit_log WHERE ${w.sql} GROUP BY b, u`, ...w.params);
+    const merged = new Map<string, { b: number; k: string; l: string; n: number }>();
+    for (const r of raw) {
+      const k = urlGroup(r.u);
+      const id = `${r.b}\0${k}`;
+      const m = merged.get(id);
+      if (m) m.n += r.n;
+      else merged.set(id, { b: r.b, k, l: k, n: r.n });
+    }
+    rows = [...merged.values()];
+  } else {
+    const { key, label } = KEY[by];
+    rows = all(`SELECT ${bucketSql} AS b, ${key} AS k, MAX(${label}) AS l, COUNT(*) AS n FROM audit_log WHERE ${w.sql} GROUP BY b, k`, ...w.params);
+  }
+
+  const totals = new Map<string, { key: string; label: string; total: number }>();
+  for (const r of rows) {
+    const t = totals.get(r.k) ?? { key: r.k, label: r.l, total: 0 };
+    t.total += r.n;
+    totals.set(r.k, t);
+  }
+  const ranked = [...totals.values()].sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+  // Status keeps its natural order; everything else shows the largest series, the rest folded into Other.
+  const series = by === 'status' ? ranked.sort((a, b) => a.key.localeCompare(b.key)) : ranked.slice(0, MAX_SERIES);
+  const shown = new Set(series.map((s) => s.key));
+  const folded = ranked.filter((s) => !shown.has(s.key));
+  const otherTotal = folded.reduce((n, s) => n + s.total, 0);
+
+  const buckets = new Map<number, Record<string, number>>();
+  for (const r of rows) {
+    const values = buckets.get(r.b) ?? {};
+    const k = shown.has(r.k) ? r.k : '__other';
+    values[k] = (values[k] ?? 0) + r.n;
+    buckets.set(r.b, values);
+  }
+  return {
+    by,
+    from: start,
+    to,
+    interval,
+    series: [...series, ...(otherTotal ? [{ key: '__other', label: `Other (${folded.length})`, total: otherTotal }] : [])],
+    buckets: [...buckets.entries()].sort((a, b) => a[0] - b[0]).map(([t, values]) => ({ t, values })),
+  };
+}

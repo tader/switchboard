@@ -532,6 +532,41 @@ test('audit trail: every request recorded, redacted, filterable', async () => {
   assert.equal((await list()).total, 4);
 });
 
+test('activity histogram: buckets, breakdowns, Other, URL grouping', async () => {
+  const c = (await req('POST', '/api/connections', { service: 'http', method: 'token', config: { baseUrl: up, token: 't' }, name: 'histo' })).data.connection;
+  for (const id of ['12345', '67890', 'AAMkAGI2THVSAAA1234567890abc']) await req('POST', '/api/call', { connection: c.id, url: `/users/${id}/items` });
+  for (let i = 1; i <= 9; i++) await req('POST', '/api/call', { connection: c.id, url: `/path${i}?page=${i}` });
+  await req('POST', '/api/call', { connection: c.id, url: 'https://not-allowed.example/x' });
+
+  const from = Date.now() - 3600_000;
+  const h = async (q: string) => (await req('GET', `/api/audit/histogram?connection=${c.id}&from=${from}&${q}`)).data;
+  const byConn = await h('by=connection&tz=-120');
+  assert.equal(byConn.interval, 60_000, 'one hour in minutes');
+  assert.equal(byConn.series.length, 1);
+  assert.equal(byConn.series[0].label, 'histo');
+  const table = (await req('GET', `/api/audit?connection=${c.id}&from=${from}`)).data.total;
+  assert.equal(byConn.series[0].total, table, 'chart and table agree');
+  assert.equal(byConn.buckets.reduce((n: number, b: any) => n + (Object.values(b.values) as number[]).reduce((a, v) => a + v, 0), 0), table);
+  // Buckets start on whole local minutes.
+  for (const b of byConn.buckets) assert.equal(b.t % 60_000, 0);
+
+  const byUrl = await h('by=url');
+  assert.equal(byUrl.series.length, 8, 'seven series and Other');
+  assert.match(byUrl.series.at(-1).label, /^Other \(\d+\)$/);
+  assert.equal(byUrl.series[0].label, `${new URL(up).host}/users/{id}/items`, 'ids collapsed, largest first');
+  assert.equal(byUrl.series[0].total, 3);
+  assert.equal(byUrl.series.reduce((n: number, x: any) => n + x.total, 0), table, 'nothing lost to Other');
+
+  const byStatus = await h('by=status');
+  assert.deepEqual(byStatus.series.map((x: any) => x.key), ['2xx', '4xx']);
+  assert.equal((await req('GET', '/api/audit/histogram?by=nope')).status, 400);
+
+  // Zoomed into a window without requests
+  const past = await h(`by=method&to=${from + 60_000}`);
+  assert.equal(past.series.length, 0);
+  await req('DELETE', `/api/connections/${c.id}`);
+});
+
 test('plugin settings keep secrets hidden', async () => {
   await req('PUT', '/api/admin/plugins/github/settings', { clientId: 'abc', clientSecret: 'shh' });
   const s = (await req('GET', '/api/admin/plugins/github/settings')).data;

@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, History, RefreshCw, Sear
 import { api, type Connection } from '../api';
 import { JsonView } from '../components/JsonView';
 import { Alert, Badge, Button, Card, CopyField, Dialog, Empty, Input, PageHeader, Select, Spinner, Switch } from '../components/ui';
+import { ActivityChart, type Breakdown } from '../components/ActivityChart';
 import { METHOD_COLORS, ago, bytes, cx, useResource } from '../lib';
 
 interface Entry {
@@ -68,6 +69,11 @@ function statusTone(e: Entry) {
   return 'text-emerald-700 bg-emerald-50 ring-emerald-200 dark:text-emerald-300 dark:bg-emerald-500/10 dark:ring-emerald-500/20';
 }
 
+function customLabel(from: string, to: string) {
+  const fmt = (v: string) => new Date(Number(v)).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return from && to ? `${fmt(from)} – ${fmt(to)}` : 'Custom range';
+}
+
 function splitUrl(url: string | null): { host?: string; path: string } {
   if (!url) return { path: '' };
   try {
@@ -88,6 +94,10 @@ export function Activity() {
     method: params.get('method') ?? '',
     source: params.get('source') ?? '',
     range: params.get('range') ?? '7d',
+    /** With range "custom": a zoomed-in period, in ms. */
+    from: params.get('from') ?? '',
+    to: params.get('to') ?? '',
+    by: (params.get('by') ?? 'connection') as Breakdown,
     sort: (params.get('sort') ?? 'time') as SortKey,
     order: params.get('order') ?? 'desc',
     offset: Number(params.get('offset') ?? 0),
@@ -96,7 +106,8 @@ export function Activity() {
     const next = { ...f, ...(keepOffset ? {} : { offset: 0 }), ...patch };
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries(next)) {
-      const defaults: Record<string, unknown> = { range: '7d', sort: 'time', order: 'desc', offset: 0 };
+      const defaults: Record<string, unknown> = { range: '7d', sort: 'time', order: 'desc', offset: 0, by: 'connection' };
+      if ((k === 'from' || k === 'to') && next.range !== 'custom') continue;
       if (v !== '' && v !== defaults[k]) p.set(k, String(v));
     }
     setParams(p, { replace: true });
@@ -112,16 +123,46 @@ export function Activity() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const query = useMemo(() => {
+  // The filters both the chart and the table use.
+  const filterQuery = useMemo(() => {
     const p = new URLSearchParams();
-    for (const k of ['q', 'connection', 'client', 'status', 'method', 'source', 'sort', 'order'] as const) if (f[k]) p.set(k, f[k]);
-    const r = RANGES[f.range];
-    if (r?.ms) p.set('from', String(Date.now() - r.ms));
+    for (const k of ['q', 'connection', 'client', 'status', 'method', 'source'] as const) if (f[k]) p.set(k, f[k]);
+    if (f.range === 'custom') {
+      if (f.from) p.set('from', f.from);
+      if (f.to) p.set('to', f.to);
+    } else {
+      const r = RANGES[f.range];
+      if (r?.ms) p.set('from', String(Date.now() - r.ms));
+    }
+    return p.toString();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [f.q, f.connection, f.client, f.status, f.method, f.source, f.range, f.from, f.to]);
+  const query = useMemo(() => {
+    const p = new URLSearchParams(filterQuery);
+    for (const k of ['sort', 'order'] as const) if (f[k]) p.set(k, f[k]);
     p.set('limit', String(PAGE));
     p.set('offset', String(f.offset));
     return p.toString();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params]);
+  }, [filterQuery, f.sort, f.order, f.offset]);
+
+  // Zooming in from the chart; each step can be undone.
+  const [zoomStack, setZoomStack] = useState<{ range: string; from: string; to: string }[]>([]);
+  const zoom = (from: number, to: number) => {
+    setZoomStack((s) => [...s, { range: f.range, from: f.from, to: f.to }]);
+    set({ range: 'custom', from: String(from), to: String(to) });
+  };
+  const zoomOut = () => {
+    const prev = zoomStack.at(-1);
+    setZoomStack((s) => s.slice(0, -1));
+    set(prev ?? { range: '7d' });
+  };
+  const [refresh, setRefresh] = useState(0);
+  const pick = (key: string) => {
+    if (f.by === 'connection') set({ connection: key });
+    else if (f.by === 'client') set({ client: key });
+    else if (f.by === 'method') set({ method: key });
+    else if (f.by === 'status') set({ status: key === 'failed' ? 'error' : key });
+  };
 
   const page = useResource(() => api<Page>(`/audit?${query}`), [query]);
   const facets = useResource(() => api<Facets>('/audit/facets'));
@@ -130,7 +171,7 @@ export function Activity() {
 
   // Live mode refreshes the newest page, to watch agents as they work.
   const [live, setLive] = useState(false);
-  const liveOk = f.sort === 'time' && f.order === 'desc' && f.offset === 0;
+  const liveOk = f.sort === 'time' && f.order === 'desc' && f.offset === 0 && f.range !== 'custom';
   const seen = useRef(new Set<number>());
   const [fresh, setFresh] = useState(new Set<number>());
   useEffect(() => {
@@ -138,6 +179,7 @@ export function Activity() {
     const t = setInterval(() => {
       page.reload();
       facets.reload();
+      setRefresh((n) => n + 1);
     }, 3000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,11 +226,11 @@ export function Activity() {
         description="Every request made with your connections, by you and your tokens."
         actions={
           <>
-            <label className={cx('flex items-center gap-2 text-[13px]', !liveOk && 'opacity-50')} title={liveOk ? undefined : 'Live shows the newest entries; sort by newest first'}>
+            <label className={cx('flex items-center gap-2 text-[13px]', !liveOk && 'opacity-50')} title={liveOk ? undefined : f.range === 'custom' ? 'Live shows the newest entries; zoom out first' : 'Live shows the newest entries; sort by newest first'}>
               <Switch checked={live && liveOk} onChange={setLive} disabled={!liveOk} label="Live" />
               Live
             </label>
-            <Button icon={<RefreshCw className={cx('size-4', page.loading && 'animate-spin')} />} onClick={() => (page.reload(), facets.reload())}>
+            <Button icon={<RefreshCw className={cx('size-4', page.loading && 'animate-spin')} />} onClick={() => (page.reload(), facets.reload(), setRefresh((n) => n + 1))}>
               Refresh
             </Button>
           </>
@@ -241,7 +283,16 @@ export function Activity() {
             </option>
           ))}
         </Select>
-        <Select value={f.range} onChange={(e) => set({ range: e.target.value })} className="w-40" aria-label="Time range">
+        <Select
+          value={f.range}
+          onChange={(e) => {
+            setZoomStack([]);
+            set({ range: e.target.value });
+          }}
+          className={f.range === 'custom' ? 'w-80' : 'w-40'}
+          aria-label="Time range"
+        >
+          {f.range === 'custom' && <option value="custom">{customLabel(f.from, f.to)}</option>}
           {Object.entries(RANGES).map(([v, r]) => (
             <option key={v} value={v}>
               {r.label}
@@ -249,11 +300,26 @@ export function Activity() {
           ))}
         </Select>
         {filtered && (
-          <Button variant="ghost" icon={<X className="size-4" />} onClick={() => setParams(f.range === '7d' ? {} : { range: f.range }, { replace: true })}>
+          <Button
+            variant="ghost"
+            icon={<X className="size-4" />}
+            onClick={() => set({ q: '', connection: '', client: '', status: '', method: '', source: '' })}
+          >
             Clear
           </Button>
         )}
       </div>
+
+      <ActivityChart
+        query={filterQuery}
+        by={f.by}
+        onBy={(by) => set({ by }, true)}
+        onZoom={zoom}
+        canZoomOut={f.range === 'custom'}
+        onZoomOut={zoomOut}
+        onPick={pick}
+        refresh={refresh}
+      />
 
       {page.error ? (
         <Alert>{page.error.message}</Alert>

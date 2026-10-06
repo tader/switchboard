@@ -261,3 +261,38 @@ html.dark .paper {
 .pager {
   @apply flex flex-col gap-1 rounded-xl px-4 py-3 text-[14px] text-zinc-800 ring-1 ring-zinc-200 transition hover:bg-zinc-50 hover:ring-indigo-300 dark:text-zinc-200 dark:ring-zinc-800 dark:hover:bg-zinc-800/40 dark:hover:ring-indigo-500/50;
 }
+
+/* --- Charts: validated categorical steps per mode (see the dataviz palette), status reserved --- */
+:root {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-other: #a8a69f;
+  --status-good: #0ca30c;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-neutral: #a8a69f;
+  --chart-surface: #ffffff;
+  --chart-grid: #ececea;
+  --chart-axis: #c3c2b7;
+  --chart-muted: #898781;
+}
+html.dark {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-other: #6b6a66;
+  --status-neutral: #6b6a66;
+  --chart-surface: #18181b;
+  --chart-grid: #27272a;
+  --chart-axis: #3f3f46;
+  --chart-muted: #898781;
+}

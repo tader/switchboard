@@ -9,7 +9,7 @@ import { all, now, one, run } from '../db.ts';
 import { HttpError, badRequest, notFound } from '../http.ts';
 import { describe } from '../openapi.ts';
 import { type CallInput, envelope, execute, issueToken, passThrough } from '../proxy.ts';
-import { auditFacets, callerFrom, getAudit, queryAudit } from '../audit.ts';
+import { auditFacets, auditHistogram, callerFrom, getAudit, queryAudit } from '../audit.ts';
 import { getDoc, guidesByService, listDocs } from '../docs.ts';
 
 export const api = new Hono<Env>();
@@ -135,6 +135,11 @@ api.get('/audit', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);
   return c.json(queryAudit(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), limit: num(q.limit), offset: num(q.offset) }));
+});
+api.get('/audit/histogram', requireFullAccess, (c) => {
+  const q = c.req.query();
+  const num = (v?: string) => (v ? Number(v) : undefined);
+  return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }));
 });
 api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id)));
 api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')))));
