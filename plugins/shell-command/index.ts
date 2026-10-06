@@ -64,7 +64,7 @@ export default async function setup(ctx: PluginContext) {
         fields: [{
           key: 'command',
           label: 'Shell command',
-          type: 'secret',
+          type: 'text',
           required: true,
           placeholder: 'printf "hello\\n"',
           description: 'Runs with /bin/sh, a 30 second timeout, 1 MB output limit, and a restricted environment',

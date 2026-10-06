@@ -132,6 +132,8 @@ test('a real satellite keeps credentials local and executes a per-user connectio
     const service = (await request('GET', '/api/services')).data.find((s: any) => s.id === `sat/${enrolled.data.satellite.id}/shell-command`);
     return service?.methods[0]?.unavailable === undefined;
   });
+  const shellService = (await request('GET', '/api/services')).data.find((s: any) => s.id === `sat/${enrolled.data.satellite.id}/shell-command`);
+  assert.equal(shellService.methods[0].fields[0].type, 'text');
   const shell = await request('POST', '/api/connections', {
     service: `sat/${enrolled.data.satellite.id}/shell-command`, method: 'command',
     config: { command: 'printf "satellite command output\\n"' },
