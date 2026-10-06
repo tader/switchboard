@@ -157,7 +157,7 @@ test('a real satellite keeps credentials local and executes a per-user connectio
     operationId: 'localCall', method: 'POST', path: '/local', summary: 'Call the local API',
     parameters: { path: [], query: [], header: [] },
   });
-  const mcpCall = await mcp('call', { connection: connected.data.connection.name, method: 'POST', path: '/local', body: { via: 'mcp' } });
+  const mcpCall = await mcp('call_operation', { connection: connected.data.connection.name, operationId: 'localCall' });
   assert.equal(mcpCall.result.isError, undefined, JSON.stringify(mcpCall));
   assert.match(mcpCall.result.content[0].text, /^HTTP 200/);
   const satelliteMcpAudit = await satelliteRequest('GET', '/api/audit?source=mcp');

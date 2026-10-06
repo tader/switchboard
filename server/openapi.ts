@@ -15,6 +15,7 @@ export interface Param {
   description?: string;
   type?: string;
   enum?: string[];
+  default?: string;
   example?: string;
 }
 
@@ -144,7 +145,8 @@ function process(doc: any): ApiDescription & { templated: boolean } {
           description: trim(raw.description),
           type: schema?.type,
           enum: Array.isArray(schema?.enum) ? schema.enum.map(String) : undefined,
-          example: raw.example !== undefined ? String(raw.example) : schema?.default !== undefined ? String(schema.default) : undefined,
+          default: schema?.default !== undefined ? String(schema.default) : undefined,
+          example: raw.example !== undefined ? String(raw.example) : schema?.example !== undefined ? String(schema.example) : undefined,
         });
       }
       if (op.requestBody) {

@@ -61,11 +61,18 @@ function startUpstream() {
       return json(200, {
         openapi: '3.0.0', info: { title: 'Fake', version: '1' },
         servers: [{ url: 'https://{domain}/api/v2', variables: { domain: { default: 'example.com' } } }],
-        paths: { '/things/{id}': { get: { summary: 'Get a thing', parameters: [
-          { name: 'id', in: 'path', required: true },
-          { name: 'hideCompleted', in: 'query', schema: { type: 'boolean', default: false } },
-          { name: 'nextToken', in: 'query', schema: { type: 'string' } },
-        ] } } },
+        paths: { '/things/{id}': {
+          get: { summary: 'Get a thing', parameters: [
+            { name: 'id', in: 'path', required: true },
+            { name: 'hideCompleted', in: 'query', schema: { type: 'boolean', default: false } },
+            { name: 'nextToken', in: 'query', schema: { type: 'string' } },
+          ] },
+          post: {
+            operationId: 'updateThing', summary: 'Update a thing',
+            parameters: [{ name: 'id', in: 'path', required: true }, { name: 'x-mode', in: 'header', required: true, schema: { type: 'string', enum: ['safe', 'fast'] } }],
+            requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string' } } } } } },
+          },
+        } },
       });
     }
     if (url.pathname === '/client.json') return json(200, { client_id: `${up}/client.json`, client_name: 'CIMD App', redirect_uris: ['http://localhost:9000/cb'] });
@@ -807,7 +814,7 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   assert.equal(note.status, 202);
 
   const list = await rpc({ id: 2, method: 'tools/list' }, { token: mcpToken, headers: { 'mcp-protocol-version': '2025-06-18' } });
-  assert.deepEqual(list.data.result.tools.map((t: any) => t.name), ['list_connections', 'search_operations', 'get_operation', 'call', 'list_saved_calls', 'run_saved_call']);
+  assert.deepEqual(list.data.result.tools.map((t: any) => t.name), ['list_connections', 'search_operations', 'get_operation', 'call', 'call_operation', 'list_saved_calls', 'run_saved_call']);
 
   const conns = await rpc({ id: 3, method: 'tools/call', params: { name: 'list_connections', arguments: {} } }, { token: mcpToken });
   assert.ok(conns.data.result.structuredContent.items.some((x: any) => x.name === 'mcp-api' && x.hasApiReference && x.location.type === 'local'));
@@ -817,7 +824,7 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
     operationId: 'get /things/{id}', method: 'GET', path: '/api/v2/things/{id}', summary: 'Get a thing',
     parameters: {
       path: [{ name: 'id', in: 'path', required: true }],
-      query: [{ name: 'hideCompleted', in: 'query', required: false, type: 'boolean', example: 'false' }, { name: 'nextToken', in: 'query', required: false, type: 'string' }],
+      query: [{ name: 'hideCompleted', in: 'query', required: false, type: 'boolean', default: 'false' }, { name: 'nextToken', in: 'query', required: false, type: 'string' }],
       header: [],
     },
     pagination: {
@@ -827,9 +834,39 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   });
   const op = await rpc({ id: 5, method: 'tools/call', params: { name: 'get_operation', arguments: { connection: 'mcp-api', method: 'GET', path: '/api/v2/things/{id}' } } }, { token: mcpToken });
   assert.equal(op.data.result.structuredContent.params[0].name, 'id');
-  assert.equal(op.data.result.structuredContent.parameters.query[0].example, 'false');
+  assert.equal(op.data.result.structuredContent.parameters.query[0].default, 'false');
   assert.equal(op.data.result.structuredContent.pagination.nextTokenParameter, 'nextToken');
-  assert.equal(op.data.result.structuredContent.callMapping.queryParameters, 'call.query');
+  assert.equal(op.data.result.structuredContent.callMapping.parameters, 'call_operation.parameters');
+
+  const operationCall = await rpc(
+    { id: 51, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'get /things/{id}', parameters: { id: 'structured/1', hideCompleted: true } } } },
+    { token: mcpToken },
+  );
+  assert.equal(operationCall.data.result.isError, undefined, JSON.stringify(operationCall.data));
+  const operationEcho = JSON.parse(toolText(operationCall).split('\n\n')[1]);
+  assert.equal(operationEcho.path, '/api/v2/things/structured/1');
+  assert.equal(operationEcho.query.hideCompleted, 'true');
+  assert.match(toolText(operationCall), /Pagination:/);
+  const invalidOperationCall = await rpc(
+    { id: 52, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'get /things/{id}', parameters: { id: 'x', unknown: true } } } },
+    { token: mcpToken },
+  );
+  assert.equal(invalidOperationCall.data.result.isError, true);
+  assert.match(toolText(invalidOperationCall), /Unknown parameter: unknown/);
+  const bodyOperationCall = await rpc(
+    { id: 53, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'updateThing', parameters: { id: 'body-1', 'x-mode': 'safe' }, body: { title: 'Updated' } } } },
+    { token: mcpToken },
+  );
+  assert.equal(bodyOperationCall.data.result.isError, undefined, JSON.stringify(bodyOperationCall.data));
+  assert.equal(seen.at(-1)!.headers['x-mode'], 'safe');
+  assert.equal(seen.at(-1)!.headers['content-type'], 'application/json');
+  assert.equal(seen.at(-1)!.body, '{"title":"Updated"}');
+  const invalidEnum = await rpc(
+    { id: 54, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'updateThing', parameters: { id: 'body-1', 'x-mode': 'reckless' }, body: {} } } },
+    { token: mcpToken },
+  );
+  assert.equal(invalidEnum.data.result.isError, true);
+  assert.match(toolText(invalidEnum), /x-mode must be one of: safe, fast/);
 
   const called = await rpc(
     { id: 6, method: 'tools/call', params: { name: 'call', arguments: { connection: 'mcp-api', method: 'POST', path: '/api/v2/things/{id}', path_params: { id: 'x/1' }, query: { a: '1' }, body: { hello: 'world' } } } },
@@ -852,7 +889,7 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   assert.equal(JSON.parse(toolText(saved).split('\n\n')[1]).query.p, '2');
 
   const audit = (await req('GET', `/api/audit?connection=${mcpConn.id}&source=mcp`)).data;
-  assert.equal(audit.total, 3);
+  assert.equal(audit.total, 5);
   assert.equal(audit.items[0].savedCall, 'MCP saved');
   assert.equal(audit.items[0].client.name, 'claude-desktop');
 });

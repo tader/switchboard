@@ -117,7 +117,7 @@ Credentials are only attached to the hosts a service allows (for Gmail `gmail.go
 
 ### MCP
 
-`https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), `call`, `list_saved_calls`, `run_saved_call`. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
+`https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), structured `call_operation`, lower-level `call`, `list_saved_calls`, and `run_saved_call`. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
 
     claude mcp add --transport http switchboard https://switchboard.example.com/mcp            # signs in through the browser
     claude mcp add --transport http switchboard https://switchboard.example.com/mcp --header "Authorization: Bearer $SWITCHBOARD_TOKEN"
