@@ -21,6 +21,7 @@ let cookie = '';
 let output = '';
 const seen: { url: string; headers: http.IncomingHttpHeaders; body: string }[] = [];
 let tokenCounter = 0;
+let lastRedirectUri: string | null = null;
 let devicePolls = 0;
 
 /** Fake API + OAuth provider. */
@@ -36,6 +37,7 @@ function startUpstream() {
     if (url.pathname === '/token') {
       const p = new URLSearchParams(body);
       const grant = p.get('grant_type');
+      if (grant === 'authorization_code') lastRedirectUri = p.get('redirect_uri');
       if (grant === 'authorization_code' && p.get('code') === 'good' && p.get('code_verifier')) {
         return json(200, { access_token: `at-${++tokenCounter}`, refresh_token: 'rt', expires_in: 1, token_type: 'bearer' });
       }
@@ -282,6 +284,48 @@ test('OAuth authorization code flow with PKCE and refresh', async () => {
   assert.equal(tokenCounter, 2);
   const tok = await req('GET', `/api/connections/${id}/token`);
   assert.equal(tok.data.access_token, 'at-2');
+});
+
+test('OAuth with another redirect URI: paste the address to complete', async () => {
+  const config = { authorizeUrl: `${up}/authorize`, tokenUrl: `${up}/token`, baseUrl: up, clientId: 'cid', scopes: 'read' };
+  const start = (extra = {}) => req('POST', '/api/connections', { service: 'oauth2', method: 'oauth', config, redirectUri: 'http://localhost:9999/callback', ...extra });
+
+  const services = (await req('GET', '/api/services')).data;
+  const methods = services.find((s: any) => s.id === 'oauth2').methods;
+  assert.deepEqual(methods.map((m: any) => [m.id, m.redirect]), [['oauth', true], ['device', false], ['client-credentials', false]]);
+
+  const r = await start();
+  assert.equal(r.data.status, 'redirect');
+  assert.equal(r.data.manual, true);
+  const authorize = new URL(r.data.url);
+  assert.equal(authorize.searchParams.get('redirect_uri'), 'http://localhost:9999/callback');
+  const state = authorize.searchParams.get('state')!;
+
+  const wrong = await req('POST', `/api/connect/${r.data.flowId}/complete`, { url: 'http://localhost:9999/callback?code=good&state=someone-else' });
+  assert.equal(wrong.status, 400);
+  assert.match(wrong.data.error, /another sign-in/);
+  assert.match((await req('POST', `/api/connect/${r.data.flowId}/complete`, { url: 'http://localhost:9999/callback?foo=bar' })).data.error, /no code/);
+
+  const done = await req('POST', `/api/connect/${r.data.flowId}/complete`, { url: `http://localhost:9999/callback?code=good&state=${state}&session_state=x` });
+  assert.equal(done.status, 200, JSON.stringify(done.data));
+  assert.equal(done.data.connection.redirectUri, 'http://localhost:9999/callback', 'remembered for reconnecting');
+  assert.equal(lastRedirectUri, 'http://localhost:9999/callback', 'the token request names the same redirect URI');
+
+  // Just the code works too, and the address may carry it in the fragment.
+  const second = await start({ name: 'pasted-code' });
+  assert.equal((await req('POST', `/api/connect/${second.data.flowId}/complete`, { url: 'good' })).status, 200);
+  const third = await start({ name: 'fragment' });
+  const s3 = new URL(third.data.url).searchParams.get('state');
+  assert.equal((await req('POST', `/api/connect/${third.data.flowId}/complete`, { url: `http://localhost:9999/callback#code=good&state=${s3}` })).status, 200);
+
+  assert.equal((await req('POST', '/api/connections', { service: 'oauth2', method: 'device', config: { ...config, deviceAuthorizationUrl: `${up}/device` }, redirectUri: 'http://localhost:1/x' })).status, 400, 'device flow has no redirect');
+  assert.equal((await start({ redirectUri: 'javascript:alert(1)' })).status, 400);
+  assert.equal((await start({ redirectUri: 'not a url' })).status, 400);
+
+  // Without an override, nothing changes.
+  const normal = await req('POST', '/api/connections', { service: 'oauth2', method: 'oauth', config });
+  assert.equal(normal.data.manual, undefined);
+  assert.equal(new URL(normal.data.url).searchParams.get('redirect_uri'), `${base}/oauth/callback`);
 });
 
 test('OAuth device flow', async () => {
@@ -560,6 +604,9 @@ test('Microsoft: services, sign-in request, tenant and permissions', async () =>
   assert.equal(shared.searchParams.get('client_id'), 'shared-app');
   const tenant = new URL((await req('POST', '/api/connections', { service: 'outlook-calendar', method: 'oauth', config: { tenant: 'contoso.onmicrosoft.com' } })).data.url);
   assert.equal(tenant.pathname, '/contoso.onmicrosoft.com/oauth2/v2.0/authorize', 'per-connection tenant');
+  const local = await req('POST', '/api/connections', { service: 'outlook-mail', method: 'oauth', config: {}, redirectUri: 'http://localhost:3000' });
+  assert.equal(local.data.manual, true);
+  assert.equal(new URL(local.data.url).searchParams.get('redirect_uri'), 'http://localhost:3000', 'Microsoft gets the override too');
 });
 
 test('users: invite, sign in, admin-only areas', async () => {

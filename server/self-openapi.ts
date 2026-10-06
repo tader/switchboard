@@ -64,6 +64,7 @@ export function openapiDocument() {
                 method: { type: 'string', description: 'Sign-in method id; default: the first available' },
                 config: { type: 'object', description: "Values for the method's fields, by key" },
                 name: { type: 'string', description: 'Name scripts use for the connection; default: from the account' },
+                redirectUri: { type: 'string', description: "Redirect URI registered at the provider, if it is not Switchboard's (e.g. http://localhost:8080/callback). The result is then manual: complete it with POST /api/connect/{flow}/complete." },
               },
             },
             { service: 'github', method: 'token', config: { token: '' } },
@@ -82,6 +83,13 @@ export function openapiDocument() {
         }),
       },
       '/api/connections/{ref}/openapi': { get: op('Connections', 'Operations from the service API description', { parameters: [ref] }) },
+      '/api/connect/{flow}/complete': {
+        post: op('Connections', 'Complete a sign-in with the address the provider redirected to', {
+          description: 'For sign-ins started with a redirectUri. Pass the full address from the browser, or just the code.',
+          parameters: [{ name: 'flow', in: 'path', required: true, schema: { type: 'string' } }],
+          requestBody: json({ type: 'object', required: ['url'], properties: { url: { type: 'string', description: 'The address after signing in, e.g. http://localhost:8080/callback?code=…&state=…' } } }, { url: '' }),
+        }),
+      },
       '/api/connect/{flow}/poll': { post: op('Connections', 'Advance a device sign-in', { parameters: [{ name: 'flow', in: 'path', required: true, schema: { type: 'string' } }] }) },
       '/api/call': { post: op('Calls', 'Make a request through a connection', { description: 'Returns status, headers and body in a JSON envelope.', requestBody: json(call, { connection: '', method: 'GET', url: '/' }) }) },
       '/proxy/{ref}/{path}': {

@@ -23,6 +23,8 @@ A token has one of three kinds of access:
 | **Selected connections** | Only those connections, to make calls and run saved calls. It cannot manage anything or read the activity log. |
 | **MCP only** | Tokens that AI assistants get when signing in through [MCP](/docs/guides/mcp). They work only at `/mcp`. |
 
+Connections are made in the web app, or with `POST /api/connections`. If a provider only accepts a redirect URI that does not lead to Switchboard (often `http://localhost`), pass it as `redirectUri`. After signing in, send the address the browser ended up on to `POST /api/connect/<flow>/complete`.
+
 Connections are referred to by id or by name, for example `gmail-work`. Names can be changed on the [Connections](/connections) page.
 
 ## Calling a service

@@ -67,6 +67,26 @@ This is the simplest option for personal use, and it also works when browser red
 
 Under **Plugins → Microsoft → Settings**, enter the Application (client) ID and, for browser sign-in, the client secret. Choose which accounts may sign in, matching step 1, and save. Users can now connect their Microsoft accounts.
 
+## Using an app with a localhost redirect URI
+
+If you cannot add Switchboard's redirect URI to the app registration, for example because the app is shared and only has `http://localhost`, you can still use it:
+
+1. In the connect dialog, open **Advanced** and enter the registered redirect URI under **Redirect URI**, exactly as registered.
+2. Choose **Continue**, then **Open the sign-in page**, and sign in.
+3. Microsoft sends your browser to the localhost address. That page will probably not load, which is expected. Copy the whole address from the address bar, paste it into the dialog and choose **Complete sign-in**.
+
+Switchboard remembers the redirect URI for the connection and suggests it again when you reconnect. Token refreshes afterwards need nothing from you.
+
+What to enter in Switchboard depends on the platform the redirect URI is registered under, in the app's **Authentication** settings:
+
+| Platform | Client secret in Switchboard |
+|---|---|
+| **Web** | Required |
+| **Mobile and desktop applications** | Leave empty: Microsoft treats the app as a public client and refuses secrets |
+| **Single-page application** | Does not work: Microsoft only lets browsers redeem these sign-ins (`AADSTS9002327`) |
+
+If the app allows public client flows, **Sign in with a code** avoids redirect URIs altogether.
+
 ## Troubleshooting
 
 | Error | Cause |
@@ -74,7 +94,8 @@ Under **Plugins → Microsoft → Settings**, enter the Application (client) ID 
 | `AADSTS50011` … *redirect URI … does not match* | The redirect URI in step 1 must be exactly `{{callbackUrl}}`, of type **Web**. |
 | `AADSTS700016` *application … was not found*, or `AADSTS700038` *not a valid application identifier* | The client ID is wrong, or the account type does not match the registration's supported account types (step 1). |
 | `AADSTS7000215` *Invalid client secret* | Copy the secret's **Value**, not its ID. Or the secret expired: add a new one (step 3). |
-| `AADSTS7000218` … *client_assertion or client_secret* | Sign in with a code needs **Allow public client flows** turned on (step 3). |
+| `AADSTS7000218` … *client_assertion or client_secret* | Sign in with a code needs **Allow public client flows** turned on (step 3). With a **Web** redirect URI, a client secret is required. |
+| `AADSTS700025` *Client is public so neither 'client_assertion' nor 'client_secret' should be presented* | The redirect URI is registered as *Mobile and desktop*: leave the client secret empty. If an administrator set one in the plugin settings, use your own client ID under *Advanced* instead. |
 | *Need admin approval* | Ask an administrator to grant consent (step 2). |
 | `AADSTS50020` … *does not exist in tenant* | A personal account is signing in to an app that allows only one organization, or the other way around. Check *Accounts* in Switchboard's settings. |
 | Calls fail with `403` | The connection lacks a permission. Reconnect with a higher *Access* level, and check the permission is added in step 2. |

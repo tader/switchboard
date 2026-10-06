@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import { type Env, assertConnectionAccess, identify, requireFullAccess, requireUser } from '../auth.ts';
 import { config } from '../config.ts';
 import {
-  cancelFlow, completeRedirect, deleteConnection, getConnectionRow, listConnections, listServices, loadConnection, pollDevice, renameConnection, startConnect,
+  cancelFlow, completeFromPaste, completeRedirect, deleteConnection, getConnectionRow, listConnections, listServices, loadConnection, pollDevice, renameConnection, startConnect,
 } from '../connections.ts';
 import { randomId } from '../crypto.ts';
 import { all, now, one, run } from '../db.ts';
@@ -67,6 +67,10 @@ api.get('/connections/:ref/openapi', async (c) => {
   return c.json(d);
 });
 
+api.post('/connect/:flow/complete', requireFullAccess, async (c) => {
+  const { url } = await c.req.json<{ url: string }>();
+  return c.json({ status: 'connected', connection: await completeFromPaste(c.req.param('flow'), url, c.get('user')) });
+});
 api.post('/connect/:flow/poll', requireFullAccess, async (c) => c.json(await pollDevice(c.req.param('flow'), c.get('user'))));
 api.delete('/connect/:flow', requireFullAccess, (c) => {
   cancelFlow(c.req.param('flow'), c.get('user'));

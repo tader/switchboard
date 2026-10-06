@@ -57,6 +57,8 @@ export interface AuthMethod {
   description?: string;
   fields: Field[];
   unavailable?: string;
+  /** Signs in through a browser redirect, so the redirect URI can be overridden. */
+  redirect: boolean;
 }
 
 export interface Service {
@@ -85,6 +87,7 @@ export interface Connection {
   baseUrl: string | null;
   hasOpenapi: boolean;
   canIssueToken: boolean;
+  redirectUri: string | null;
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
@@ -92,7 +95,7 @@ export interface Connection {
 
 export type FlowResult =
   | { status: 'connected'; connection: Connection }
-  | { status: 'redirect'; flowId: string; url: string }
+  | { status: 'redirect'; flowId: string; url: string; manual?: boolean }
   | { status: 'device'; flowId: string; device: { userCode: string; verificationUri: string; verificationUriComplete?: string; expiresIn?: number; interval: number } };
 
 export interface Pair {

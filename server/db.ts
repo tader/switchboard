@@ -155,6 +155,11 @@ const migrations: string[] = [
   UPDATE audit_log SET service_id = 'switchboard' WHERE service_id = 'hub';
   UPDATE plugins SET id = 'switchboard' WHERE id = 'hub' AND NOT EXISTS (SELECT 1 FROM plugins WHERE id = 'switchboard');
   `,
+  // A redirect URI other than Switchboard's own, for providers where only e.g. localhost is registered.
+  `
+  ALTER TABLE connect_flows ADD COLUMN redirect_uri TEXT;
+  ALTER TABLE connections ADD COLUMN redirect_uri TEXT;
+  `,
 ];
 
 export function initDb() {

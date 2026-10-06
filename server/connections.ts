@@ -21,6 +21,8 @@ export interface ConnectionView {
   baseUrl: string | null;
   hasOpenapi: boolean;
   canIssueToken: boolean;
+  /** Redirect URI used instead of Switchboard's own when signing in; suggested again on reconnect. */
+  redirectUri: string | null;
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
@@ -78,6 +80,7 @@ export function toView(r: any): ConnectionView {
     baseUrl,
     hasOpenapi: !!service?.openapi,
     canIssueToken: !!method?.token,
+    redirectUri: r.redirect_uri ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     lastUsedAt: r.last_used_at,
@@ -164,7 +167,7 @@ export interface ServiceView {
   icon?: string;
   docsUrl?: string;
   pluginId: string;
-  methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string }[];
+  methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string; redirect: boolean }[];
 }
 
 export function listServices(): ServiceView[] {
@@ -176,14 +179,15 @@ export function listServices(): ServiceView[] {
       icon: s.icon,
       docsUrl: s.docsUrl,
       pluginId,
-      methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable })),
+      methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback })),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export type FlowResult =
   | { status: 'connected'; connection: ConnectionView }
-  | { status: 'redirect'; flowId: string; url: string }
+  /** `manual`: the provider redirects to a URI other than Switchboard's; the user pastes the address it sent them to. */
+  | { status: 'redirect'; flowId: string; url: string; manual?: boolean }
   | { status: 'device'; flowId: string; device: { userCode: string; verificationUri: string; verificationUriComplete?: string; expiresIn?: number; interval: number } };
 
 function validateConfig(method: AuthMethod, input: Record<string, any>, previous?: Record<string, any>) {
@@ -211,7 +215,7 @@ function validateConfig(method: AuthMethod, input: Record<string, any>, previous
 
 export async function startConnect(
   user: User,
-  input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string },
+  input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string; redirectUri?: string },
 ): Promise<FlowResult> {
   let existing: Connection | undefined;
   if (input.connection) existing = rowToConnection(getConnectionRow(user.id, input.connection));
@@ -230,10 +234,31 @@ export async function startConnect(
     throw badRequest('You already have a connection with that name');
   }
 
+  const redirectUri = checkRedirectUri(input.redirectUri, method);
+
   const flowId = randomToken(24);
-  const args: ConnectArgs = { config: cfg, callbackUrl, state: flowId, connection: existing };
+  const args: ConnectArgs = { config: cfg, callbackUrl: redirectUri ?? callbackUrl, state: flowId, connection: existing };
   const step = await callPlugin(() => method.connect(args));
-  return handleStep(user, step, { flowId, service, method, cfg, name: input.name?.trim(), connectionId: existing?.id });
+  return handleStep(user, step, { flowId, service, method, cfg, name: input.name?.trim(), connectionId: existing?.id, redirectUri });
+}
+
+/**
+ * Some providers only allow redirect URIs that cannot point at Switchboard (often localhost). Sign-in
+ * then sends the browser there, and the user pastes that address back to complete it.
+ */
+function checkRedirectUri(value: string | undefined, method: AuthMethod): string | undefined {
+  const v = value?.trim();
+  if (!v || v === callbackUrl) return undefined;
+  if (!method.callback) throw badRequest('This sign-in method does not use a redirect URI');
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    throw badRequest('The redirect URI must be an absolute URL, e.g. http://localhost:8080/callback');
+  }
+  if (!/^https?:$/.test(u.protocol)) throw badRequest('The redirect URI must start with http:// or https://');
+  if (u.hash) throw badRequest('The redirect URI cannot have a #fragment');
+  return v;
 }
 
 interface FlowInfo {
@@ -243,12 +268,13 @@ interface FlowInfo {
   cfg: Record<string, any>;
   name?: string;
   connectionId?: string;
+  redirectUri?: string;
 }
 
 function handleStep(user: User, step: ConnectStep, f: FlowInfo): FlowResult {
   if ('redirect' in step) {
     saveFlow(user, f, 'redirect', step.pending, 15 * 60);
-    return { status: 'redirect', flowId: f.flowId, url: step.redirect };
+    return { status: 'redirect', flowId: f.flowId, url: step.redirect, ...(f.redirectUri ? { manual: true } : {}) };
   }
   if ('device' in step) {
     const expiresIn = step.device.expiresIn ?? 900;
@@ -261,9 +287,9 @@ function handleStep(user: User, step: ConnectStep, f: FlowInfo): FlowResult {
 function saveFlow(user: User, f: FlowInfo, kind: string, pending: unknown, ttlSecs: number) {
   run('DELETE FROM connect_flows WHERE expires_at < ?', now());
   run(
-    `INSERT INTO connect_flows (id, user_id, service_id, method_id, connection_id, name, config_enc, pending_enc, kind, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    f.flowId, user.id, f.service.id, f.method.id, f.connectionId ?? null, f.name ?? null, encrypt(f.cfg), encrypt(pending ?? null), kind, now() + ttlSecs * 1000, now(),
+    `INSERT INTO connect_flows (id, user_id, service_id, method_id, connection_id, name, config_enc, pending_enc, kind, expires_at, created_at, redirect_uri)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    f.flowId, user.id, f.service.id, f.method.id, f.connectionId ?? null, f.name ?? null, encrypt(f.cfg), encrypt(pending ?? null), kind, now() + ttlSecs * 1000, now(), f.redirectUri ?? null,
   );
 }
 
@@ -290,8 +316,35 @@ export async function completeRedirect(flowId: string, params: Record<string, st
   if (params.error) throw badRequest(params.error_description || params.error);
   if (!method.callback) throw badRequest('This method does not support redirects');
   const connection = existingConn(user.id, r.connection_id);
-  const result = await callPlugin(() => method.callback!({ config: cfg, callbackUrl, state: flowId, pending, params, connection }));
-  return storeConnection(user, { flowId, service, method, cfg, name: r.name ?? undefined, connectionId: r.connection_id ?? undefined }, result);
+  // The token request must name the same redirect URI as the authorization request.
+  const redirect = r.redirect_uri ?? callbackUrl;
+  const result = await callPlugin(() => method.callback!({ config: cfg, callbackUrl: redirect, state: flowId, pending, params, connection }));
+  return storeConnection(user, { flowId, service, method, cfg, name: r.name ?? undefined, connectionId: r.connection_id ?? undefined, redirectUri: r.redirect_uri ?? undefined }, result);
+}
+
+/**
+ * Completes a redirect flow from what the user pasted: the address the provider sent them to, or
+ * just the code. A pasted address must belong to this flow (its state is the flow id).
+ */
+export async function completeFromPaste(flowId: string, pasted: string, user: User): Promise<ConnectionView> {
+  const text = String(pasted ?? '').trim();
+  if (!text) throw badRequest('Paste the address you were sent to after signing in');
+  let params: Record<string, string>;
+  let url: URL | undefined;
+  try {
+    url = new URL(text);
+  } catch {}
+  if (url) {
+    // Some providers put the result in the #fragment instead of the query.
+    params = Object.fromEntries([...new URLSearchParams(url.hash.slice(1)), ...url.searchParams]);
+    if (!params.code && !params.error) throw badRequest('That address has no code. Copy the full address from the browser after signing in.');
+    if (params.state && params.state !== flowId) throw badRequest('That address belongs to another sign-in. Start again, or paste the latest address.');
+  } else if (/^[\w.~\-/+=%]+$/.test(text)) {
+    params = { code: decodeURIComponent(text), state: flowId };
+  } else {
+    throw badRequest('Paste the full address you were sent to, or the code from it');
+  }
+  return completeRedirect(flowId, { ...params, state: flowId }, user);
 }
 
 export async function pollDevice(flowId: string, user: User): Promise<FlowResult | { status: 'pending'; interval?: number }> {
@@ -337,17 +390,17 @@ function storeConnection(user: User, f: FlowInfo, result: Connected): Connection
     run(
       `UPDATE connections SET method_id = ?, config_enc = ?, credentials_enc = ?, account_id = COALESCE(?, account_id),
          account_label = COALESCE(?, account_label), account_avatar = COALESCE(?, account_avatar),
-         status = 'ok', status_message = NULL, updated_at = ? WHERE id = ?`,
-      f.method.id, encrypt(cfg), encrypt(result.credentials), account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, t, id,
+         status = 'ok', status_message = NULL, updated_at = ?, redirect_uri = ? WHERE id = ?`,
+      f.method.id, encrypt(cfg), encrypt(result.credentials), account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, t, f.redirectUri ?? null, id,
     );
     if (f.name) renameConnection(user.id, id, f.name);
   } else {
     id = randomId('c');
     const name = uniqueName(user.id, f.name || defaultName(f.service, account?.label));
     run(
-      `INSERT INTO connections (id, user_id, service_id, method_id, name, account_id, account_label, account_avatar, config_enc, credentials_enc, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, user.id, f.service.id, f.method.id, name, account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, encrypt(cfg), encrypt(result.credentials), t, t,
+      `INSERT INTO connections (id, user_id, service_id, method_id, name, account_id, account_label, account_avatar, config_enc, credentials_enc, created_at, updated_at, redirect_uri)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, user.id, f.service.id, f.method.id, name, account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, encrypt(cfg), encrypt(result.credentials), t, t, f.redirectUri ?? null,
     );
   }
   return toView(one('SELECT * FROM connections WHERE id = ?', id));

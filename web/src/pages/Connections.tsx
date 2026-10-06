@@ -204,11 +204,16 @@ function ServiceGrid({ services, onPick, filter = '' }: { services: Service[]; o
   );
 }
 
-type Step = { kind: 'pick' } | { kind: 'form' } | { kind: 'device'; flowId: string; device: Extract<FlowResult, { status: 'device' }>['device'] };
+type Step =
+  | { kind: 'pick' }
+  | { kind: 'form' }
+  | { kind: 'device'; flowId: string; device: Extract<FlowResult, { status: 'device' }>['device'] }
+  | { kind: 'paste'; flowId: string; url: string; redirectUri: string };
 
 export function ConnectDialog({
   open, onClose, services, initial, onConnected,
 }: { open: boolean; onClose: () => void; services: Service[]; initial: { service?: Service; connection?: Connection }; onConnected: (c: Connection) => void }) {
+  const { info } = useSession();
   const [step, setStep] = useState<Step>({ kind: 'pick' });
   const [service, setService] = useState<Service | undefined>();
   const [methodId, setMethodId] = useState<string>('');
@@ -222,7 +227,7 @@ export function ConnectDialog({
     setService(s);
     const m = s.methods.find((x) => x.id === preferMethod) ?? s.methods.find((x) => !x.unavailable) ?? s.methods[0];
     setMethodId(m.id);
-    setValues(initialValues(m.fields, config));
+    setValues({ ...initialValues(m.fields, config), __redirectUri: m.id === initial.connection?.methodId ? initial.connection?.redirectUri ?? '' : '' });
     setError('');
     setStep({ kind: 'form' });
   };
@@ -242,8 +247,9 @@ export function ConnectDialog({
 
   const method = service?.methods.find((m) => m.id === methodId);
 
-  const handle = (r: FlowResult) => {
+  const handle = (r: FlowResult, redirectUri?: string) => {
     if (r.status === 'connected') onConnected(r.connection);
+    else if (r.status === 'redirect' && r.manual) setStep({ kind: 'paste', flowId: r.flowId, url: r.url, redirectUri: redirectUri ?? '' });
     else if (r.status === 'redirect') location.href = r.url;
     else setStep({ kind: 'device', flowId: r.flowId, device: r.device });
   };
@@ -253,14 +259,14 @@ export function ConnectDialog({
     if (!service || !method) return;
     setBusy(true);
     setError('');
-    const { __name, ...config } = values;
+    const { __name, __redirectUri, ...config } = values;
     try {
-      const body = { service: service.id, method: method.id, config, name: __name || undefined };
+      const body = { service: service.id, method: method.id, config, name: __name || undefined, redirectUri: method.redirect ? __redirectUri || undefined : undefined };
       const r = reconnecting
         ? await api<FlowResult>(`/connections/${reconnecting.id}/reconnect`, { body })
         : await api<FlowResult>('/connections', { body });
-      handle(r);
-      if (r.status !== 'redirect') setBusy(false);
+      handle(r, __redirectUri);
+      if (r.status !== 'redirect' || r.manual) setBusy(false);
     } catch (err: any) {
       setError(err.message);
       setBusy(false);
@@ -297,7 +303,7 @@ export function ConnectDialog({
   }, [step, open]);
 
   const close = () => {
-    if (step.kind === 'device') api(`/connect/${step.flowId}`, { method: 'DELETE' }).catch(() => {});
+    if (step.kind === 'device' || step.kind === 'paste') api(`/connect/${step.flowId}`, { method: 'DELETE' }).catch(() => {});
     onClose();
   };
 
@@ -307,6 +313,18 @@ export function ConnectDialog({
         ...(reconnecting
           ? []
           : [{ key: '__name', label: 'Name', advanced: true, placeholder: 'Generated from the account', description: 'How scripts refer to this connection.' }]),
+        ...(method.redirect
+          ? [
+              {
+                key: '__redirectUri',
+                label: 'Redirect URI',
+                type: 'url' as const,
+                advanced: true,
+                placeholder: info.callbackUrl,
+                description: 'Only if the provider has a different redirect URI registered, such as http://localhost:8080/callback. After signing in, you paste the address you are sent to.',
+              },
+            ]
+          : []),
       ]
     : [];
 
@@ -349,7 +367,7 @@ export function ConnectDialog({
                   disabled={!!m.unavailable}
                   onClick={() => {
                     setMethodId(m.id);
-                    setValues(initialValues(m.fields, m.id === reconnecting?.methodId ? reconnecting.config : undefined));
+                    setValues({ ...initialValues(m.fields, m.id === reconnecting?.methodId ? reconnecting.config : undefined), __redirectUri: m.id === reconnecting?.methodId ? reconnecting.redirectUri ?? '' : '' });
                     setError('');
                   }}
                   className={cx(
@@ -404,6 +422,8 @@ export function ConnectDialog({
         </form>
       )}
 
+      {step.kind === 'paste' && <PasteStep step={step} onConnected={onConnected} onRestart={() => setStep({ kind: 'form' })} />}
+
       {step.kind === 'device' && (
         <div className="space-y-5 py-2 text-center">
           <p className="text-[13px] text-zinc-600 dark:text-zinc-300">Enter this code on the sign-in page:</p>
@@ -429,6 +449,79 @@ export function ConnectDialog({
         </div>
       )}
     </Dialog>
+  );
+}
+
+function PasteStep({ step, onConnected, onRestart }: { step: Extract<Step, { kind: 'paste' }>; onConnected: (c: Connection) => void; onRestart: () => void }) {
+  const [opened, setOpened] = useState(false);
+  const [pasted, setPasted] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const target = safeHost(step.redirectUri);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<{ connection: Connection }>(`/connect/${step.flowId}/complete`, { body: { url: pasted } });
+      onConnected(r.connection);
+    } catch (err: any) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={submit} className="space-y-5">
+      <ol className="space-y-4 text-[13px] text-zinc-600 dark:text-zinc-300">
+        <li className="flex gap-3">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-semibold text-white">1</span>
+          <div className="space-y-2">
+            <p>Sign in on the provider’s page.</p>
+            <Button
+              size="sm"
+              variant={opened ? 'secondary' : 'primary'}
+              icon={<ExternalLink className="size-3.5" />}
+              onClick={() => {
+                window.open(step.url, '_blank', 'noopener');
+                setOpened(true);
+              }}
+            >
+              {opened ? 'Open the sign-in page again' : 'Open the sign-in page'}
+            </Button>
+          </div>
+        </li>
+        <li className="flex gap-3">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-semibold text-white">2</span>
+          <p>
+            Afterwards your browser goes to <b className="break-all">{target}</b>. That page will probably not load; that is expected. Copy the whole address from the address bar.
+          </p>
+        </li>
+        <li className="flex gap-3">
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-semibold text-white">3</span>
+          <div className="min-w-0 flex-1 space-y-2">
+            <p>Paste it here:</p>
+            <Input
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              placeholder={`${step.redirectUri}?code=…`}
+              className="font-mono text-[12.5px]"
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="Address after signing in"
+            />
+          </div>
+        </li>
+      </ol>
+      {error && <Alert>{error}</Alert>}
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="ghost" onClick={onRestart}>
+          Back
+        </Button>
+        <Button type="submit" variant="primary" loading={busy} disabled={!pasted.trim()}>
+          Complete sign-in
+        </Button>
+      </div>
+    </form>
   );
 }
 

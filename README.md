@@ -97,6 +97,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `GET /api/connections`, `GET/PATCH/DELETE /api/connections/:ref` | Connections; `PATCH {"name"}` renames |
 | `POST /api/connections` `{service, method, config, name?}` | Connect. Returns `connected`, `redirect` (open `url` in a browser) or `device` (show `device.userCode`, then `POST /api/connect/:flowId/poll` until connected) |
 | `POST /api/connections/:ref/reconnect` | Same, for an existing connection |
+| `POST /api/connect/:flowId/complete` `{url}` | Complete a sign-in started with `redirectUri` (a redirect URI other than Switchboard's, e.g. localhost) with the address the browser was sent to |
 | `GET /api/connections/:ref/openapi` | Operations from the service's OpenAPI description |
 | `ANY /proxy/:ref/*`, `POST /api/call`, `GET /api/connections/:ref/token` | See above |
 | `GET/POST /api/calls`, `GET/PUT/DELETE /api/calls/:id`, `POST /api/calls/:id/run` | Saved calls |
