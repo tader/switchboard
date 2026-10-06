@@ -138,7 +138,12 @@ do {
         let lists = store.calendars(for: .reminder).map { ["id": $0.calendarIdentifier, "title": $0.title, "source": $0.source.title] }
         output(200, lists)
     case "list":
-        let calendars = input.listId.map { [try calendar($0)] }
+        let calendars: [EKCalendar]?
+        if let listId = input.listId {
+            calendars = [try calendar(listId)]
+        } else {
+            calendars = nil
+        }
         let reminders = try fetch(calendars).map(reminderJSON).sorted { String(describing: $0["title"]) < String(describing: $1["title"]) }
         output(200, reminders)
     case "get":
@@ -159,7 +164,11 @@ do {
         if supplied.keys.contains("notes") { value.notes = input.notes }
         if let listId = input.listId { value.calendar = try calendar(listId) }
         if supplied.keys.contains("dueDate") {
-            value.dueDateComponents = try input.dueDate.map { Calendar.current.dateComponents(in: .current, from: try parsedDate($0)) }
+            if let dueDate = input.dueDate {
+                value.dueDateComponents = Calendar.current.dateComponents(in: .current, from: try parsedDate(dueDate))
+            } else {
+                value.dueDateComponents = nil
+            }
         }
         if let completed = input.completed { value.isCompleted = completed }
         if let priority = input.priority { value.priority = priority }
