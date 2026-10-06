@@ -182,7 +182,7 @@ function trim(s: unknown, max = 2000): string | undefined {
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
-function makeResolver(doc: any) {
+export function makeResolver(doc: any) {
   return function resolve(node: any, depth = 0): any {
     while (node && typeof node === 'object' && typeof node.$ref === 'string' && depth++ < 20) {
       const ref: string = node.$ref;
@@ -197,7 +197,7 @@ function makeResolver(doc: any) {
   };
 }
 
-function exampleJson(schema: any, resolve: (n: any) => any): string | undefined {
+export function exampleJson(schema: any, resolve: (n: any) => any): string | undefined {
   const value = sample(schema, resolve, 0, new Set());
   return value === undefined ? undefined : JSON.stringify(value, null, 2);
 }

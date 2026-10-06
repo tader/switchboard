@@ -532,6 +532,36 @@ test('OAuth: unregistered client ids only with a loopback redirect', async () =>
   assert.equal((await req('GET', `/api/oauth/authorize?${new URLSearchParams({ ...q, redirect_uri: 'https://evil.example/cb' })}`)).status, 400);
 });
 
+test('Microsoft: services, sign-in request, tenant and permissions', async () => {
+  const services = (await req('GET', '/api/services')).data;
+  for (const id of ['microsoft-graph', 'outlook-mail', 'outlook-calendar', 'onedrive', 'microsoft-todo']) {
+    const s = services.find((x: any) => x.id === id);
+    assert.deepEqual(s.methods.map((m: any) => m.id), ['oauth', 'device'], id);
+    assert.ok(s.guides.some((g: any) => g.id === 'microsoft/app-registration'), `${id} links the setup guide`);
+  }
+  const mail = services.find((x: any) => x.id === 'outlook-mail');
+  assert.equal(mail.methods[0].fields.find((f: any) => f.key === 'clientId').required, true, 'needs a client id until an admin sets one');
+  assert.ok(!mail.methods[1].fields.some((f: any) => f.key === 'clientSecret'), 'no secret for the device flow');
+
+  const r = await req('POST', '/api/connections', { service: 'outlook-mail', method: 'oauth', config: { access: 'send', clientId: 'app-123' } });
+  assert.equal(r.data.status, 'redirect', JSON.stringify(r.data));
+  const u = new URL(r.data.url);
+  assert.equal(u.origin + u.pathname, 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize');
+  assert.deepEqual(u.searchParams.get('scope')!.split(' '), ['offline_access', 'openid', 'profile', 'email', 'User.Read', 'Mail.Read', 'Mail.Send']);
+  assert.equal(u.searchParams.get('client_id'), 'app-123');
+  assert.equal(u.searchParams.get('code_challenge_method'), 'S256');
+  assert.equal(u.searchParams.get('response_mode'), 'query');
+
+  await req('PUT', '/api/admin/plugins/microsoft/settings', { clientId: 'shared-app', tenant: 'consumers' });
+  const after = (await req('GET', '/api/services')).data.find((x: any) => x.id === 'outlook-calendar');
+  assert.equal(after.methods[0].fields.find((f: any) => f.key === 'clientId').required, false, 'optional once an admin configured it');
+  const shared = new URL((await req('POST', '/api/connections', { service: 'outlook-calendar', method: 'oauth', config: {} })).data.url);
+  assert.equal(shared.pathname, '/consumers/oauth2/v2.0/authorize');
+  assert.equal(shared.searchParams.get('client_id'), 'shared-app');
+  const tenant = new URL((await req('POST', '/api/connections', { service: 'outlook-calendar', method: 'oauth', config: { tenant: 'contoso.onmicrosoft.com' } })).data.url);
+  assert.equal(tenant.pathname, '/contoso.onmicrosoft.com/oauth2/v2.0/authorize', 'per-connection tenant');
+});
+
 test('users: invite, sign in, admin-only areas', async () => {
   const r = await req('POST', '/api/admin/users', { username: 'alice' });
   const token = r.data.invite.url.split('#')[1];

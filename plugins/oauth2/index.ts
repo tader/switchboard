@@ -231,7 +231,7 @@ export function deviceCode(o: DeviceCodeOptions): AuthMethod {
         if (e instanceof OAuthError && e.code === 'authorization_pending') return { wait: true };
         if (e instanceof OAuthError && e.code === 'slow_down') return { wait: true, interval: 10 };
         if (e instanceof OAuthError && e.code === 'expired_token') throw new Error('The code expired. Please start again.');
-        if (e instanceof OAuthError && e.code === 'access_denied') throw new Error('Access was denied');
+        if (e instanceof OAuthError && (e.code === 'access_denied' || e.code === 'authorization_declined')) throw new Error('Access was denied');
         throw e;
       }
     },

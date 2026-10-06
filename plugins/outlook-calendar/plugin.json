@@ -1,0 +1,8 @@
+{
+  "id": "outlook-calendar",
+  "name": "Outlook Calendar",
+  "version": "1.0.0",
+  "description": "Calendars and events in Microsoft 365 and Outlook.com.",
+  "dependencies": ["microsoft"],
+  "icon": "icon.svg"
+}

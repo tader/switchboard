@@ -2,7 +2,7 @@
 
 > Switchboard was written entirely by Claude (Anthropic's Claude Opus 5.5, working in Claude Code), from the first line of code to these docs, at the request of [@tader](https://github.com/tader), who set the direction, tested it, and reported what to fix.
 
-One place that signs in to services (Gmail, Google Calendar, GitHub, any OAuth or API-key API) so scripts and agents don't each need their own OAuth client. Scripts call services through Switchboard with a Switchboard token; Switchboard adds credentials and refreshes tokens.
+One place that signs in to services (Gmail, Outlook, Google Calendar, GitHub, any OAuth or API-key API) so scripts and agents don't each need their own OAuth client. Scripts call services through Switchboard with a Switchboard token; Switchboard adds credentials and refreshes tokens.
 
 - Multiple users; each connects any number of accounts per service (e.g. several Gmail accounts).
 - Services come from hot-reloadable plugins, which may depend on each other (`gmail` → `google` → `oauth2`).
@@ -46,6 +46,7 @@ Back up the data dir. Without `secret.key` (or `SWITCHBOARD_SECRET_KEY`) stored 
 - **Todoist**: API tokens work without setup; for browser sign-in create an app in the Todoist App Management Console.
 - **Spotify**: create an app at developer.spotify.com/dashboard (Web API), add the redirect URI, and add each user under *User Management* while the app is in development mode. The client secret is only needed for *App only* access.
 - **Plex**: no setup. Sign in through plex.tv, with a code at plex.tv/link, or with a token. Switchboard picks the first of your servers it can reach (local HTTPS first); set *Server URL* under *Advanced* to choose one.
+- **Microsoft 365 and Outlook.com** (Outlook Mail, Outlook Calendar, OneDrive, Microsoft To Do, Microsoft Graph): create an app registration in the Microsoft Entra admin center and enter it under *Plugins → Microsoft → Settings*. Browser sign-in needs a client secret; sign-in with a code needs *Allow public client flows*. See *Docs → Setting up Microsoft sign-in*. The API reference uses slim descriptions built from Microsoft's 44 MB one by `plugins/microsoft/openapi/build.ts`.
 - **Google Keep**: Google only offers the Keep API to Google Workspace, and its consent screen never shows the Keep scopes (`invalid_scope`, "Some requested scopes cannot be shown"; intended behavior per Google), so it connects only with a *Service account*: a Workspace admin authorizes the service account's client id for the Keep scopes under *Security → API controls → Domain-wide delegation*, and you paste its JSON key and the user to act as. The generic *Google APIs* service offers service accounts too.
 - **Switchboard**: connect to another Switchboard with one of its API tokens, or *Sign in with Switchboard*: the other Switchboard asks you to approve and which connections to share, then issues a token. No setup on either side.
 - **GitHub**: personal access tokens work without setup. For browser sign-in and sign-in with a code, create a GitHub OAuth app (enable device flow for the latter) and enter it in *Plugins → GitHub → Settings*.
