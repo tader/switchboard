@@ -281,6 +281,7 @@ class PluginManager {
       callbackUrl,
       dir: p.dir,
       dataDir,
+      satellite: !!(config.satelliteCentralUrl && config.satelliteToken),
     };
   }
 

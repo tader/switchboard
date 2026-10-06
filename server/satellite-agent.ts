@@ -91,15 +91,25 @@ export function startSatelliteAgent() {
   let stopped = false;
   let socket: WebSocket | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
+  let catalogTimer: NodeJS.Timeout | undefined;
   let retry: NodeJS.Timeout | undefined;
   let retryMs = 1_000;
+  let sentCatalog = '';
 
   const connect = () => {
     if (stopped) return;
     socket = new WebSocket(socketUrl(central), { headers: { authorization: `Bearer ${token}` } });
     socket.addEventListener('open', () => {
       retryMs = 1_000;
-      socket!.send(JSON.stringify({ protocol: PROTOCOL, type: 'catalog', version: String(Date.now()), catalog: catalogue() }));
+      const publishCatalog = () => {
+        const catalog = catalogue();
+        const serialized = JSON.stringify(catalog);
+        if (serialized === sentCatalog || socket?.readyState !== WebSocket.OPEN) return;
+        sentCatalog = serialized;
+        socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'catalog', version: String(Date.now()), catalog }));
+      };
+      publishCatalog();
+      catalogTimer = setInterval(publishCatalog, 2_000);
       heartbeat = setInterval(() => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'heartbeat' })), 20_000);
     });
     socket.addEventListener('message', async (event) => {
@@ -121,6 +131,8 @@ export function startSatelliteAgent() {
     });
     socket.addEventListener('close', () => {
       if (heartbeat) clearInterval(heartbeat);
+      if (catalogTimer) clearInterval(catalogTimer);
+      sentCatalog = '';
       if (!stopped) {
         retry = setTimeout(connect, retryMs + Math.floor(Math.random() * Math.min(retryMs, 5_000)));
         retryMs = Math.min(retryMs * 2, 60_000);
@@ -133,6 +145,7 @@ export function startSatelliteAgent() {
     stopped = true;
     if (retry) clearTimeout(retry);
     if (heartbeat) clearInterval(heartbeat);
+    if (catalogTimer) clearInterval(catalogTimer);
     socket?.close(1000, 'Stopping');
   };
 }

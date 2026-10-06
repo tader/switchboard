@@ -82,6 +82,22 @@ test('a real satellite keeps credentials local and executes a per-user connectio
     SWITCHBOARD_SATELLITE_TOKEN: enrolled.data.token,
   });
   await waitFor(() => satellite.output().includes('Switchboard listening'));
+  let satelliteCookie = '';
+  const satelliteRequest = async (method: string, pathname: string, body?: unknown) => {
+    const response = await fetch(`http://127.0.0.1:${satellitePort}${pathname}`, {
+      method,
+      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', ...(satelliteCookie ? { cookie: satelliteCookie } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const setCookie = response.headers.get('set-cookie');
+    if (setCookie) satelliteCookie = setCookie.split(';')[0];
+    const text = await response.text();
+    return { status: response.status, data: text ? JSON.parse(text) : null };
+  };
+  const satelliteInvitation = satellite.output().match(/\/invite#(\S+)/)?.[1];
+  assert.ok(satelliteInvitation, satellite.output());
+  assert.equal((await satelliteRequest('POST', '/api/auth/invite', { token: satelliteInvitation, password: 'satellite password' })).status, 200);
+  assert.equal((await satelliteRequest('PUT', '/api/admin/plugins/shell-command/settings', { enabled: true })).status, 200);
   await waitFor(async () => (await request('GET', '/api/admin/satellites')).data[0]?.online === true);
   await waitFor(async () => (await request('GET', '/api/services')).data.some((s: any) => s.id === `sat/${enrolled.data.satellite.id}/http`));
 
@@ -104,4 +120,19 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal(centralDb.includes(Buffer.from('satellite-only-secret')), false, 'central database contains no local credential plaintext');
   assert.equal((await request('GET', `/api/connections/${connected.data.connection.id}/token`)).status, 400, 'raw tokens stay on the satellite');
   assert.equal((await request('DELETE', `/api/connections/${connected.data.connection.id}`)).status, 200);
+
+  await waitFor(async () => {
+    const service = (await request('GET', '/api/services')).data.find((s: any) => s.id === `sat/${enrolled.data.satellite.id}/shell-command`);
+    return service?.methods[0]?.unavailable === undefined;
+  });
+  const shell = await request('POST', '/api/connections', {
+    service: `sat/${enrolled.data.satellite.id}/shell-command`, method: 'command',
+    config: { command: 'printf "satellite command output\\n"' },
+  });
+  assert.equal(shell.status, 200, JSON.stringify(shell.data));
+  assert.equal(shell.data.connection.config.command, undefined);
+  const shellCall = await request('POST', '/api/call', { connection: shell.data.connection.id, method: 'GET', url: '/' });
+  assert.equal(shellCall.status, 200, JSON.stringify(shellCall.data));
+  assert.equal(shellCall.data.body, 'satellite command output\n');
+  assert.equal((await request('DELETE', `/api/connections/${shell.data.connection.id}`)).status, 200);
 });
