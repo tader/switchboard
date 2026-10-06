@@ -45,7 +45,7 @@ Back up the data dir. Without `secret.key` (or `SWITCHBOARD_SECRET_KEY`) stored 
 
 A satellite is another Switchboard instance on a machine that is not always online. It makes an outbound WebSocket connection to the central instance, so the machine needs no inbound port through its firewall or NAT. Add it under *Satellites*, copy the two environment variables shown there to the private instance, and start that instance normally. Its active plugin services then appear when an allowed user creates a connection.
 
-Satellite connections belong to one central user and cannot be shared. Provider credentials and secret connection fields are encrypted only in the satellite's data directory. Central Switchboard authorizes and audits calls, but raw provider tokens cannot be handed out for satellite connections. When the machine is offline calls fail immediately with `503` and error code `satellite_offline`; calls are not queued or rapidly retried.
+Satellite connections belong to one central user and cannot be shared. Provider credentials and secret connection fields are encrypted only in the satellite's data directory. Calls are audited on both Switchboards: the central user's Activity page records the routed call, while a satellite administrator's Activity page includes every upstream call executed there and identifies its upstream client. Raw provider tokens cannot be handed out for satellite connections. When the machine is offline calls fail immediately with `503` and error code `satellite_offline`; calls are not queued or rapidly retried.
 
 #### Run a satellite without Docker
 

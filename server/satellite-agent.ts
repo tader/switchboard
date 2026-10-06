@@ -2,12 +2,14 @@ import { config } from './config.ts';
 import { listServices, startConnect, completeFromPaste, completeRedirect, pollDevice, cancelFlow, deleteConnection, renameConnection, loadConnection } from './connections.ts';
 import { plugins } from './plugins/manager.ts';
 import { execute, type CallInput } from './proxy.ts';
+import { setResponseSize, type AuditSource, type Caller } from './audit.ts';
 import { describe } from './openapi.ts';
 import { ensureSatelliteUser } from './users.ts';
 import WebSocket from 'ws';
 import { all, run } from './db.ts';
 
 const PROTOCOL = 1;
+const auditSources = new Set<AuditSource>(['proxy', 'call', 'saved-call', 'console', 'token', 'mcp']);
 
 export interface SatelliteAgentStatus {
   configured: boolean;
@@ -62,6 +64,20 @@ function decodeInput(raw: any): CallInput {
   };
 }
 
+function upstreamCaller(userId: string, raw: any): Caller {
+  const source = auditSources.has(raw?.source) ? raw.source as AuditSource : 'call';
+  const tokenId = typeof raw?.tokenId === 'string' && raw.tokenId ? `upstream:${raw.tokenId.slice(0, 200)}` : `upstream:web:${userId}`;
+  const name = typeof raw?.tokenName === 'string' && raw.tokenName ? raw.tokenName.slice(0, 200) : 'Web console';
+  return {
+    source,
+    tokenId,
+    tokenName: `Upstream: ${name}`,
+    ip: typeof raw?.ip === 'string' ? raw.ip.slice(0, 100) : null,
+    userAgent: typeof raw?.userAgent === 'string' ? raw.userAgent.slice(0, 300) : 'Upstream Switchboard',
+    savedCall: typeof raw?.savedCall === 'string' ? raw.savedCall.slice(0, 200) : undefined,
+  };
+}
+
 async function handle(userId: string, operation: string, payload: any) {
   const user = ensureSatelliteUser(userId);
   switch (operation) {
@@ -86,8 +102,9 @@ async function handle(userId: string, operation: string, payload: any) {
       run('DELETE FROM users WHERE id = ? AND satellite_shadow = 1', user.id);
       return { ok: true };
     case 'call': {
-      const ex = await execute(user, String(payload.connection), decodeInput(payload.input));
+      const ex = await execute(user, String(payload.connection), decodeInput(payload.input), undefined, upstreamCaller(user.id, payload.caller));
       const body = Buffer.from(await ex.response.arrayBuffer());
+      if (ex.auditId) setResponseSize(ex.auditId, body.length);
       return {
         status: ex.response.status,
         statusText: ex.response.statusText,

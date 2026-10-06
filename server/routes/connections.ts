@@ -138,18 +138,19 @@ api.post('/call', async (c) => {
 // --- audit trail ---
 
 // Limited tokens (agents) cannot read the trail: it covers all of the user's connections.
+const includeUpstreamActivity = (c: Context<Env>) => c.get('user').role === 'admin' && !!(config.satelliteCentralUrl && config.satelliteToken);
 api.get('/audit', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);
-  return c.json(queryAudit(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), limit: num(q.limit), offset: num(q.offset) }));
+  return c.json(queryAudit(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), limit: num(q.limit), offset: num(q.offset) }, includeUpstreamActivity(c)));
 });
 api.get('/audit/histogram', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);
-  return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }));
+  return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }, includeUpstreamActivity(c)));
 });
-api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id)));
-api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')))));
+api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id, includeUpstreamActivity(c))));
+api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')), includeUpstreamActivity(c))));
 
 // --- saved calls ---
 

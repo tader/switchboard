@@ -177,7 +177,7 @@ async function executeRemote(user: User, row: any, input: CallInput, method: str
   signal?.addEventListener('abort', abort, { once: true });
   try {
     if (signal?.aborted) throw new HttpError(499, 'Request cancelled');
-    const r = await requestSatellite<any>(row.satellite_id, user.id, 'call', { connection: row.remote_connection_id, input: encoded });
+    const r = await requestSatellite<any>(row.satellite_id, user.id, 'call', { connection: row.remote_connection_id, input: encoded, caller });
     if (aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
     const sent: SentRequest = {
       ...r.sent,

@@ -164,8 +164,8 @@ export interface AuditQuery {
   offset?: number;
 }
 
-function where(userId: string, q: AuditQuery) {
-  const clauses = ['user_id = ?'];
+function where(userId: string, q: AuditQuery, includeSatelliteUsers = false) {
+  const clauses = [includeSatelliteUsers ? '(user_id = ? OR user_id IN (SELECT id FROM users WHERE satellite_shadow = 1))' : 'user_id = ?'];
   const params: any[] = [userId];
   if (q.connection) {
     clauses.push('(connection_id = ? OR connection_name = ?)');
@@ -233,8 +233,8 @@ const toEntry = (r: any, full = false) => ({
     : {}),
 });
 
-export function queryAudit(userId: string, q: AuditQuery) {
-  const w = where(userId, q);
+export function queryAudit(userId: string, q: AuditQuery, includeSatelliteUsers = false) {
+  const w = where(userId, q, includeSatelliteUsers);
   const col = SORTS[q.sort ?? 'time'];
   if (!col) throw badRequest('sort must be time, duration, status or size');
   const dir = q.order === 'asc' ? 'ASC' : 'DESC';
@@ -246,25 +246,27 @@ export function queryAudit(userId: string, q: AuditQuery) {
   return { items: rows.map((r) => toEntry(r)), total, limit, offset };
 }
 
-export function getAudit(userId: string, id: number) {
-  const r = one('SELECT * FROM audit_log WHERE id = ? AND user_id = ?', id, userId);
+export function getAudit(userId: string, id: number, includeSatelliteUsers = false) {
+  const owner = includeSatelliteUsers ? '(user_id = ? OR user_id IN (SELECT id FROM users WHERE satellite_shadow = 1))' : 'user_id = ?';
+  const r = one(`SELECT * FROM audit_log WHERE id = ? AND ${owner}`, id, userId);
   if (!r) throw notFound('Entry not found');
   return toEntry(r, true);
 }
 
 /** Values to offer in filters, including tokens and connections that no longer exist. */
-export function auditFacets(userId: string) {
+export function auditFacets(userId: string, includeSatelliteUsers = false) {
+  const owner = includeSatelliteUsers ? '(user_id = ? OR user_id IN (SELECT id FROM users WHERE satellite_shadow = 1))' : 'user_id = ?';
   return {
     connections: all(
       `SELECT connection_id AS id, connection_name AS name, service_id AS serviceId, COUNT(*) AS count FROM audit_log
-       WHERE user_id = ? AND connection_id IS NOT NULL GROUP BY connection_id ORDER BY connection_name`,
+       WHERE ${owner} AND connection_id IS NOT NULL GROUP BY connection_id ORDER BY connection_name`,
       userId,
     ),
     clients: all(
-      `SELECT token_id AS id, token_name AS name, COUNT(*) AS count FROM audit_log WHERE user_id = ? AND token_id IS NOT NULL GROUP BY token_id ORDER BY token_name`,
+      `SELECT token_id AS id, token_name AS name, COUNT(*) AS count FROM audit_log WHERE ${owner} AND token_id IS NOT NULL GROUP BY token_id ORDER BY token_name`,
       userId,
     ),
-    methods: all(`SELECT DISTINCT method FROM audit_log WHERE user_id = ? AND method IS NOT NULL ORDER BY method`, userId).map((r) => r.method),
+    methods: all(`SELECT DISTINCT method FROM audit_log WHERE ${owner} AND method IS NOT NULL ORDER BY method`, userId).map((r) => r.method),
   };
 }
 
@@ -314,10 +316,10 @@ const KEY: Record<Exclude<Breakdown, 'url'>, { key: string; label: string }> = {
   },
 };
 
-export function auditHistogram(userId: string, q: AuditQuery & { by?: string; tz?: number; buckets?: number }) {
+export function auditHistogram(userId: string, q: AuditQuery & { by?: string; tz?: number; buckets?: number }, includeSatelliteUsers = false) {
   const by = (q.by ?? 'connection') as Breakdown;
   if (!['connection', 'client', 'method', 'status', 'url'].includes(by)) throw badRequest('by must be connection, client, method, status or url');
-  const w = where(userId, { ...q, sort: undefined, order: undefined });
+  const w = where(userId, { ...q, sort: undefined, order: undefined }, includeSatelliteUsers);
   const to = q.to ?? now();
   let from = q.from;
   if (!from) {

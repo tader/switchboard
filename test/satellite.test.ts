@@ -123,6 +123,18 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal(result.auth, 'Bearer satellite-only-secret');
   assert.equal(result.body, 'hello');
 
+  const satelliteAudit = await satelliteRequest('GET', '/api/audit');
+  assert.equal(satelliteAudit.status, 200);
+  assert.equal(satelliteAudit.data.total, 1, JSON.stringify(satelliteAudit.data));
+  assert.equal(satelliteAudit.data.items[0].connection.name, connected.data.connection.name);
+  assert.equal(satelliteAudit.data.items[0].client.name, 'Upstream: Web console');
+  assert.equal(satelliteAudit.data.items[0].source, 'console');
+  assert.equal(satelliteAudit.data.items[0].status, 200);
+  assert.ok(satelliteAudit.data.items[0].responseSize > 0);
+  const satelliteFacets = await satelliteRequest('GET', '/api/audit/facets');
+  assert.equal(satelliteFacets.data.connections[0].count, 1);
+  assert.equal(satelliteFacets.data.clients[0].name, 'Upstream: Web console');
+
   const centralDb = fs.readFileSync(path.join(centralDir, 'switchboard.db'));
   assert.equal(centralDb.includes(Buffer.from('satellite-only-secret')), false, 'central database contains no local credential plaintext');
   assert.equal((await request('GET', `/api/connections/${connected.data.connection.id}/token`)).status, 400, 'raw tokens stay on the satellite');
