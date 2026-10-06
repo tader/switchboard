@@ -91,6 +91,7 @@ export interface Connection {
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
+  satellite: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
 export type FlowResult =
@@ -204,6 +205,21 @@ export interface PluginInfo {
 export interface AdminUser extends User {
   connections: number;
   inviteExpiresAt: number | null;
+}
+
+export interface Satellite {
+  id: string;
+  name: string;
+  ownerUserId: string;
+  disabled: boolean;
+  online: boolean;
+  connectedAt: number | null;
+  lastSeenAt: number | null;
+  catalogVersion: string | null;
+  services: { id: string; name: string }[];
+  userIds: string[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface Info {

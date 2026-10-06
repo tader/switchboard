@@ -9,6 +9,7 @@ One place that signs in to services (Gmail, Outlook, Google Calendar, GitHub, an
 - A service can offer several sign-in methods: personal access token, API key, basic auth, OAuth authorization code (with PKCE), OAuth device code, client credentials.
 - Web console to build calls (method, URL, query, headers, body), browse the service's OpenAPI description, and save calls for reuse.
 - Admins install and update plugins from GitHub and manage users.
+- Satellites expose plugins on intermittently connected private machines through an outbound WebSocket; connections remain per-user and credentials remain on that machine.
 
 ## Run
 
@@ -33,10 +34,18 @@ On first start, and whenever no administrator can sign in, the log contains a se
 | `SWITCHBOARD_SESSION_TTL_SECS` | 14 days | |
 | `SWITCHBOARD_WATCH_PLUGINS` | `true` | Reload plugins when their files change. |
 | `SWITCHBOARD_AUDIT_RETENTION_DAYS` | `90` | How long the activity log is kept; `0` keeps it forever. |
+| `SWITCHBOARD_SATELLITE_CENTRAL_URL` | | On a satellite, the public URL of its central Switchboard. Set together with `SWITCHBOARD_SATELLITE_TOKEN`. |
+| `SWITCHBOARD_SATELLITE_TOKEN` | | One-time-shown device credential created on the central instance's Satellites page. |
 
 Switchboard was called Hub before: `HUB_*` variables, `hub_` tokens, the `X-Hub-Token` header and an existing `hub.db` keep working.
 
 Back up the data dir. Without `secret.key` (or `SWITCHBOARD_SECRET_KEY`) stored credentials cannot be decrypted.
+
+### Satellites
+
+A satellite is another Switchboard instance on a machine that is not always online. It makes an outbound WebSocket connection to the central instance, so the machine needs no inbound port through its firewall or NAT. Add it under *Satellites*, copy the two environment variables shown there to the private instance, and start that instance normally. Its active plugin services then appear when an allowed user creates a connection.
+
+Satellite connections belong to one central user and cannot be shared. Provider credentials and secret connection fields are encrypted only in the satellite's data directory. Central Switchboard authorizes and audits calls, but raw provider tokens cannot be handed out for satellite connections. When the machine is offline calls fail immediately with `503` and error code `satellite_offline`; calls are not queued or rapidly retried.
 
 ### Setting up Google and GitHub
 
@@ -106,6 +115,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `POST /api/admin/plugins/install` `{repo, ref?, path?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` | Install/update from GitHub |
 | `POST /api/admin/plugins/:id/reload`, `PATCH /api/admin/plugins/:id` `{enabled}`, `GET/PUT /api/admin/plugins/:id/settings`, `DELETE /api/admin/plugins/:id` | |
 | `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/:id`, `POST /api/admin/users/:id/invite` | Admin: users |
+| `GET/POST /api/admin/satellites`, `GET/PATCH/DELETE /api/admin/satellites/:id`, `POST /api/admin/satellites/:id/rotate-token` | Admin: outbound satellite enrolment, user access and credential rotation |
 | `GET /api/audit`, `GET /api/audit/:id`, `GET /api/audit/facets`, `GET /api/audit/histogram?by=…` | Activity log. Filters: `connection`, `client` (token id or `web`), `status` (`2xx`…`5xx`, `error` or a code), `method`, `source`, `q`, `from`/`to` (ms); `sort` (`time`, `duration`, `status`, `size`), `order`, `limit`, `offset`. Not readable with tokens limited to connections. |
 | `DELETE /api/me/token` | Revoke the token making the request |
 | `GET /api/openapi.json` | OpenAPI description of this API |

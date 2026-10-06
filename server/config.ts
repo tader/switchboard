@@ -30,6 +30,9 @@ export const config = {
   auditRetentionDays: Number(env.AUDIT_RETENTION_DAYS ?? 90),
   /** Watch plugin directories and reload on change. */
   watchPlugins: (env.WATCH_PLUGINS ?? 'true') !== 'false',
+  /** When set together, this instance also acts as an outbound satellite agent. */
+  satelliteCentralUrl: env.SATELLITE_CENTRAL_URL?.replace(/\/+$/, ''),
+  satelliteToken: env.SATELLITE_TOKEN,
 };
 
 export const callbackUrl = `${config.publicUrl}/oauth/callback`;

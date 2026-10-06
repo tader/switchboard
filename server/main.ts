@@ -18,6 +18,8 @@ import { openapiDocument } from './self-openapi.ts';
 import { ensureAdmin } from './users.ts';
 import { prune } from './audit.ts';
 import type { Env } from './auth.ts';
+import { attachSatelliteWebSockets } from './satellites.ts';
+import { startSatelliteAgent } from './satellite-agent.ts';
 
 fs.mkdirSync(config.dataDir, { recursive: true });
 initKey();
@@ -26,7 +28,7 @@ initDb();
 const app = new Hono<Env>();
 
 app.onError((err, c) => {
-  if (err instanceof HttpError) return c.json({ error: err.message }, err.status as any);
+  if (err instanceof HttpError) return c.json({ error: err.message, ...((err as any).code ? { code: (err as any).code } : {}) }, err.status as any);
   if (err instanceof SyntaxError && /JSON/.test(err.message)) return c.json({ error: 'Invalid JSON body' }, 400);
   console.error(err);
   return c.json({ error: 'Internal error' }, 500);
@@ -74,6 +76,7 @@ app.get('*', (c) => {
 });
 
 await plugins.start();
+const stopSatelliteAgent = startSatelliteAgent();
 prune();
 setInterval(prune, 6 * 3600_000).unref();
 
@@ -85,9 +88,12 @@ if (setupUrl) {
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () => {
   console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);
 });
+const stopSatelliteWebSockets = attachSatelliteWebSockets(server as import('node:http').Server);
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
+    stopSatelliteWebSockets();
+    stopSatelliteAgent();
     server.close();
     await plugins.stop().catch(() => {});
     process.exit(0);

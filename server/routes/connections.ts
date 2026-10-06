@@ -11,13 +11,14 @@ import { describe } from '../openapi.ts';
 import { type CallInput, envelope, execute, issueToken, passThrough } from '../proxy.ts';
 import { auditFacets, auditHistogram, callerFrom, getAudit, queryAudit } from '../audit.ts';
 import { getDoc, guidesByService, listDocs } from '../docs.ts';
+import { requestSatellite } from '../satellites.ts';
 
 export const api = new Hono<Env>();
 api.use('*', requireUser);
 
 api.get('/services', (c) => {
   const guides = guidesByService();
-  return c.json(listServices().map((s) => ({ ...s, guides: guides.get(s.id) ?? [] })));
+  return c.json(listServices(c.get('user').id).map((s) => ({ ...s, guides: guides.get(s.id) ?? [] })));
 });
 
 api.get('/docs', (c) => c.json(listDocs(c.get('user').role === 'admin')));
@@ -60,8 +61,14 @@ api.get('/connections/:ref/token', tokenHandler);
 api.post('/connections/:ref/token', tokenHandler);
 
 api.get('/connections/:ref/openapi', async (c) => {
-  const { row, conn, service } = loadConnection(c.get('user').id, c.req.param('ref'));
+  const row = getConnectionRow(c.get('user').id, c.req.param('ref'));
   assertConnectionAccess(c, row.id);
+  if (row.satellite_id) {
+    const d = await requestSatellite(row.satellite_id, c.get('user').id, 'openapi', { connection: row.remote_connection_id, refresh: c.req.query('refresh') === '1' });
+    if (!d) throw notFound('This service has no API description');
+    return c.json(d);
+  }
+  const { conn, service } = loadConnection(c.get('user').id, row.id);
   const d = await describe(service, conn, c.req.query('refresh') === '1');
   if (!d) throw notFound(`${service.name} has no API description`);
   return c.json(d);
