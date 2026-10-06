@@ -47,6 +47,34 @@ A satellite is another Switchboard instance on a machine that is not always onli
 
 Satellite connections belong to one central user and cannot be shared. Provider credentials and secret connection fields are encrypted only in the satellite's data directory. Central Switchboard authorizes and audits calls, but raw provider tokens cannot be handed out for satellite connections. When the machine is offline calls fail immediately with `503` and error code `satellite_offline`; calls are not queued or rapidly retried.
 
+#### Run a satellite without Docker
+
+Install Node.js 24, then build Switchboard from a checkout:
+
+```bash
+npm ci
+npm --prefix web ci
+npm --prefix web run build
+```
+
+Create the machine under **Satellites** on the central Switchboard and copy the token it shows. Start the local instance with a separate persistent data directory and bind it to loopback:
+
+```bash
+export SWITCHBOARD_HOST=127.0.0.1
+export SWITCHBOARD_PORT=8770
+export SWITCHBOARD_PUBLIC_URL=http://127.0.0.1:8770
+export SWITCHBOARD_DATA_DIR="$HOME/.local/share/switchboard-satellite"
+
+export SWITCHBOARD_SATELLITE_CENTRAL_URL=https://switchboard.example.com
+export SWITCHBOARD_SATELLITE_TOKEN='sws_…'
+
+npm start
+```
+
+The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Machine-specific plugins are configured in this local UI; for example, enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service is advertised upstream.
+
+The satellite needs only outbound HTTPS/WebSocket access to the central URL. No inbound firewall or router port is required. For unattended use, put the variables in a permission-restricted service configuration and run Switchboard as a dedicated low-privilege OS user. Shell commands execute with that user's filesystem permissions.
+
 ### Setting up Google and GitHub
 
 - **Google** (Gmail, Calendar, Drive, Docs, Sheets, Google APIs): create a *Web application* OAuth client in the Google Cloud console, add the redirect URI shown in *Plugins → Google → Settings*, and enter the client id and secret there. Enable each API you use (Gmail, Calendar, Drive, Docs, Sheets) in the same Cloud project. While the consent screen is in testing, add each Google account as a test user. Users can also bring their own client under *Advanced* when connecting.
