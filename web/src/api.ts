@@ -71,6 +71,7 @@ export interface Service {
   methods: AuthMethod[];
   /** Setup guides for this service. */
   guides: { id: string; title: string }[];
+  satellite?: { id: string; name: string; online: boolean };
 }
 
 export interface Connection {

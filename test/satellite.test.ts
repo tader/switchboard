@@ -105,6 +105,8 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal(upstreamState.data.centralUrl, centralUrl);
   assert.equal((await request('GET', '/api/admin/satellite-upstream')).data.configured, false, 'a central instance has no upstream');
   await waitFor(async () => (await request('GET', '/api/services')).data.some((s: any) => s.id === `sat/${enrolled.data.satellite.id}/http`));
+  const remoteHttp = (await request('GET', '/api/services')).data.find((s: any) => s.id === `sat/${enrolled.data.satellite.id}/http`);
+  assert.deepEqual(remoteHttp.satellite, { id: enrolled.data.satellite.id, name: 'Test laptop', online: true });
 
   const connected = await request('POST', '/api/connections', {
     service: `sat/${enrolled.data.satellite.id}/http`, method: 'token',

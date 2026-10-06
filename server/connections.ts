@@ -198,6 +198,7 @@ export interface ServiceView {
   docsUrl?: string;
   pluginId: string;
   methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string; redirect: boolean }[];
+  satellite?: { id: string; name: string; online: boolean };
 }
 
 export function listServices(userId?: string): ServiceView[] {
@@ -214,10 +215,11 @@ export function listServices(userId?: string): ServiceView[] {
   const remote: ServiceView[] = userId ? servicesForUser(userId).map(({ satellite, service }) => ({
     id: remoteServiceId(satellite.id, service.id),
     name: service.name,
-    description: `${service.description ? `${service.description} · ` : ''}${satellite.name}${satellite.online ? '' : ' (offline)'}`,
+    description: service.description,
     icon: service.icon,
     pluginId: service.pluginId,
     methods: service.methods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: (m.fields ?? []) as Field[], unavailable: !satellite.online ? `${satellite.name} is offline` : m.unavailable, redirect: !!m.redirect })),
+    satellite: { id: satellite.id, name: satellite.name, online: satellite.online },
   })) : [];
   return [...local, ...remote].sort((a, b) => a.name.localeCompare(b.name));
 }
