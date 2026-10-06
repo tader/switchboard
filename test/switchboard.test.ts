@@ -58,7 +58,15 @@ function startUpstream() {
       return json(400, { error: 'invalid_grant' });
     }
     if (url.pathname === '/spec.json') {
-      return json(200, { openapi: '3.0.0', info: { title: 'Fake', version: '1' }, servers: [{ url: 'https://{domain}/api/v2', variables: { domain: { default: 'example.com' } } }], paths: { '/things/{id}': { get: { summary: 'Get a thing', parameters: [{ name: 'id', in: 'path', required: true }] } } } });
+      return json(200, {
+        openapi: '3.0.0', info: { title: 'Fake', version: '1' },
+        servers: [{ url: 'https://{domain}/api/v2', variables: { domain: { default: 'example.com' } } }],
+        paths: { '/things/{id}': { get: { summary: 'Get a thing', parameters: [
+          { name: 'id', in: 'path', required: true },
+          { name: 'hideCompleted', in: 'query', schema: { type: 'boolean', default: false } },
+          { name: 'nextToken', in: 'query', schema: { type: 'string' } },
+        ] } } },
+      });
     }
     if (url.pathname === '/client.json') return json(200, { client_id: `${up}/client.json`, client_name: 'CIMD App', redirect_uris: ['http://localhost:9000/cb'] });
     if (url.pathname === '/forged-client.json') return json(200, { client_id: 'https://claude.ai/oauth/client.json', client_name: 'Claude', redirect_uris: ['http://localhost:9000/cb'] });
@@ -802,12 +810,26 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   assert.deepEqual(list.data.result.tools.map((t: any) => t.name), ['list_connections', 'search_operations', 'get_operation', 'call', 'list_saved_calls', 'run_saved_call']);
 
   const conns = await rpc({ id: 3, method: 'tools/call', params: { name: 'list_connections', arguments: {} } }, { token: mcpToken });
-  assert.ok(conns.data.result.structuredContent.items.some((x: any) => x.name === 'mcp-api' && x.hasApiReference));
+  assert.ok(conns.data.result.structuredContent.items.some((x: any) => x.name === 'mcp-api' && x.hasApiReference && x.location.type === 'local'));
 
   const found = await rpc({ id: 4, method: 'tools/call', params: { name: 'search_operations', arguments: { connection: 'mcp-api', query: 'thing' } } }, { token: mcpToken });
-  assert.deepEqual(found.data.result.structuredContent.operations[0], { operationId: 'get /things/{id}', method: 'GET', path: '/api/v2/things/{id}', summary: 'Get a thing' });
+  assert.deepEqual(found.data.result.structuredContent.operations[0], {
+    operationId: 'get /things/{id}', method: 'GET', path: '/api/v2/things/{id}', summary: 'Get a thing',
+    parameters: {
+      path: [{ name: 'id', in: 'path', required: true }],
+      query: [{ name: 'hideCompleted', in: 'query', required: false, type: 'boolean', example: 'false' }, { name: 'nextToken', in: 'query', required: false, type: 'string' }],
+      header: [],
+    },
+    pagination: {
+      nextTokenParameter: 'nextToken',
+      instruction: "Preserve all filters and pass the response's nextToken value as nextToken on the next call. Continue until the response omits it.",
+    },
+  });
   const op = await rpc({ id: 5, method: 'tools/call', params: { name: 'get_operation', arguments: { connection: 'mcp-api', method: 'GET', path: '/api/v2/things/{id}' } } }, { token: mcpToken });
   assert.equal(op.data.result.structuredContent.params[0].name, 'id');
+  assert.equal(op.data.result.structuredContent.parameters.query[0].example, 'false');
+  assert.equal(op.data.result.structuredContent.pagination.nextTokenParameter, 'nextToken');
+  assert.equal(op.data.result.structuredContent.callMapping.queryParameters, 'call.query');
 
   const called = await rpc(
     { id: 6, method: 'tools/call', params: { name: 'call', arguments: { connection: 'mcp-api', method: 'POST', path: '/api/v2/things/{id}', path_params: { id: 'x/1' }, query: { a: '1' }, body: { hello: 'world' } } } },

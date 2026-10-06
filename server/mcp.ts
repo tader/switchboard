@@ -20,8 +20,10 @@ const SERVER_INFO = { name: 'switchboard', title: 'Switchboard', version: '1.0.0
 const META = 'io.modelcontextprotocol/';
 
 const INSTRUCTIONS = `Switchboard signs in to services (Gmail, GitHub, Jira, ...) on the user's behalf and adds credentials to requests.
-Start with list_connections. Use search_operations and get_operation to find the right endpoint in a service's API reference, then call.
-Paths are relative to the connection's base URL. Credentials are added by Switchboard; never send your own Authorization header.`;
+Use this sequence: list_connections → search_operations → get_operation → call. Always inspect get_operation before calling so you use its supported path, query, header, and body parameters.
+These are MCP tools. If your host exposes them as deferred tools, invoke them through the host's deferred tool-call mechanism; do not treat a discovered operationId as a new native tool.
+Paths are relative to the connection's base URL. Credentials are added by Switchboard; never send your own Authorization header.
+For paginated operations, preserve the same filters and keep calling with the returned nextToken until it is absent before claiming the result is complete. Prefer restrictive filters before paginating.`;
 
 type Json = Record<string, any>;
 
@@ -52,7 +54,7 @@ const tools = [
   {
     name: 'search_operations',
     title: 'Search API operations',
-    description: "Search a connection's API reference (OpenAPI) by keywords, e.g. 'list messages' or 'create issue'. Returns method, path and summary.",
+    description: "Search a connection's API reference (OpenAPI) by keywords, e.g. 'list messages' or 'create issue'. Returns method, path, supported parameters, and pagination metadata. Follow with get_operation before call.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -68,7 +70,7 @@ const tools = [
   {
     name: 'get_operation',
     title: 'Get an API operation',
-    description: 'Parameters and an example body of one operation, by operationId or by method and path.',
+    description: 'Get complete parameter, body, and pagination metadata for one operation. Inspect this immediately before call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -156,6 +158,23 @@ class ToolError extends Error {}
 const pairs = (v: unknown): [string, string][] =>
   v && typeof v === 'object' && !Array.isArray(v) ? Object.entries(v as Json).map(([k, x]) => [k, typeof x === 'string' ? x : JSON.stringify(x)]) : [];
 
+function operationMetadata(operation: { params: any[]; body?: any }) {
+  const parameters = {
+    path: operation.params.filter((p) => p.in === 'path'),
+    query: operation.params.filter((p) => p.in === 'query'),
+    header: operation.params.filter((p) => p.in === 'header'),
+  };
+  const token = parameters.query.find((p) => /^(next_?token|page_?token|cursor)$/i.test(p.name));
+  return {
+    parameters,
+    ...(operation.body ? { requestBody: operation.body } : {}),
+    ...(token ? { pagination: {
+      nextTokenParameter: token.name,
+      instruction: `Preserve all filters and pass the response's ${token.name} value as ${token.name} on the next call. Continue until the response omits it.`,
+    } } : {}),
+  };
+}
+
 async function runCall(ctx: Ctx, connectionId: string, req: { method: string; url: string; pathParams?: Json; query?: [string, string][]; headers?: [string, string][]; body?: unknown }, savedCall?: string) {
   let body: string | undefined;
   const headers = req.headers ?? [];
@@ -198,6 +217,7 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
         baseUrl: c.baseUrl,
         hasApiReference: c.hasOpenapi,
         status: c.status,
+        location: c.satellite ? { type: 'satellite', name: c.satellite.name, online: c.satellite.online } : { type: 'local' },
         ...(c.statusMessage ? { problem: c.statusMessage } : {}),
       }));
       return json(list);
@@ -236,14 +256,17 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
         });
         return json({
           total: hits.length,
-          operations: hits.slice(0, limit).map((o) => ({ operationId: o.id, method: o.method, path: pathFor(o.path), summary: o.summary, ...(o.deprecated ? { deprecated: true } : {}) })),
+          instruction: 'Use get_operation for the selected operation before call.',
+          operations: hits.slice(0, limit).map((o) => ({ operationId: o.id, method: o.method, path: pathFor(o.path), summary: o.summary, ...operationMetadata(o), ...(o.deprecated ? { deprecated: true } : {}) })),
         });
       }
       const op = d.operations.find((o) =>
         args.operationId ? o.id === args.operationId : o.method === String(args.method ?? '').toUpperCase() && (pathFor(o.path) === args.path || o.path === args.path),
       );
       if (!op) throw new ToolError('Operation not found; use search_operations');
-      return json({ ...op, path: pathFor(op.path) });
+      return json({ ...op, path: pathFor(op.path), ...operationMetadata(op), callMapping: {
+        path: 'call.path', pathParameters: 'call.path_params', queryParameters: 'call.query', headerParameters: 'call.headers', requestBody: 'call.body',
+      } });
     }
     case 'call': {
       const row = connectionFor(ctx, args.connection);

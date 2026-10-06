@@ -148,9 +148,15 @@ test('a real satellite keeps credentials local and executes a per-user connectio
     });
     return response.json();
   };
+  const mcpConnections = await mcp('list_connections', {});
+  const mcpRemote = mcpConnections.result.structuredContent.items.find((item: any) => item.name === connected.data.connection.name);
+  assert.deepEqual(mcpRemote.location, { type: 'satellite', name: 'Test laptop', online: true });
   const operations = await mcp('search_operations', { connection: connected.data.connection.name, query: 'local' });
   assert.equal(operations.result.isError, undefined, JSON.stringify(operations));
-  assert.deepEqual(operations.result.structuredContent.operations[0], { operationId: 'localCall', method: 'POST', path: '/local', summary: 'Call the local API' });
+  assert.deepEqual(operations.result.structuredContent.operations[0], {
+    operationId: 'localCall', method: 'POST', path: '/local', summary: 'Call the local API',
+    parameters: { path: [], query: [], header: [] },
+  });
   const mcpCall = await mcp('call', { connection: connected.data.connection.name, method: 'POST', path: '/local', body: { via: 'mcp' } });
   assert.equal(mcpCall.result.isError, undefined, JSON.stringify(mcpCall));
   assert.match(mcpCall.result.content[0].text, /^HTTP 200/);
