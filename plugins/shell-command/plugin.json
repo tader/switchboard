@@ -3,6 +3,7 @@
   "name": "Shell command",
   "version": "1.0.0",
   "description": "Run a fixed shell command through a connection on a satellite.",
+  "icon": "icon.svg",
   "settings": [
     {
       "key": "enabled",

@@ -53,6 +53,7 @@ export default async function setup(ctx: PluginContext) {
       id: 'shell-command',
       name: 'Shell command',
       description: 'Run a fixed command on this satellite and return its standard output',
+      icon: 'icon.svg',
       baseUrl,
       allowedHosts: [new URL(baseUrl).host],
       authMethods: [{
