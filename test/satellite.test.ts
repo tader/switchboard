@@ -99,6 +99,11 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal((await satelliteRequest('POST', '/api/auth/invite', { token: satelliteInvitation, password: 'satellite password' })).status, 200);
   assert.equal((await satelliteRequest('PUT', '/api/admin/plugins/shell-command/settings', { enabled: true })).status, 200);
   await waitFor(async () => (await request('GET', '/api/admin/satellites')).data[0]?.online === true);
+  const upstreamState = await satelliteRequest('GET', '/api/admin/satellite-upstream');
+  assert.equal(upstreamState.data.configured, true);
+  assert.equal(upstreamState.data.state, 'online');
+  assert.equal(upstreamState.data.centralUrl, centralUrl);
+  assert.equal((await request('GET', '/api/admin/satellite-upstream')).data.configured, false, 'a central instance has no upstream');
   await waitFor(async () => (await request('GET', '/api/services')).data.some((s: any) => s.id === `sat/${enrolled.data.satellite.id}/http`));
 
   const connected = await request('POST', '/api/connections', {

@@ -9,6 +9,30 @@ import { all, run } from './db.ts';
 
 const PROTOCOL = 1;
 
+export interface SatelliteAgentStatus {
+  configured: boolean;
+  centralUrl: string | null;
+  state: 'not-configured' | 'connecting' | 'online' | 'offline';
+  connectedAt: number | null;
+  lastSeenAt: number | null;
+  lastError: string | null;
+  nextRetryAt: number | null;
+}
+
+const agentStatus: SatelliteAgentStatus = {
+  configured: false,
+  centralUrl: null,
+  state: 'not-configured',
+  connectedAt: null,
+  lastSeenAt: null,
+  lastError: null,
+  nextRetryAt: null,
+};
+
+export function satelliteAgentStatus(): SatelliteAgentStatus {
+  return { ...agentStatus };
+}
+
 function socketUrl(base: string) {
   const u = new URL(base);
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -88,6 +112,7 @@ export function startSatelliteAgent() {
   const token = config.satelliteToken;
   if (!central && !token) return () => {};
   if (!central || !token) throw new Error('SWITCHBOARD_SATELLITE_CENTRAL_URL and SWITCHBOARD_SATELLITE_TOKEN must be set together');
+  Object.assign(agentStatus, { configured: true, centralUrl: central, state: 'connecting', connectedAt: null, lastError: null, nextRetryAt: null });
   let stopped = false;
   let socket: WebSocket | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
@@ -98,9 +123,12 @@ export function startSatelliteAgent() {
 
   const connect = () => {
     if (stopped) return;
+    agentStatus.state = 'connecting';
+    agentStatus.nextRetryAt = null;
     socket = new WebSocket(socketUrl(central), { headers: { authorization: `Bearer ${token}` } });
     socket.addEventListener('open', () => {
       retryMs = 1_000;
+      Object.assign(agentStatus, { state: 'online', connectedAt: Date.now(), lastSeenAt: Date.now(), lastError: null, nextRetryAt: null });
       const publishCatalog = () => {
         const catalog = catalogue();
         const serialized = JSON.stringify(catalog);
@@ -110,7 +138,11 @@ export function startSatelliteAgent() {
       };
       publishCatalog();
       catalogTimer = setInterval(publishCatalog, 2_000);
-      heartbeat = setInterval(() => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'heartbeat' })), 20_000);
+      heartbeat = setInterval(() => {
+        if (socket?.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'heartbeat' }));
+        agentStatus.lastSeenAt = Date.now();
+      }, 20_000);
     });
     socket.addEventListener('message', async (event) => {
       let message: any;
@@ -134,15 +166,18 @@ export function startSatelliteAgent() {
       if (catalogTimer) clearInterval(catalogTimer);
       sentCatalog = '';
       if (!stopped) {
-        retry = setTimeout(connect, retryMs + Math.floor(Math.random() * Math.min(retryMs, 5_000)));
+        const delay = retryMs + Math.floor(Math.random() * Math.min(retryMs, 5_000));
+        Object.assign(agentStatus, { state: 'offline', connectedAt: null, nextRetryAt: Date.now() + delay });
+        retry = setTimeout(connect, delay);
         retryMs = Math.min(retryMs * 2, 60_000);
       }
     });
-    socket.addEventListener('error', () => {});
+    socket.addEventListener('error', (event: any) => { agentStatus.lastError = event?.error?.message ?? event?.message ?? 'WebSocket connection failed'; });
   };
   connect();
   return () => {
     stopped = true;
+    Object.assign(agentStatus, { state: 'offline', connectedAt: null, nextRetryAt: null });
     if (retry) clearTimeout(retry);
     if (heartbeat) clearInterval(heartbeat);
     if (catalogTimer) clearInterval(catalogTimer);

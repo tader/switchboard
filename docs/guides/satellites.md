@@ -36,3 +36,9 @@ Allowing a user to access the machine does not give them an existing connection.
 Connections remain visible while their machine is offline. Calls fail immediately with `503 Service Unavailable` and `satellite_offline`; Switchboard does not queue them. The connection becomes usable again when the outbound WebSocket reconnects.
 
 Rotating a satellite credential disconnects it immediately. Configure the newly shown token on the private machine before restarting it.
+
+## Satellite chains
+
+A Switchboard may connect to an upstream Switchboard while accepting satellites of its own. Its Satellites page shows the upstream connection and its live state above the downstream machines.
+
+Each link remains an independent trust and user boundary. Services from a downstream satellite are not automatically advertised through the intermediate Switchboard to its upstream; create and manage those connections on the intermediate Switchboard.

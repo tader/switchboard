@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KeyRound, MoreHorizontal, MonitorUp, Plus, Trash2 } from 'lucide-react';
-import { api, type AdminUser, type Satellite } from '../api';
+import { api, type AdminUser, type Satellite, type SatelliteUpstream } from '../api';
 import { useSession } from '../auth';
 import { ago, useResource } from '../lib';
 import { Alert, Badge, Button, Card, CopyField, Dialog, FormField, IconButton, Input, Menu, PageHeader, Spinner, Switch, useConfirm, useToast } from '../components/ui';
@@ -10,10 +10,15 @@ export function Satellites() {
   const toast = useToast();
   const confirm = useConfirm();
   const satellites = useResource(() => api<Satellite[]>('/admin/satellites'));
+  const upstream = useResource(() => api<SatelliteUpstream>('/admin/satellite-upstream'));
   const users = useResource(() => api<AdminUser[]>('/admin/users'));
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [token, setToken] = useState<{ satellite: Satellite; token: string } | null>(null);
+  useEffect(() => {
+    const timer = setInterval(() => { satellites.reload(); upstream.reload(); }, 10_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const create = async () => {
     try {
@@ -51,6 +56,16 @@ export function Satellites() {
 
   return <>
     <PageHeader title="Satellites" actions={<Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>Add satellite</Button>} />
+    {upstream.data?.configured && <Card className="mb-5 p-4">
+      <div className="flex items-start gap-3">
+        <MonitorUp className="mt-0.5 size-5 rotate-180 text-zinc-400" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2"><span className="font-medium">Upstream Switchboard</span><Badge tone={upstream.data.state === 'online' ? 'green' : upstream.data.state === 'connecting' ? 'amber' : 'red'}>{upstream.data.state === 'online' ? 'Online' : upstream.data.state === 'connecting' ? 'Connecting' : 'Offline'}</Badge></div>
+          <div className="mt-0.5 truncate text-xs text-zinc-500">{upstream.data.centralUrl}</div>
+          <div className="mt-1 text-xs text-zinc-500">{upstream.data.state === 'online' && upstream.data.connectedAt ? `Connected ${ago(upstream.data.connectedAt).toLowerCase()}` : upstream.data.nextRetryAt ? `Retrying ${ago(upstream.data.nextRetryAt).toLowerCase()}` : upstream.data.lastSeenAt ? `Last connected ${ago(upstream.data.lastSeenAt).toLowerCase()}` : 'Not connected yet'}{upstream.data.lastError ? ` · ${upstream.data.lastError}` : ''}</div>
+        </div>
+      </div>
+    </Card>}
     {satellites.loading && !satellites.data ? <div className="flex justify-center py-20"><Spinner className="size-5" /></div> : satellites.error ? <Alert>{satellites.error.message}</Alert> :
       <Card className="overflow-hidden"><ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
         {satellites.data?.map((s) => <li key={s.id} className="flex items-center gap-3 px-4 py-3">

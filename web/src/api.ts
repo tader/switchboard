@@ -222,6 +222,16 @@ export interface Satellite {
   updatedAt: number;
 }
 
+export interface SatelliteUpstream {
+  configured: boolean;
+  centralUrl: string | null;
+  state: 'not-configured' | 'connecting' | 'online' | 'offline';
+  connectedAt: number | null;
+  lastSeenAt: number | null;
+  lastError: string | null;
+  nextRetryAt: number | null;
+}
+
 export interface Info {
   publicUrl: string;
   callbackUrl: string;

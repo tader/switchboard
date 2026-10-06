@@ -5,6 +5,7 @@ import { checkUpdates, install, parseRepo, uninstall, update } from '../plugins/
 import { type PluginRecord, pluginIcon, plugins } from '../plugins/manager.ts';
 import { type Role, createInvite, createUser, deleteUser, getUser, listUsers, pendingInvites, updateUser } from '../users.ts';
 import { createSatellite, deleteSatellite, getSatellite, listSatellites, rotateSatelliteToken, updateSatellite } from '../satellites.ts';
+import { satelliteAgentStatus } from '../satellite-agent.ts';
 
 export const admin = new Hono<Env>();
 admin.use('*', requireUser, requireAdmin);
@@ -77,6 +78,7 @@ admin.delete('/plugins/:id', async (c) => {
 // --- satellites ---
 
 admin.get('/satellites', (c) => c.json(listSatellites()));
+admin.get('/satellite-upstream', (c) => c.json(satelliteAgentStatus()));
 
 admin.get('/satellites/:id', (c) => c.json(getSatellite(c.req.param('id'))));
 
