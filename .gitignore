@@ -1,0 +1,10 @@
+node_modules/
+.data/
+web/dist/
+web/node_modules/
+.env
+.data-dev/
+# Your own deployment; see the *.example.* files
+compose.yaml
+docker-compose.dev.yml
+*.log

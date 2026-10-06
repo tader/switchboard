@@ -1,0 +1,7 @@
+{
+  "id": "oauth2",
+  "name": "OAuth 2.0",
+  "version": "1.0.0",
+  "description": "Generic OAuth 2.0 service, and the authorization code, device and client credentials flows for other plugins.",
+  "icon": "icon.svg"
+}

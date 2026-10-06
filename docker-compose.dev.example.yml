@@ -1,0 +1,42 @@
+name: hub-dev
+
+networks:
+  default: {}
+  traefik:
+    name: traefik
+    external: true
+
+# Mounts the repository: server changes restart the process, plugin changes hot-reload,
+# and web changes are rebuilt into web/dist (refresh the browser).
+services:
+  hub-dev:
+    image: node:24-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: >
+      sh -c "npm ci && npm --prefix web ci &&
+             (npm --prefix web run watch &) &&
+             exec node --disable-warning=ExperimentalWarning --watch-path=server server/main.ts"
+    ports:
+      - "8771:8770"
+    networks:
+      - default
+      - traefik
+    environment:
+      HUB_PUBLIC_URL: https://hub-dev.example.com
+      HUB_DATA_DIR: /app/.data-dev
+    volumes:
+      - .:/app
+      - hub-dev-modules:/app/node_modules
+      - hub-dev-web-modules:/app/web/node_modules
+    labels:
+      traefik.enable: true
+      traefik.docker.network: traefik
+      traefik.http.routers.hub-dev.entrypoints: websecure
+      traefik.http.routers.hub-dev.rule: "Host(`hub-dev.example.com`)"
+      traefik.http.routers.hub-dev.tls.certresolver: letsencrypt
+      traefik.http.services.hub-dev.loadbalancer.server.port: 8770
+
+volumes:
+  hub-dev-modules:
+  hub-dev-web-modules:

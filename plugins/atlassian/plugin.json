@@ -1,0 +1,12 @@
+{
+  "id": "atlassian",
+  "name": "Atlassian",
+  "version": "1.0.0",
+  "description": "Jira and Confluence, in the cloud or on Data Center.",
+  "dependencies": ["oauth2", "api-key"],
+  "icon": "jira.svg",
+  "settings": [
+    { "key": "clientId", "label": "OAuth client ID", "description": "From an OAuth 2.0 (3LO) app at developer.atlassian.com/console. Enables \"Sign in with Atlassian\". Add the scopes users ask for to the app's permissions." },
+    { "key": "clientSecret", "label": "Secret", "type": "secret" }
+  ]
+}

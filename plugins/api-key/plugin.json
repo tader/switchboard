@@ -1,0 +1,7 @@
+{
+  "id": "api-key",
+  "name": "API keys",
+  "version": "1.0.0",
+  "description": "Any HTTP API with a token, API key or username and password, and those methods for other plugins.",
+  "icon": "icon.svg"
+}

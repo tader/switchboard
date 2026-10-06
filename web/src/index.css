@@ -1,0 +1,263 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --animate-in: fade-in 120ms ease-out;
+  --animate-pop: pop 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(4px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-font-smoothing: antialiased;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 text-sm;
+  }
+  ::selection {
+    @apply bg-indigo-500/25;
+  }
+  dialog::backdrop {
+    background: rgb(9 9 11 / 0.45);
+    backdrop-filter: blur(2px);
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-indigo-500;
+  }
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+/* --- Guides --- */
+
+.paper {
+  @apply rounded-2xl bg-white px-6 py-8 ring-1 ring-zinc-200/80 sm:px-12 sm:py-12 dark:bg-zinc-900 dark:ring-zinc-800;
+  box-shadow: 0 1px 2px rgb(24 24 27 / 0.04), 0 12px 32px -16px rgb(24 24 27 / 0.12);
+}
+html.dark .paper {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -16px rgb(0 0 0 / 0.6);
+}
+
+.doc {
+  @apply max-w-[46rem] text-[15px] leading-[1.75] text-zinc-700 dark:text-zinc-300;
+}
+.doc > :first-child {
+  @apply mt-0;
+}
+.doc h1 {
+  @apply mb-4 text-[1.9rem] font-semibold leading-tight tracking-tight text-zinc-900 dark:text-zinc-50;
+}
+/* The first paragraph introduces the guide. */
+.doc h1 + p {
+  @apply text-[1.05rem] leading-[1.7] text-zinc-600 dark:text-zinc-400;
+}
+.doc h2 {
+  @apply mt-12 mb-3 scroll-mt-6 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50;
+}
+.doc h3 {
+  @apply mt-8 mb-2 scroll-mt-6 text-base font-semibold text-zinc-900 dark:text-zinc-100;
+}
+.doc p {
+  @apply my-4;
+}
+.doc a {
+  @apply font-medium text-indigo-600 underline decoration-indigo-300 decoration-1 underline-offset-[3px] transition-colors hover:decoration-indigo-600 dark:text-indigo-400 dark:decoration-indigo-500/50 dark:hover:decoration-indigo-400;
+}
+.doc strong {
+  @apply font-semibold text-zinc-900 dark:text-zinc-100;
+}
+.doc ul,
+.doc ol {
+  @apply my-4 pl-6;
+}
+.doc ul {
+  @apply list-disc;
+}
+.doc ol {
+  @apply list-decimal;
+}
+.doc li {
+  @apply my-1.5 pl-1;
+}
+.doc li > ul,
+.doc li > ol {
+  @apply my-1.5;
+}
+.doc ul > li::marker {
+  @apply text-zinc-300 dark:text-zinc-600;
+}
+.doc ol > li::marker {
+  @apply font-semibold text-zinc-400 dark:text-zinc-500;
+}
+.doc hr {
+  @apply my-10 border-zinc-100 dark:border-zinc-800;
+}
+.doc blockquote {
+  @apply my-5 border-l-2 border-zinc-200 pl-4 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400;
+}
+.doc :not(pre) > code {
+  @apply rounded-md bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.84em] text-zinc-800 ring-1 ring-inset ring-zinc-200/70 dark:bg-zinc-800 dark:text-zinc-200 dark:ring-zinc-700/60;
+}
+.doc a code {
+  @apply text-inherit;
+}
+
+/* Code blocks: dark in both themes, like a terminal. */
+.doc .code-block {
+  @apply my-5 overflow-hidden rounded-xl bg-zinc-950 ring-1 ring-zinc-900 dark:ring-zinc-800;
+}
+.doc .code-head {
+  @apply flex h-8 items-center justify-between border-b border-white/[0.06] bg-white/[0.03] pl-4 pr-1.5 font-sans text-[11px] font-medium text-zinc-500;
+}
+.doc .code-head button {
+  @apply rounded-md px-2 py-0.5 text-[11px] font-medium text-zinc-400 transition-colors hover:bg-white/10 hover:text-white;
+}
+.doc .code-head button[data-done] {
+  @apply text-emerald-400;
+}
+.doc pre {
+  @apply m-0 overflow-x-auto px-4 py-3.5 font-mono text-[12.5px] leading-[1.7] text-zinc-200;
+  scrollbar-width: thin;
+}
+.doc pre code {
+  @apply bg-transparent p-0;
+}
+.hljs-comment,
+.hljs-quote {
+  @apply italic text-zinc-500;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-type {
+  color: #c4b5fd;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-symbol {
+  color: #86efac;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-bullet {
+  color: #fcd34d;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-section {
+  color: #7dd3fc;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-name {
+  color: #a5b4fc;
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-subst,
+.hljs-params {
+  color: #fda4af;
+}
+.hljs-meta,
+.hljs-deletion {
+  color: #f9a8d4;
+}
+.hljs-emphasis {
+  @apply italic;
+}
+.hljs-strong {
+  @apply font-semibold;
+}
+
+/* Tables */
+.doc .table-wrap {
+  @apply my-6 overflow-x-auto rounded-xl ring-1 ring-zinc-200 dark:ring-zinc-800;
+}
+.doc table {
+  @apply w-full border-collapse text-left text-[13.5px] leading-normal;
+}
+.doc th {
+  @apply border-b border-zinc-200 bg-zinc-50 px-4 py-2.5 font-semibold text-zinc-900 dark:border-zinc-800 dark:bg-zinc-800/40 dark:text-zinc-100;
+}
+.doc td {
+  @apply border-b border-zinc-100 px-4 py-2.5 align-top dark:border-zinc-800/70;
+}
+.doc tr:last-child td {
+  @apply border-b-0;
+}
+.doc td:first-child {
+  @apply whitespace-nowrap;
+}
+
+/* Callouts: > [!NOTE] */
+.doc .callout {
+  @apply my-6 rounded-xl border-0 px-4 py-3 text-[14px] not-italic ring-1 ring-inset;
+}
+.doc .callout > :last-child {
+  @apply mb-0;
+}
+.doc .callout p {
+  @apply my-1.5;
+}
+.doc .callout-title {
+  @apply mb-1 flex items-center gap-2 text-[13px] font-semibold;
+}
+.doc .callout-title::before {
+  content: '';
+  @apply size-2 rounded-full bg-current;
+}
+.doc .callout-note {
+  @apply bg-indigo-50/70 text-indigo-950 ring-indigo-200 dark:bg-indigo-500/10 dark:text-indigo-100 dark:ring-indigo-500/25;
+}
+.doc .callout-note .callout-title {
+  @apply text-indigo-700 dark:text-indigo-300;
+}
+.doc .callout-tip {
+  @apply bg-emerald-50/70 text-emerald-950 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-100 dark:ring-emerald-500/25;
+}
+.doc .callout-tip .callout-title {
+  @apply text-emerald-700 dark:text-emerald-300;
+}
+.doc .callout-important {
+  @apply bg-violet-50/70 text-violet-950 ring-violet-200 dark:bg-violet-500/10 dark:text-violet-100 dark:ring-violet-500/25;
+}
+.doc .callout-important .callout-title {
+  @apply text-violet-700 dark:text-violet-300;
+}
+.doc .callout-warning {
+  @apply bg-amber-50/80 text-amber-950 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-100 dark:ring-amber-500/25;
+}
+.doc .callout-warning .callout-title {
+  @apply text-amber-700 dark:text-amber-300;
+}
+.doc .callout-caution {
+  @apply bg-rose-50/70 text-rose-950 ring-rose-200 dark:bg-rose-500/10 dark:text-rose-100 dark:ring-rose-500/25;
+}
+.doc .callout-caution .callout-title {
+  @apply text-rose-700 dark:text-rose-300;
+}
+.doc .callout strong {
+  @apply text-inherit;
+}
+
+.pager {
+  @apply flex flex-col gap-1 rounded-xl px-4 py-3 text-[14px] text-zinc-800 ring-1 ring-zinc-200 transition hover:bg-zinc-50 hover:ring-indigo-300 dark:text-zinc-200 dark:ring-zinc-800 dark:hover:bg-zinc-800/40 dark:hover:ring-indigo-500/50;
+}

@@ -1,0 +1,8 @@
+{
+  "id": "home-assistant",
+  "name": "Home Assistant",
+  "version": "1.0.0",
+  "description": "Home Assistant instances, with browser sign-in or a long-lived access token.",
+  "dependencies": ["oauth2", "api-key"],
+  "icon": "icon.svg"
+}

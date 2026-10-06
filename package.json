@@ -1,0 +1,22 @@
+{
+  "name": "hub",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/main.ts",
+    "dev": "node --disable-warning=ExperimentalWarning --watch-path=server server/main.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "hono": "^4.7.0",
+    "tar": "^7.4.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
