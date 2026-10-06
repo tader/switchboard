@@ -44,6 +44,10 @@ test('a real satellite keeps credentials local and executes a per-user connectio
     let body = '';
     for await (const chunk of request) body += chunk;
     response.writeHead(200, { 'content-type': 'application/json' });
+    if (request.url === '/spec.json') {
+      response.end(JSON.stringify({ openapi: '3.0.0', info: { title: 'Satellite test', version: '1' }, paths: { '/local': { post: { operationId: 'localCall', summary: 'Call the local API', responses: { 200: { description: 'OK' } } } } } }));
+      return;
+    }
     response.end(JSON.stringify({ path: request.url, auth: request.headers.authorization, body }));
   });
   await new Promise<void>((resolve) => upstream!.listen(0, '127.0.0.1', resolve));
@@ -110,7 +114,7 @@ test('a real satellite keeps credentials local and executes a per-user connectio
 
   const connected = await request('POST', '/api/connections', {
     service: `sat/${enrolled.data.satellite.id}/http`, method: 'token',
-    config: { baseUrl: upstreamUrl, token: 'satellite-only-secret', label: 'Private local API' },
+    config: { baseUrl: upstreamUrl, token: 'satellite-only-secret', label: 'Private local API', openapi: `${upstreamUrl}/spec.json` },
   });
   assert.equal(connected.status, 200, JSON.stringify(connected.data));
   assert.equal(connected.data.connection.satellite.name, 'Test laptop');
@@ -134,6 +138,25 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   const satelliteFacets = await satelliteRequest('GET', '/api/audit/facets');
   assert.equal(satelliteFacets.data.connections[0].count, 1);
   assert.equal(satelliteFacets.data.clients[0].name, 'Upstream: Web console');
+
+  const mcpToken = (await request('POST', '/api/tokens', { name: 'Satellite MCP test' })).data.secret;
+  const mcp = async (name: string, args: any) => {
+    const response = await fetch(`${centralUrl}/mcp`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${mcpToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+    });
+    return response.json();
+  };
+  const operations = await mcp('search_operations', { connection: connected.data.connection.name, query: 'local' });
+  assert.equal(operations.result.isError, undefined, JSON.stringify(operations));
+  assert.deepEqual(operations.result.structuredContent.operations[0], { operationId: 'localCall', method: 'POST', path: '/local', summary: 'Call the local API' });
+  const mcpCall = await mcp('call', { connection: connected.data.connection.name, method: 'POST', path: '/local', body: { via: 'mcp' } });
+  assert.equal(mcpCall.result.isError, undefined, JSON.stringify(mcpCall));
+  assert.match(mcpCall.result.content[0].text, /^HTTP 200/);
+  const satelliteMcpAudit = await satelliteRequest('GET', '/api/audit?source=mcp');
+  assert.equal(satelliteMcpAudit.data.total, 1);
+  assert.equal(satelliteMcpAudit.data.items[0].client.name, 'Upstream: Satellite MCP test');
 
   const centralDb = fs.readFileSync(path.join(centralDir, 'switchboard.db'));
   assert.equal(centralDb.includes(Buffer.from('satellite-only-secret')), false, 'central database contains no local credential plaintext');

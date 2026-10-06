@@ -6,12 +6,13 @@ import { Hono, type Context } from 'hono';
 import type { Env } from './auth.ts';
 import { callerFrom } from './audit.ts';
 import { config } from './config.ts';
-import { getConnectionRow, listConnections, loadConnection, resolveBaseUrl } from './connections.ts';
+import { getConnectionRow, listConnections, loadConnection, resolveBaseUrl, toView } from './connections.ts';
 import { all, one } from './db.ts';
 import { HttpError } from './http.ts';
 import { describe } from './openapi.ts';
 import { execute } from './proxy.ts';
 import { isApiToken, tokenUser } from './users.ts';
+import { requestSatellite } from './satellites.ts';
 
 const MODERN = ['2026-07-28'];
 const LEGACY = ['2025-11-25', '2025-06-18', '2025-03-26'];
@@ -204,15 +205,28 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
     case 'search_operations':
     case 'get_operation': {
       const row = connectionFor(ctx, args.connection);
-      const { conn, service } = loadConnection(ctx.user.id, row.id);
-      const d = await describe(service, conn).catch((e) => {
+      let d: Awaited<ReturnType<typeof describe>>;
+      let serviceName: string;
+      let docsUrl: string | undefined;
+      let pathFor: (path: string) => string;
+      try {
+        if (row.satellite_id) {
+          d = await requestSatellite(row.satellite_id, ctx.user.id, 'openapi', { connection: row.remote_connection_id });
+          serviceName = toView(row).serviceName;
+          pathFor = (path) => path;
+        } else {
+          const { conn, service } = loadConnection(ctx.user.id, row.id);
+          d = await describe(service, conn);
+          serviceName = service.name;
+          docsUrl = service.docsUrl;
+          const base = (resolveBaseUrl(service, conn) ?? '').replace(/\/+$/, '');
+          const prefix = d && base && d.server.startsWith(base) ? d.server.slice(base.length) : d?.server ?? '';
+          pathFor = (path) => prefix + path;
+        }
+      } catch (e: any) {
         throw new ToolError(`Could not load the API reference: ${e.message}`);
-      });
-      if (!d) throw new ToolError(`${service.name} has no API reference; use call with paths from its documentation${service.docsUrl ? ` (${service.docsUrl})` : ''}.`);
-      // Paths in results are what `call` expects: relative to the base URL where possible.
-      const base = (resolveBaseUrl(service, conn) ?? '').replace(/\/+$/, '');
-      const prefix = base && d.server.startsWith(base) ? d.server.slice(base.length) : d.server;
-      const pathFor = (p: string) => prefix + p;
+      }
+      if (!d) throw new ToolError(`${serviceName} has no API reference; use call with paths from its documentation${docsUrl ? ` (${docsUrl})` : ''}.`);
       if (name === 'search_operations') {
         const words = String(args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
         const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 100);
