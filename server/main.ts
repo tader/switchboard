@@ -14,7 +14,7 @@ import { api, oauth, proxy } from './routes/connections.ts';
 import { authorizationServerMetadata, authorizeApi, protectedResourceMetadata, registerEndpoint, selfRevoke, tokenEndpoint } from './routes/provider.ts';
 import { mcp } from './mcp.ts';
 import { cors } from 'hono/cors';
-import { openapiDocument } from './hub-openapi.ts';
+import { openapiDocument } from './self-openapi.ts';
 import { ensureAdmin } from './users.ts';
 import { prune } from './audit.ts';
 import type { Env } from './auth.ts';
@@ -32,7 +32,7 @@ app.onError((err, c) => {
   return c.json({ error: 'Internal error' }, 500);
 });
 
-// Nothing of the hub may be framed by other sites (the consent page would be clickjackable).
+// Nothing of Switchboard may be framed by other sites (the consent page would be clickjackable).
 app.use('*', async (c, next) => {
   await next();
   c.header('x-frame-options', 'DENY');
@@ -83,7 +83,7 @@ if (setupUrl) {
 }
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () => {
-  console.log(`Hub listening on ${config.host}:${config.port} (${config.publicUrl})`);
+  console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {

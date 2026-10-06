@@ -144,7 +144,7 @@ export function Docs() {
             <>
               <div className="mb-6 flex items-center gap-2 text-xs font-medium text-indigo-600 dark:text-indigo-400">
                 {doc.data.section}
-                {doc.data.source !== 'hub' && <span className="font-normal text-zinc-400">· from the {doc.data.sourceName} plugin</span>}
+                {doc.data.source !== 'core' && <span className="font-normal text-zinc-400">· from the {doc.data.sourceName} plugin</span>}
               </div>
               <div ref={body} onClick={onClick} className="doc" dangerouslySetInnerHTML={{ __html: rendered.html }} />
               {(prev || next) && (

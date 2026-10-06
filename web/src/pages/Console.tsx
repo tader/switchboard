@@ -37,7 +37,7 @@ export function Console() {
   const saved = useResource(() => api<SavedCall[]>('/calls'));
 
   const usable = useMemo(() => (connections.data ?? []).filter((c) => c.status !== 'unavailable'), [connections.data]);
-  // ?connection= takes an id or a name, like the rest of the hub; unknown ones fall back to the first.
+  // ?connection= takes an id or a name, like the rest of Switchboard; unknown ones fall back to the first.
   const wanted = params.get('connection');
   const connection = usable.find((c) => c.id === wanted || c.name === wanted) ?? usable[0];
   const connectionId = connection?.id ?? '';
@@ -153,13 +153,13 @@ export function Console() {
   const curl = () => {
     if (!connection) return '';
     let path = draft.url;
-    // Same as the hub: slashes in a value are path separators (e.g. Google's "notes/abc").
+    // Same as Switchboard: slashes in a value are path separators (e.g. Google's "notes/abc").
     for (const n of names) path = path.split(`{${n}}`).join((draft.pathParams[n] ?? '').split('/').map(encodeURIComponent).join('/'));
     const qs = new URLSearchParams(draft.query.filter((q) => q.key && q.enabled !== false).map((q) => [q.key, q.value])).toString();
     const target = `${info.publicUrl}/proxy/${connection.name}${isAbsolute ? '/' : ''}${path.startsWith('/') || isAbsolute || !path ? '' : '/'}${path}${qs ? `?${qs}` : ''}`;
     const parts = ['curl'];
     if (draft.method !== 'GET') parts.push('-X', draft.method);
-    parts.push(shellQuote(target), '\\\n  -H "Authorization: Bearer $HUB_TOKEN"');
+    parts.push(shellQuote(target), '\\\n  -H "Authorization: Bearer $SWITCHBOARD_TOKEN"');
     for (const h of draft.headers.filter((h) => h.key && h.enabled !== false)) parts.push(`\\\n  -H ${shellQuote(`${h.key}: ${h.value}`)}`);
     if (draft.body && !['GET', 'HEAD'].includes(draft.method)) parts.push(`\\\n  --data ${shellQuote(draft.body)}`);
     return parts.join(' ');
@@ -325,7 +325,7 @@ export function Console() {
                   icon: <FileCode2 />,
                   hidden: !current,
                   onSelect: () =>
-                    copy(`curl -X POST -H "Authorization: Bearer $HUB_TOKEN" ${info.publicUrl}/api/calls/${current!.id}/run`).then(() => toast('Copied. POST a JSON body to override query, headers or body.')),
+                    copy(`curl -X POST -H "Authorization: Bearer $SWITCHBOARD_TOKEN" ${info.publicUrl}/api/calls/${current!.id}/run`).then(() => toast('Copied. POST a JSON body to override query, headers or body.')),
                 },
                 {
                   label: 'New request',
@@ -435,7 +435,7 @@ export function Console() {
               {tab === 'headers' && (
                 <div className="space-y-2">
                   <KeyValueEditor pairs={draft.headers} onChange={(headers) => setDraft({ ...draft, headers })} keyPlaceholder="Header" suggestions={HEADER_SUGGESTIONS} />
-                  <p className="text-xs text-zinc-500">Authentication headers are added by the hub.</p>
+                  <p className="text-xs text-zinc-500">Authentication headers are added by Switchboard.</p>
                 </div>
               )}
               {tab === 'body' && <BodyEditor draft={draft} setDraft={setDraft} />}
@@ -890,7 +890,7 @@ function SentRequest({ request: q }: { request: CallResult['request'] }) {
                     {h.value}
                     {h.byHub && (
                       <Badge tone="indigo" className="ml-2 align-middle font-sans">
-                        Added by hub
+                        Added by Switchboard
                       </Badge>
                     )}
                   </td>

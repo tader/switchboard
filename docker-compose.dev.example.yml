@@ -1,4 +1,4 @@
-name: hub-dev
+name: switchboard-dev
 
 networks:
   default: {}
@@ -9,7 +9,7 @@ networks:
 # Mounts the repository: server changes restart the process, plugin changes hot-reload,
 # and web changes are rebuilt into web/dist (refresh the browser).
 services:
-  hub-dev:
+  switchboard-dev:
     image: node:24-alpine
     restart: unless-stopped
     working_dir: /app
@@ -23,20 +23,20 @@ services:
       - default
       - traefik
     environment:
-      HUB_PUBLIC_URL: https://hub-dev.example.com
-      HUB_DATA_DIR: /app/.data-dev
+      SWITCHBOARD_PUBLIC_URL: https://switchboard-dev.example.com
+      SWITCHBOARD_DATA_DIR: /app/.data-dev
     volumes:
       - .:/app
-      - hub-dev-modules:/app/node_modules
-      - hub-dev-web-modules:/app/web/node_modules
+      - switchboard-dev-modules:/app/node_modules
+      - switchboard-dev-web-modules:/app/web/node_modules
     labels:
       traefik.enable: true
       traefik.docker.network: traefik
-      traefik.http.routers.hub-dev.entrypoints: websecure
-      traefik.http.routers.hub-dev.rule: "Host(`hub-dev.example.com`)"
-      traefik.http.routers.hub-dev.tls.certresolver: letsencrypt
-      traefik.http.services.hub-dev.loadbalancer.server.port: 8770
+      traefik.http.routers.switchboard-dev.entrypoints: websecure
+      traefik.http.routers.switchboard-dev.rule: "Host(`switchboard-dev.example.com`)"
+      traefik.http.routers.switchboard-dev.tls.certresolver: letsencrypt
+      traefik.http.services.switchboard-dev.loadbalancer.server.port: 8770
 
 volumes:
-  hub-dev-modules:
-  hub-dev-web-modules:
+  switchboard-dev-modules:
+  switchboard-dev-web-modules:

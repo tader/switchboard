@@ -1,7 +1,7 @@
 import { config } from './config.ts';
 
-// OpenAPI description of the hub's own API, served at /api/openapi.json. Hubs connected to this
-// hub use it for their console's API reference.
+// OpenAPI description of Switchboard's own API, served at /api/openapi.json. Switchboards connected to this
+// one use it for their console's API reference.
 
 const ref = { name: 'ref', in: 'path', required: true, description: 'Connection id or name', schema: { type: 'string' } };
 const id = (description: string) => ({ name: 'id', in: 'path', required: true, description, schema: { type: 'string' } });
@@ -43,7 +43,7 @@ export function openapiDocument() {
   const op = (tag: string, summary: string, extra: object = {}) => ({ tags: [tag], summary, responses: ok, ...extra });
   return {
     openapi: '3.0.3',
-    info: { title: 'Hub', version: '1', description: 'Authenticate with `Authorization: Bearer hub_…`.' },
+    info: { title: 'Switchboard', version: '1', description: 'Authenticate with `Authorization: Bearer swb_…`.' },
     servers: [{ url: config.publicUrl }],
     components: { securitySchemes: { token: { type: 'http', scheme: 'bearer' } } },
     security: [{ token: [] }],

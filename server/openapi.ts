@@ -53,7 +53,7 @@ async function loadDoc(src: string | object, refresh: boolean): Promise<any> {
     memory.set(src, { at: Date.now(), doc });
     return doc;
   }
-  const res = await fetch(src, { headers: { accept: 'application/json, application/yaml;q=0.9, */*;q=0.5', 'user-agent': 'hub' }, signal: AbortSignal.timeout(60_000) });
+  const res = await fetch(src, { headers: { accept: 'application/json, application/yaml;q=0.9, */*;q=0.5', 'user-agent': 'switchboard' }, signal: AbortSignal.timeout(60_000) });
   if (!res.ok) throw badRequest(`Could not fetch the API description (${res.status})`);
   const text = await res.text();
   let doc: any;

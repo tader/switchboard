@@ -117,7 +117,7 @@ export default function setup(ctx: PluginContext) {
 
   // Users can bring their own OAuth client; it is required when the administrator did not configure one.
   const clientFields: Field[] = [
-    { key: 'clientId', label: 'OAuth client ID', required: !shared, advanced: shared, description: shared ? 'Leave empty to use the hub’s client' : `Create a "Web application" client in the Google Cloud console with redirect URI ${ctx.callbackUrl}` },
+    { key: 'clientId', label: 'OAuth client ID', required: !shared, advanced: shared, description: shared ? 'Leave empty to use Switchboard’s client' : `Create a "Web application" client in the Google Cloud console with redirect URI ${ctx.callbackUrl}` },
     { key: 'clientSecret', label: 'OAuth client secret', type: 'secret', required: !shared, advanced: shared },
   ];
 

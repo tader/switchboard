@@ -87,7 +87,7 @@ export function Connections() {
       ) : byService.length === 0 ? (
         <div className="space-y-6">
           <Empty icon={<Plug className="size-5" />} title="Connect your first account">
-            Sign in once here, then use the account from any script with a hub token.
+            Sign in once here, then use the account from any script with a Switchboard token.
           </Empty>
           {services.data && <ServiceGrid services={services.data} onPick={(s) => setConnect({ service: s })} />}
         </div>
@@ -488,19 +488,19 @@ function ScriptsDialog({ connection: c, onClose }: { connection: Connection | nu
     <Dialog open onClose={onClose} title="Use from scripts" description={`${c.account?.label ?? c.name} · ${c.serviceName}`} size="lg">
       <div className="space-y-5 text-[13px]">
         <section className="space-y-2">
-          <h3 className="font-medium">Through the hub</h3>
+          <h3 className="font-medium">Through Switchboard</h3>
           <p className="text-zinc-500 dark:text-zinc-400">
-            Send requests to the proxy URL with your hub token. Paths are relative to <code className="font-mono text-xs">{c.baseUrl ?? 'the service'}</code>; the hub adds the
+            Send requests to the proxy URL with your Switchboard token. Paths are relative to <code className="font-mono text-xs">{c.baseUrl ?? 'the service'}</code>; Switchboard adds the
             credentials.
           </p>
           <CopyField value={proxy} />
-          <CopyField multiline value={`curl -H "Authorization: Bearer $HUB_TOKEN" \\\n  ${proxy}${examplePath}`} />
+          <CopyField multiline value={`curl -H "Authorization: Bearer $SWITCHBOARD_TOKEN" \\\n  ${proxy}${examplePath}`} />
         </section>
         {c.canIssueToken && (
           <section className="space-y-2">
             <h3 className="font-medium">Access token for an SDK</h3>
             <p className="text-zinc-500 dark:text-zinc-400">Returns a fresh access token. It is refreshed when needed, so ask for a new one instead of storing it.</p>
-            <CopyField multiline value={`curl -H "Authorization: Bearer $HUB_TOKEN" \\\n  ${info.publicUrl}/api/connections/${c.name}/token`} />
+            <CopyField multiline value={`curl -H "Authorization: Bearer $SWITCHBOARD_TOKEN" \\\n  ${info.publicUrl}/api/connections/${c.name}/token`} />
           </section>
         )}
         <p className="text-zinc-500 dark:text-zinc-400">

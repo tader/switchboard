@@ -253,7 +253,7 @@ function InstallDialog({ open, onClose, onInstalled }: { open: boolean; onClose:
             <Input id="path" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/" spellCheck={false} />
           </FormField>
         </div>
-        <Alert tone="amber">Plugins run inside the hub and can read every credential it stores. Only install plugins you trust.</Alert>
+        <Alert tone="amber">Plugins run inside Switchboard and can read every credential it stores. Only install plugins you trust.</Alert>
         {error && <Alert>{error}</Alert>}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>

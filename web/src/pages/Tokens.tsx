@@ -29,7 +29,7 @@ export function Tokens() {
     <>
       <PageHeader
         title="API tokens"
-        description="Scripts and agents use these to call your connections through the hub."
+        description="Scripts and agents use these to call your connections through Switchboard."
         actions={
           (tokens.data?.length ?? 0) > 0 && (
             <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>
@@ -211,11 +211,11 @@ function CreatedDialog({ created, connections, onClose }: { created: { token: Ap
         <section className="space-y-2">
           <h3 className="font-medium">Using it</h3>
           <p className="text-zinc-500 dark:text-zinc-400">
-            Call any connection through <code className="font-mono text-xs">{info.publicUrl}/proxy/&lt;connection&gt;/&lt;path&gt;</code>. The hub adds the credentials.
+            Call any connection through <code className="font-mono text-xs">{info.publicUrl}/proxy/&lt;connection&gt;/&lt;path&gt;</code>. Switchboard adds the credentials.
           </p>
           <CopyField
             multiline
-            value={`export HUB_TOKEN=${created.secret}\ncurl -H "Authorization: Bearer $HUB_TOKEN" ${info.publicUrl}/proxy/${first?.name ?? '<connection>'}/`}
+            value={`export SWITCHBOARD_TOKEN=${created.secret}\ncurl -H "Authorization: Bearer $SWITCHBOARD_TOKEN" ${info.publicUrl}/proxy/${first?.name ?? '<connection>'}/`}
           />
           <p className="text-zinc-500 dark:text-zinc-400">
             Or list what it can reach: <code className="font-mono text-xs">GET {info.publicUrl}/api/connections</code>
@@ -245,13 +245,13 @@ function McpBox() {
           <summary className="cursor-pointer select-none text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Setup commands</summary>
           <div className="mt-2 space-y-2">
             <p className="text-xs text-zinc-500">Claude Code, signing in through the browser:</p>
-            <CopyField value={`claude mcp add --transport http hub ${url}`} />
+            <CopyField value={`claude mcp add --transport http switchboard ${url}`} />
             <p className="text-xs text-zinc-500">With a token instead (create one below, limited to the connections it needs):</p>
-            <CopyField value={`claude mcp add --transport http hub ${url} --header "Authorization: Bearer $HUB_TOKEN"`} />
+            <CopyField value={`claude mcp add --transport http switchboard ${url} --header "Authorization: Bearer $SWITCHBOARD_TOKEN"`} />
             <p className="text-xs text-zinc-500">Claude Desktop and claude.ai: add a custom connector with the URL above.</p>
           </div>
         </details>
-        <Link to="/docs/hub/mcp" className="inline-block text-[13px] font-medium text-indigo-600 hover:underline dark:text-indigo-400">
+        <Link to="/docs/guides/mcp" className="inline-block text-[13px] font-medium text-indigo-600 hover:underline dark:text-indigo-400">
           Setup for Claude, Codex, Copilot, OpenCode and others
         </Link>
       </div>

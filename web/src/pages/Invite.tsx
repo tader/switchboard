@@ -51,7 +51,7 @@ export function Invite({ onDone }: { onDone: (u: User) => void }) {
     );
   }
   return (
-    <AuthCard title={invite.hasPassword ? 'Choose a new password' : 'Welcome to Hub'} subtitle={invite.hasPassword ? undefined : 'Choose a password to finish setting up your account.'}>
+    <AuthCard title={invite.hasPassword ? 'Choose a new password' : 'Welcome to Switchboard'} subtitle={invite.hasPassword ? undefined : 'Choose a password to finish setting up your account.'}>
       <form onSubmit={submit} className="space-y-4">
         <FormField label="Username" htmlFor="username">
           <Input id="username" value={invite.username} readOnly disabled autoComplete="username" />

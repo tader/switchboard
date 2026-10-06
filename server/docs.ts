@@ -1,4 +1,4 @@
-// In-app documentation: the hub's own guides (docs/guides and docs/plugins.md) and guides that
+// In-app documentation: Switchboard's own guides (docs/guides and docs/plugins.md) and guides that
 // plugins ship in their docs/ folder. Guides are Markdown with optional front matter:
 //
 //   ---
@@ -9,14 +9,14 @@
 //   order: 1
 //   ---
 //
-// {{publicUrl}}, {{mcpUrl}} and {{callbackUrl}} are replaced with this hub's addresses;
+// {{publicUrl}}, {{mcpUrl}} and {{callbackUrl}} are replaced with this instance's addresses;
 // write \{{publicUrl}} to show the placeholder itself.
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { callbackUrl, config } from './config.ts';
 import { notFound } from './http.ts';
-import { openapiDocument } from './hub-openapi.ts';
+import { openapiDocument } from './self-openapi.ts';
 import { plugins } from './plugins/manager.ts';
 
 export interface DocInfo {
@@ -24,7 +24,7 @@ export interface DocInfo {
   title: string;
   section: string;
   order: number;
-  /** "hub" or the plugin id. */
+  /** "core" or the plugin id. */
   source: string;
   sourceName: string;
   services: string[];
@@ -50,7 +50,7 @@ function parse(text: string): { meta: Record<string, any>; body: string } {
 
 const titleOf = (body: string, fallback: string) => body.match(/^#\s+(.+)$/m)?.[1].trim() ?? fallback;
 
-/** Fills in the hub's addresses; `\{{name}}` stays literal. */
+/** Fills in this instance's addresses; `\{{name}}` stays literal. */
 function fill(md: string) {
   const ESC = '\u0000';
   return md
@@ -77,13 +77,13 @@ function readDoc(file: string, base: Omit<Doc, 'title' | 'order' | 'services' | 
 
 function collect(): Doc[] {
   const docs: (Doc & { dependents?: boolean })[] = [];
-  const hub = { source: 'hub', sourceName: 'Hub', defaultServices: [] };
+  const core = { source: 'core', sourceName: 'Switchboard', defaultServices: [] };
   for (const f of fs.existsSync(path.join(GUIDES, 'guides')) ? fs.readdirSync(path.join(GUIDES, 'guides')).sort() : []) {
-    if (f.endsWith('.md')) docs.push(readDoc(path.join(GUIDES, 'guides', f), { ...hub, id: `hub/${f.slice(0, -3)}`, section: 'Using Hub' }));
+    if (f.endsWith('.md')) docs.push(readDoc(path.join(GUIDES, 'guides', f), { ...core, id: `guides/${f.slice(0, -3)}`, section: 'Using Switchboard' }));
   }
-  docs.push({ id: 'hub/api-reference', title: 'API reference', section: 'Using Hub', order: 31, source: 'hub', sourceName: 'Hub', services: [], adminOnly: false, generate: apiReference });
+  docs.push({ id: 'guides/api-reference', title: 'API reference', section: 'Using Switchboard', order: 31, source: 'core', sourceName: 'Switchboard', services: [], adminOnly: false, generate: apiReference });
   if (fs.existsSync(path.join(GUIDES, 'plugins.md'))) {
-    docs.push(readDoc(path.join(GUIDES, 'plugins.md'), { ...hub, id: 'hub/plugins', section: 'Administration' }));
+    docs.push(readDoc(path.join(GUIDES, 'plugins.md'), { ...core, id: 'guides/plugins', section: 'Administration' }));
   }
 
   const pluginDocs: (Doc & { dependents: boolean; exclude: string[] })[] = [];
@@ -118,7 +118,7 @@ function collect(): Doc[] {
 const info = ({ id, title, section, order, source, sourceName, services, adminOnly }: Doc): DocInfo => ({ id, title, section, order, source, sourceName, services, adminOnly });
 
 export function listDocs(admin: boolean): DocInfo[] {
-  const order = ['Using Hub', 'Services', 'Administration'];
+  const order = ['Using Switchboard', 'Services', 'Administration'];
   return collect()
     .filter((d) => admin || !d.adminOnly)
     .sort((a, b) => order.indexOf(a.section) - order.indexOf(b.section) || a.order - b.order || a.title.localeCompare(b.title))
@@ -139,7 +139,7 @@ export function guidesByService(): Map<string, { id: string; title: string }[]> 
   return m;
 }
 
-/** The API reference, generated from the hub's OpenAPI description so it cannot drift. */
+/** The API reference, generated from Switchboard's OpenAPI description so it cannot drift. */
 function apiReference(): string {
   const doc: any = openapiDocument();
   const byTag = new Map<string, string[]>();
@@ -170,7 +170,7 @@ function apiReference(): string {
   const parts = [
     '# API reference',
     '',
-    `All endpoints are under \`${config.publicUrl}\` and take a hub token: \`Authorization: Bearer hub_…\`. Errors are JSON: \`{"error": "…"}\` with a 4xx or 5xx status. See [Hub API](/docs/hub/api) for an introduction. The machine-readable description is at [\`/api/openapi.json\`](${config.publicUrl}/api/openapi.json).`,
+    `All endpoints are under \`${config.publicUrl}\` and take a Switchboard token: \`Authorization: Bearer swb_…\`. Errors are JSON: \`{"error": "…"}\` with a 4xx or 5xx status. See [Switchboard API](/docs/guides/api) for an introduction. The machine-readable description is at [\`/api/openapi.json\`](${config.publicUrl}/api/openapi.json).`,
   ];
   for (const [tag, ops] of byTag) parts.push('', `## ${tag}`, '', ops.join('\n\n'));
   return parts.join('\n');

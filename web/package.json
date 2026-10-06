@@ -1,5 +1,5 @@
 {
-  "name": "hub-web",
+  "name": "switchboard-web",
   "private": true,
   "type": "module",
   "scripts": {

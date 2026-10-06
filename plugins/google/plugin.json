@@ -6,7 +6,7 @@
   "dependencies": ["oauth2"],
   "icon": "icon.svg",
   "settings": [
-    { "key": "clientId", "label": "OAuth client ID", "description": "From a \"Web application\" OAuth client in the Google Cloud console. Add the hub's redirect URI to it." },
+    { "key": "clientId", "label": "OAuth client ID", "description": "From a \"Web application\" OAuth client in the Google Cloud console. Add Switchboard's redirect URI to it." },
     { "key": "clientSecret", "label": "OAuth client secret", "type": "secret" }
   ]
 }

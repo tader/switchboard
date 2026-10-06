@@ -5,7 +5,7 @@ import { AccessPicker } from '../components/AccessPicker';
 import { Alert, Button, Spinner } from '../components/ui';
 import { AuthCard } from './Login';
 
-/** Consent page for apps (such as another hub) asking for a token through OAuth. */
+/** Consent page for apps (such as another Switchboard) asking for a token through OAuth. */
 export function Authorize() {
   const { user } = useSession();
   const params = Object.fromEntries(new URLSearchParams(location.search));
@@ -70,7 +70,7 @@ export function Authorize() {
         </dl>
         <p className="text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-300">
           {request.forMcp ? (
-            <>It can use the connections you choose through Hub’s MCP server, as <b>{user.username}</b>.</>
+            <>It can use the connections you choose through Switchboard’s MCP server, as <b>{user.username}</b>.</>
           ) : (
             <>It gets an API token for <b>{user.username}</b>.</>
           )}{' '}

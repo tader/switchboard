@@ -14,8 +14,8 @@ FROM node:24-alpine
 RUN apk add --no-cache su-exec
 WORKDIR /app
 ENV NODE_ENV=production \
-    HUB_DATA_DIR=/data \
-    HUB_PORT=8770
+    SWITCHBOARD_DATA_DIR=/data \
+    SWITCHBOARD_PORT=8770
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY server ./server

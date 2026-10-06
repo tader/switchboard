@@ -36,7 +36,7 @@ export function Login({ onDone }: { onDone: (u: User) => void }) {
     }
   };
   return (
-    <AuthCard title="Sign in to Hub">
+    <AuthCard title="Sign in to Switchboard">
       <form onSubmit={submit} className="space-y-4">
         <FormField label="Username" htmlFor="username">
           <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoFocus required />

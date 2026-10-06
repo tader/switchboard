@@ -124,7 +124,7 @@ export interface CallResult {
   size: number;
   bodyEncoding: 'utf8' | 'base64';
   body: string;
-  /** What the hub sent upstream; credentials it added are masked. */
+  /** What Switchboard sent upstream; credentials it added are masked. */
   request: {
     method: string;
     url: string;

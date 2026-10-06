@@ -88,7 +88,7 @@ function withExtraFields(m: AuthMethod, extra: Field[]): AuthMethod {
 
 const common: Field[] = [
   { key: 'baseUrl', label: 'Base URL', type: 'url', required: true, placeholder: 'https://api.example.com' },
-  { key: 'label', label: 'Account label', description: 'Shown in the hub to tell accounts apart' },
+  { key: 'label', label: 'Account label', description: 'Shown in Switchboard to tell accounts apart' },
   { key: 'allowedHosts', label: 'Other allowed hosts', advanced: true, placeholder: 'api2.example.com, *.example.com', description: 'Hosts besides the base URL that may receive the credentials' },
   { key: 'openapi', label: 'OpenAPI URL', type: 'url', advanced: true },
 ];

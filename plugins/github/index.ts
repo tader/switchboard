@@ -4,7 +4,7 @@ import type * as ApiKey from '../api-key/index.ts';
 
 async function whoami(token: string): Promise<AccountInfo> {
   const res = await fetch('https://api.github.com/user', {
-    headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'hub' },
+    headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'switchboard' },
   });
   if (res.status === 401) throw new Error('GitHub did not accept this token');
   if (!res.ok) throw new Error(`GitHub responded ${res.status}`);

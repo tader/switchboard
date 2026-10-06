@@ -12,7 +12,7 @@ const saKeys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 let saTokens = 0;
 
 const root = path.resolve(import.meta.dirname, '..');
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-test-'));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-test-'));
 let hub: ChildProcess;
 let base = '';
 let upstream: http.Server;
@@ -102,11 +102,11 @@ before(async () => {
   base = `http://127.0.0.1:${port}`;
   hub = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], {
     cwd: root,
-    env: { ...process.env, HUB_PORT: String(port), HUB_DATA_DIR: dataDir, HUB_PUBLIC_URL: base, HUB_HOST: '127.0.0.1' },
+    env: { ...process.env, SWITCHBOARD_PORT: String(port), SWITCHBOARD_DATA_DIR: dataDir, SWITCHBOARD_PUBLIC_URL: base, SWITCHBOARD_HOST: '127.0.0.1' },
   });
   hub.stdout!.on('data', (d) => (output += d));
   hub.stderr!.on('data', (d) => (output += d));
-  await waitFor(() => output.includes('Hub listening'));
+  await waitFor(() => output.includes('Switchboard listening'));
 });
 
 after(() => {
@@ -126,6 +126,17 @@ test('setup link lets the admin set a password and sign in', async () => {
   assert.equal(r.status, 200);
   assert.equal((await req('GET', '/api/me')).data.role, 'admin');
   assert.equal((await req('POST', '/api/auth/invite', { token, password: 'again again' })).status, 400, 'invite is single use');
+});
+
+test('names from before the rename to Switchboard keep working', async () => {
+  const value = cookie.split('=')[1];
+  const legacy = await fetch(`${base}/api/me`, { headers: { cookie: `hub_session=${value}` } });
+  assert.equal((await legacy.json()).username, 'admin', 'old cookie name');
+  const t = (await req('POST', '/api/tokens', { name: 'legacy-header' })).data.secret;
+  const viaOldHeader = await fetch(`${base}/api/me`, { headers: { 'x-hub-token': t } });
+  assert.equal((await viaOldHeader.json()).username, 'admin', 'X-Hub-Token header');
+  const viaNewHeader = await fetch(`${base}/api/me`, { headers: { 'x-switchboard-token': t } });
+  assert.equal(viaNewHeader.status, 200);
 });
 
 test('cross-site requests with the session cookie are rejected', async () => {
@@ -150,7 +161,7 @@ test('plugins and services are listed', async () => {
   assert.deepEqual(methods('todoist'), ['token', 'oauth']);
   assert.deepEqual(methods('spotify'), ['oauth', 'app']);
   assert.deepEqual(methods('plex'), ['plex', 'link', 'token']);
-  assert.deepEqual(methods('hub'), ['oauth', 'token']);
+  assert.deepEqual(methods('switchboard'), ['oauth', 'token']);
   assert.ok(methods('google-docs') && methods('google-sheets'));
   for (const p of plugins) assert.equal(p.status, 'active', `${p.id}: ${p.error}`);
 });
@@ -172,7 +183,7 @@ test('connect an API with a bearer token and call it through the proxy', async (
 
   const t = await req('POST', '/api/tokens', { name: 'script' });
   apiToken = t.data.secret;
-  assert.match(apiToken, /^hub_/);
+  assert.match(apiToken, /^swb_/);
 
   const res = await fetch(`${base}/proxy/${r.data.connection.name}/items?a=1`, { headers: { authorization: `Bearer ${apiToken}`, 'x-custom': 'y' } });
   const data = await res.json();
@@ -180,7 +191,7 @@ test('connect an API with a bearer token and call it through the proxy', async (
   assert.equal(data.path, '/items');
   assert.equal(data.query.a, '1');
   assert.equal(seen.at(-1)!.headers['x-custom'], 'y');
-  assert.ok(!JSON.stringify(seen.at(-1)!.headers).includes(apiToken), 'hub token is not forwarded');
+  assert.ok(!JSON.stringify(seen.at(-1)!.headers).includes(apiToken), 'Switchboard token is not forwarded');
 });
 
 test('credentials are only sent to allowed hosts', async () => {
@@ -343,8 +354,8 @@ test('same account: reconnecting updates, another method or a name adds a connec
   fs.rmSync(dir, { recursive: true });
 });
 
-test('hub to hub: OAuth consent, chained calls, revoke on disconnect', async () => {
-  const r = await req('POST', '/api/connections', { service: 'hub', method: 'oauth', config: { url: base } });
+test('Switchboard to Switchboard: OAuth consent, chained calls, revoke on disconnect', async () => {
+  const r = await req('POST', '/api/connections', { service: 'switchboard', method: 'oauth', config: { url: base } });
   assert.equal(r.data.status, 'redirect', JSON.stringify(r.data));
   const authorize = new URL(r.data.url);
   assert.equal(authorize.pathname, '/oauth/authorize');
@@ -492,17 +503,17 @@ test('plugin settings keep secrets hidden', async () => {
 test('docs: hub guides, plugin guides, links per service', async () => {
   const docs = (await req('GET', '/api/docs')).data;
   const ids = docs.map((d: any) => d.id);
-  for (const id of ['hub/mcp', 'hub/api', 'hub/api-reference', 'hub/plugins', 'google/oauth-client', 'google-keep/setup']) assert.ok(ids.includes(id), id);
-  assert.deepEqual([...new Set(docs.map((d: any) => d.section))], ['Using Hub', 'Services', 'Administration']);
+  for (const id of ['guides/mcp', 'guides/api', 'guides/api-reference', 'guides/plugins', 'google/oauth-client', 'google-keep/setup']) assert.ok(ids.includes(id), id);
+  assert.deepEqual([...new Set(docs.map((d: any) => d.section))], ['Using Switchboard', 'Services', 'Administration']);
 
-  const mcp = (await req('GET', '/api/docs/hub/mcp')).data;
-  assert.match(mcp.markdown, new RegExp(`claude mcp add --scope user --transport http hub ${base}/mcp`));
+  const mcp = (await req('GET', '/api/docs/guides/mcp')).data;
+  assert.match(mcp.markdown, new RegExp(`claude mcp add --scope user --transport http switchboard ${base}/mcp`));
   assert.ok(!mcp.markdown.includes('{{'), 'placeholders filled');
   const google = (await req('GET', '/api/docs/google/oauth-client')).data;
   assert.match(google.markdown, new RegExp(`${base}/oauth/callback`));
-  const authoring = (await req('GET', '/api/docs/hub/plugins')).data;
+  const authoring = (await req('GET', '/api/docs/guides/plugins')).data;
   assert.match(authoring.markdown, /`\{\{publicUrl\}\}`/, 'escaped placeholders stay literal');
-  const ref = (await req('GET', '/api/docs/hub/api-reference')).data;
+  const ref = (await req('GET', '/api/docs/guides/api-reference')).data;
   assert.match(ref.markdown, /### `POST \/api\/call`/);
 
   const services = (await req('GET', '/api/services')).data;
@@ -529,8 +540,8 @@ test('users: invite, sign in, admin-only areas', async () => {
   await req('POST', '/api/auth/invite', { token, password: 'alice password' });
   assert.equal((await req('GET', '/api/me')).data.username, 'alice');
   assert.equal((await req('GET', '/api/admin/plugins')).status, 403);
-  assert.ok(!(await req('GET', '/api/docs')).data.some((d: any) => d.id === 'hub/plugins'), 'admin-only guide hidden');
-  assert.equal((await req('GET', '/api/docs/hub/plugins')).status, 404);
+  assert.ok(!(await req('GET', '/api/docs')).data.some((d: any) => d.id === 'guides/plugins'), 'admin-only guide hidden');
+  assert.equal((await req('GET', '/api/docs/guides/plugins')).status, 404);
   assert.equal((await req('GET', '/api/connections')).data.length, 0, 'connections are per user');
   assert.equal((await req('GET', `/api/connections/${connId}`)).status, 404);
   cookie = '';
@@ -637,7 +648,7 @@ test('MCP: modern protocol, header validation and errors', async () => {
   assert.equal(d.status, 200, JSON.stringify(d.data));
   assert.equal(d.data.result.resultType, 'complete');
   assert.ok(d.data.result.supportedVersions.includes('2026-07-28'));
-  assert.equal(d.data.result._meta['io.modelcontextprotocol/serverInfo'].name, 'hub');
+  assert.equal(d.data.result._meta['io.modelcontextprotocol/serverInfo'].name, 'switchboard');
 
   const ok = await rpc({ id: 2, method: 'tools/call', params: { name: 'list_connections', arguments: {} } }, { token: mcpToken, modern: true });
   assert.equal(ok.data.result.resultType, 'complete');
@@ -691,7 +702,7 @@ test('MCP: OAuth with dynamic client registration, resource binding and iss', as
   const reg = await fetch(`${base}/oauth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'Test Agent', redirect_uris: ['http://127.0.0.1:7777/callback'], token_endpoint_auth_method: 'none' }) });
   assert.equal(reg.status, 201);
   const client = await reg.json();
-  assert.match(client.client_id, /^hubc_/);
+  assert.match(client.client_id, /^swbc_/);
   const badReg = await fetch(`${base}/oauth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['https://x.example/cb'], token_endpoint_auth_method: 'client_secret_basic' }) });
   assert.equal(badReg.status, 400);
 
@@ -716,7 +727,7 @@ test('MCP: OAuth with dynamic client registration, resource binding and iss', as
       body: new URLSearchParams({ grant_type: 'authorization_code', code: back.searchParams.get('code')!, client_id: client.client_id, redirect_uri: q.redirect_uri, code_verifier: verifier, resource: `${base}/mcp`, ...extra }),
     }).then((r) => r.json());
   const t = await token();
-  assert.match(t.access_token, /^hub_/);
+  assert.match(t.access_token, /^swb_/);
 
   // Bound to the MCP endpoint
   assert.equal((await req('GET', '/api/connections', undefined, { authorization: `Bearer ${t.access_token}` })).status, 401);
@@ -744,6 +755,6 @@ test('MCP: OAuth with a client ID metadata document', async () => {
 
   const back = new URL((await req('POST', '/api/oauth/authorize', { ...q, approve: true })).data.redirect);
   const t = await fetch(`${base}/oauth/token`, { method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code', code: back.searchParams.get('code')!, client_id: q.client_id, redirect_uri: q.redirect_uri, code_verifier: verifier, resource: `${base}/mcp` }) }).then((r) => r.json());
-  assert.match(t.access_token, /^hub_/);
+  assert.match(t.access_token, /^swb_/);
   assert.equal((await rpc({ id: 1, method: 'ping' }, { token: t.access_token })).status, 200);
 });

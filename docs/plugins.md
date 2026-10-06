@@ -86,9 +86,9 @@ A service has one or more `authMethods`; the user picks one when connecting. A m
 - declares `fields` to ask the user (`text`, `secret`, `url`, `textarea`, `select`, `boolean`; `advanced` fields are folded away),
 - `connect({ config, callbackUrl, state })` returns one of
   - `{ credentials, account?, config? }`: connected,
-  - `{ redirect, pending? }`: the browser goes to `redirect`; the provider returns to the hub's single callback URL with `state`, and the hub calls `callback({ params, pending, ... })`,
-  - `{ device: { userCode, verificationUri, interval }, pending? }`: the user enters the code; the hub calls `poll({ pending, ... })`, which returns `{ wait: true }` or the credentials,
-- `authorize(req, conn, { force })` adds credentials to an outgoing request (`req.headers`, `req.url`). Return `{ credentials }` to persist refreshed ones. After a 401 the hub retries once with `force: true`. Calls are serialized per connection, so refreshes don't race.
+  - `{ redirect, pending? }`: the browser goes to `redirect`; the provider returns to Switchboard's single callback URL with `state`, and Switchboard calls `callback({ params, pending, ... })`,
+  - `{ device: { userCode, verificationUri, interval }, pending? }`: the user enters the code; Switchboard calls `poll({ pending, ... })`, which returns `{ wait: true }` or the credentials,
+- `authorize(req, conn, { force })` adds credentials to an outgoing request (`req.headers`, `req.url`). Return `{ credentials }` to persist refreshed ones. After a 401 Switchboard retries once with `force: true`. Calls are serialized per connection, so refreshes don't race.
 - optional `token(conn)` hands out a bearer token for SDKs, and `revoke(conn)` runs when a connection is deleted.
 
 `account.id` identifies the account at the provider: connecting the same account again updates the existing connection instead of adding one.
@@ -107,7 +107,7 @@ Credentials are only sent to `allowedHosts` (default: the host of `baseUrl`). En
 
 ## Documentation
 
-Put Markdown files in a `docs/` folder in the plugin. They appear in the hub's **Docs** under *Services* while the plugin is active. The connect dialog links to them for the services they cover. Optional front matter:
+Put Markdown files in a `docs/` folder in the plugin. They appear in Switchboard's **Docs** under *Services* while the plugin is active. The connect dialog links to them for the services they cover. Optional front matter:
 
 ```markdown
 ---
@@ -122,7 +122,7 @@ adminOnly: true                   # only shown to administrators
 
 Guides can use GitHub-style callouts: a blockquote starting with `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` or `[!CAUTION]`. Code blocks are highlighted for `bash`, `json`, `toml`, `yaml`, `python`, `javascript`, `typescript`, `http` and `markdown`.
 
-`\{{publicUrl}}`, `\{{mcpUrl}}` and `\{{callbackUrl}}` are replaced with the hub's addresses (write `\\{{…}}` to show one literally), so a guide can say exactly which redirect URI to register. Links like `/connections` or `/docs/<plugin>/<file>` open inside the hub. Edits show up on the next page load.
+`\{{publicUrl}}`, `\{{mcpUrl}}` and `\{{callbackUrl}}` are replaced with Switchboard's addresses (write `\\{{…}}` to show one literally), so a guide can say exactly which redirect URI to register. Links like `/connections` or `/docs/<plugin>/<file>` open inside Switchboard. Edits show up on the next page load.
 
 ## Hot reload and installing
 
@@ -130,4 +130,4 @@ Files are watched: editing a plugin (built in, or under `<data>/plugins/`) reloa
 
 To publish, push the directory to GitHub. Admins install with `owner/repo`, a URL to a folder (`https://github.com/owner/repo/tree/main/plugins/linear`), or `owner/repo@tag`. A repository may contain several plugins at the top level or under `plugins/`; all are installed. *Check for updates* compares the installed commit with the branch or tag it came from.
 
-Plugins run in the hub process with full access. Only install plugins you trust.
+Plugins run in Switchboard process with full access. Only install plugins you trust.

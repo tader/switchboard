@@ -11,13 +11,13 @@ Gmail, Google Calendar, Drive, Docs, Sheets and *Google APIs* connections sign i
 
 ## 1. Create a project and turn on the APIs
 
-1. Open [console.cloud.google.com](https://console.cloud.google.com) and create a project, for example *Hub*.
+1. Open [console.cloud.google.com](https://console.cloud.google.com) and create a project, for example *Switchboard*.
 2. Under **APIs & Services → Library**, enable each API you will use: **Gmail API**, **Google Calendar API**, **Google Drive API**, **Google Docs API**, **Google Sheets API**.
 
 ## 2. Configure the consent screen
 
 1. Go to **Google Auth Platform** (or **APIs & Services → OAuth consent screen**) and choose **Get started**.
-2. Enter an app name, for example *Hub*, and your email address.
+2. Enter an app name, for example *Switchboard*, and your email address.
 3. Under **Audience**, choose:
    - **Internal** if everyone uses accounts from your own Google Workspace organization. There is no review and no expiry.
    - **External** otherwise, for example for personal Gmail accounts. Then add every account that will connect as a **test user**.
@@ -34,14 +34,14 @@ Gmail, Google Calendar, Drive, Docs, Sheets and *Google APIs* connections sign i
 
 4. Choose **Create**, then copy the **client ID** and **client secret**.
 
-## 4. Enter it in Hub
+## 4. Enter it in Switchboard
 
 Under **Plugins → Google → Settings**, paste the client ID and secret and save. Users can now connect their Google accounts.
 
 ## Good to know
 
 > [!IMPORTANT]
-> **Sign-ins expire weekly in testing mode.** For an *External* app in **Testing**, Google lets sign-ins expire after **7 days**, and connections then need **Reconnect**. To avoid this, choose **Publish app** under **Audience**. Google shows an *"unverified app"* warning when signing in, which you can click through (**Advanced → Go to Hub**). That is fine for personal use, for up to 100 users. Verification is only needed for wider use.
+> **Sign-ins expire weekly in testing mode.** For an *External* app in **Testing**, Google lets sign-ins expire after **7 days**, and connections then need **Reconnect**. To avoid this, choose **Publish app** under **Audience**. Google shows an *"unverified app"* warning when signing in, which you can click through (**Advanced → Go to Switchboard**). That is fine for personal use, for up to 100 users. Verification is only needed for wider use.
 
 - **"Access blocked: app has not completed verification":** the account is not a test user (step 2), or the app is still in testing.
 - **`redirect_uri_mismatch`:** the redirect URI in step 3 must be exactly `{{callbackUrl}}`.

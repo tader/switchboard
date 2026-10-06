@@ -1,5 +1,5 @@
 {
-  "name": "hub",
+  "name": "switchboard",
   "private": true,
   "type": "module",
   "version": "0.1.0",

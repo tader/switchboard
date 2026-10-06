@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.ts';
 
@@ -147,10 +148,23 @@ const migrations: string[] = [
   ALTER TABLE oauth_codes ADD COLUMN resource TEXT;
   ALTER TABLE oauth_codes ADD COLUMN client_name TEXT;
   `,
+  // The hub-to-hub plugin and service were renamed with the app, from "hub" to "switchboard".
+  `
+  UPDATE connections SET service_id = 'switchboard' WHERE service_id = 'hub';
+  UPDATE connect_flows SET service_id = 'switchboard' WHERE service_id = 'hub';
+  UPDATE audit_log SET service_id = 'switchboard' WHERE service_id = 'hub';
+  UPDATE plugins SET id = 'switchboard' WHERE id = 'hub' AND NOT EXISTS (SELECT 1 FROM plugins WHERE id = 'switchboard');
+  `,
 ];
 
 export function initDb() {
-  db = new DatabaseSync(path.join(config.dataDir, 'hub.db'));
+  // Data from before the rename to Switchboard is moved over once.
+  const file = path.join(config.dataDir, 'switchboard.db');
+  const legacy = path.join(config.dataDir, 'hub.db');
+  if (!fs.existsSync(file) && fs.existsSync(legacy)) {
+    for (const ext of ['', '-wal', '-shm']) if (fs.existsSync(legacy + ext)) fs.renameSync(legacy + ext, file + ext);
+  }
+  db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
   for (let i = version; i < migrations.length; i++) {

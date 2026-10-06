@@ -5,10 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import * as tar from 'tar';
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-gh-'));
+// Uses the HUB_* variables from before the rename to Switchboard, which must keep working.
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gh-'));
 process.env.HUB_DATA_DIR = path.join(tmp, 'data');
 process.env.HUB_WATCH_PLUGINS = 'false';
 fs.mkdirSync(process.env.HUB_DATA_DIR, { recursive: true });
+// An existing database from before the rename is moved to its new name.
+fs.writeFileSync(path.join(process.env.HUB_DATA_DIR, 'hub.db'), '');
 
 // A fake repository with two plugins, served as GitHub tarballs per commit.
 let commit = 'aaa111';
@@ -49,6 +52,14 @@ before(async () => {
   initDb();
   const { plugins } = await import('../server/plugins/manager.ts');
   await plugins.start();
+});
+
+test('data and tokens from before the rename to Switchboard', async () => {
+  assert.ok(fs.existsSync(path.join(process.env.HUB_DATA_DIR!, 'switchboard.db')), 'hub.db was renamed');
+  assert.ok(!fs.existsSync(path.join(process.env.HUB_DATA_DIR!, 'hub.db')));
+  const { isApiToken, TOKEN_PREFIX } = await import('../server/users.ts');
+  assert.equal(TOKEN_PREFIX, 'swb_');
+  assert.ok(isApiToken('hub_old') && isApiToken('swb_new') && !isApiToken('ghp_other'));
 });
 
 after(() => {

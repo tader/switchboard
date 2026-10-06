@@ -52,7 +52,7 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="flex h-full flex-col gap-6 p-3">
       <div className="flex items-center gap-2.5 px-1.5 pt-1">
         <Logo />
-        <span className="text-[15px] font-semibold tracking-tight">Hub</span>
+        <span className="text-[15px] font-semibold tracking-tight">Switchboard</span>
       </div>
       <nav className="flex flex-col gap-0.5">
         <NavItem to="/connections" icon={<Plug />}>
@@ -135,7 +135,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <MenuIcon className="size-5" />
           </button>
           <Logo className="size-6" />
-          <span className="font-semibold">Hub</span>
+          <span className="font-semibold">Switchboard</span>
         </header>
         <main className={cx('min-h-0 flex-1', fullBleed ? 'overflow-hidden' : 'scrollbar-thin overflow-y-auto')}>
           {fullBleed ? children : <div className={cx('mx-auto px-4 py-8 sm:px-8', loc.pathname === '/activity' ? 'max-w-7xl' : loc.pathname.startsWith('/docs') ? 'max-w-6xl' : 'max-w-5xl')}>{children}</div>}

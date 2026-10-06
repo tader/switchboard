@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
-import { getCookie } from 'hono/cookie';
-import { COOKIE, type Env, endSession, loginAllowed, loginFailed, loginSucceeded, requireFullAccess, requireUser, startSession } from '../auth.ts';
+import { type Env, endSession, sessionCookie, loginAllowed, loginFailed, loginSucceeded, requireFullAccess, requireUser, startSession } from '../auth.ts';
 import { HttpError, badRequest } from '../http.ts';
 import {
   acceptInvite, checkLogin, createToken, deleteOtherSessions, deleteSession, deleteToken, inviteUser, listTokens, setPassword, updateToken,
@@ -29,7 +28,7 @@ account.post('/auth/login', async (c) => {
 });
 
 account.post('/auth/logout', (c) => {
-  const cookie = getCookie(c, COOKIE);
+  const cookie = sessionCookie(c);
   if (cookie) deleteSession(cookie);
   endSession(c);
   return c.json({ ok: true });

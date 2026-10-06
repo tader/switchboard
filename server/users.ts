@@ -14,6 +14,10 @@ export interface User {
   createdAt: number;
 }
 
+/** Prefix of API tokens. Tokens from before the rename to Switchboard start with "hub_". */
+export const TOKEN_PREFIX = 'swb_';
+export const isApiToken = (s: string | undefined): s is string => !!s && (s.startsWith(TOKEN_PREFIX) || s.startsWith('hub_'));
+
 export interface ApiToken {
   id: string;
   name: string;
@@ -202,7 +206,7 @@ export function createToken(
 ) {
   name = name.trim();
   if (!name) throw badRequest('Give the token a name');
-  const secret = `hub_${randomToken(24)}`;
+  const secret = `${TOKEN_PREFIX}${randomToken(24)}`;
   const id = randomId('t');
   const expiresAt = expiresInDays ? now() + expiresInDays * 86400_000 : null;
   run(

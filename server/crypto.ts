@@ -9,7 +9,7 @@ export function initKey() {
   if (config.secretKey) {
     const s = config.secretKey.trim();
     key = /^[0-9a-f]{64}$/i.test(s) ? Buffer.from(s, 'hex') : Buffer.from(s, 'base64');
-    if (key.length !== 32) throw new Error('HUB_SECRET_KEY must be 32 bytes (64 hex chars or base64)');
+    if (key.length !== 32) throw new Error('SWITCHBOARD_SECRET_KEY must be 32 bytes (64 hex chars or base64)');
     return;
   }
   const file = path.join(config.dataDir, 'secret.key');

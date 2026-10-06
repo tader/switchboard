@@ -1,9 +1,9 @@
-// The hub as an OAuth 2.1 authorization server, so other hubs and MCP clients can get a hub token
+// Switchboard as an OAuth 2.1 authorization server, so other Switchboards and MCP clients can get a Switchboard token
 // by sending the user here. PKCE (S256) is required. Clients identify themselves in one of three ways:
 //  - Client ID Metadata Document: client_id is an https URL (with a path) of a JSON document that
 //    lists the client's redirect URIs. Preferred by the MCP specification.
 //  - Dynamic Client Registration (RFC 7591) at /oauth/register, for clients that do not support the above.
-//  - A plain URL client id whose redirect URI is on the same origin (IndieAuth style), used by hubs.
+//  - A plain URL client id whose redirect URI is on the same origin (IndieAuth style), used by Switchboards.
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
@@ -17,7 +17,9 @@ import { listConnections } from '../connections.ts';
 import { createToken, deleteToken, getUser } from '../users.ts';
 
 export const MCP_RESOURCE = `${config.publicUrl}/mcp`;
-const DCR_PREFIX = 'hubc_';
+const DCR_PREFIX = 'swbc_';
+/** Registered client ids from before the rename to Switchboard. */
+const isRegisteredClient = (id: string) => id.startsWith(DCR_PREFIX) || id.startsWith('hubc_');
 
 interface AuthorizeParams {
   response_type?: string;
@@ -60,7 +62,7 @@ function redirectAllowed(requested: string, allowed: string[]) {
   });
 }
 
-// Fetching a client's metadata document must not become a way to probe the hub's network.
+// Fetching a client's metadata document must not become a way to probe Switchboard's network.
 // With a plain-http public URL (local development) these checks are relaxed.
 const devMode = !config.secure;
 
@@ -107,7 +109,7 @@ async function fetchClientMetadata(clientId: string): Promise<{ client_name?: st
 }
 
 async function resolveClient(clientId: string, redirectUri: string): Promise<Client> {
-  if (clientId.startsWith(DCR_PREFIX)) {
+  if (isRegisteredClient(clientId)) {
     const row = one('SELECT * FROM oauth_clients WHERE client_id = ?', clientId);
     if (!row) throw badRequest('Unknown client_id');
     if (!redirectAllowed(redirectUri, JSON.parse(row.redirect_uris))) throw badRequest('redirect_uri is not registered for this client');
@@ -139,7 +141,7 @@ async function resolveClient(clientId: string, redirectUri: string): Promise<Cli
   return { kind: 'origin', name: client.host, verifiedName: true, domain: client.host };
 }
 
-/** Normalizes a resource indicator (RFC 8707); only the hub itself and its MCP endpoint are known resources. */
+/** Normalizes a resource indicator (RFC 8707); only Switchboard itself and its MCP endpoint are known resources. */
 function audienceFor(resource?: string): string | null | undefined {
   if (!resource) return null;
   const r = resource.replace(/\/+$/, '').replace(/^(https?:\/\/)([^/]+)/i, (_m, s, h) => s.toLowerCase() + h.toLowerCase());
@@ -300,7 +302,7 @@ export function protectedResourceMetadata() {
     resource: MCP_RESOURCE,
     authorization_servers: [config.publicUrl],
     bearer_methods_supported: ['header'],
-    resource_name: 'Hub',
+    resource_name: 'Switchboard',
     resource_documentation: `${config.publicUrl}/tokens`,
   };
 }

@@ -16,7 +16,7 @@ export interface CallInput {
 
 const HOP_BY_HOP = new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade',
-  'host', 'content-length', 'cookie', 'authorization', 'x-hub-token', 'origin', 'referer',
+  'host', 'content-length', 'cookie', 'authorization', 'x-switchboard-token', 'x-hub-token', 'origin', 'referer',
 ]);
 const RESPONSE_DROP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'content-encoding', 'content-length', 'set-cookie', 'alt-svc', 'strict-transport-security']);
 
@@ -167,7 +167,8 @@ async function executeLoaded(loaded: ReturnType<typeof loadConnection>, user: Us
 
   const baseHeaders = new Headers();
   for (const [k, v] of input.headers ?? []) {
-    if (!k || HOP_BY_HOP.has(k.toLowerCase()) || k.toLowerCase().startsWith('x-hub-')) continue;
+    const lower = k.toLowerCase();
+    if (!k || HOP_BY_HOP.has(lower) || lower.startsWith('x-switchboard-') || lower.startsWith('x-hub-')) continue;
     try {
       baseHeaders.append(k, v);
     } catch {
@@ -230,7 +231,7 @@ export function responseHeaders(res: Response): Headers {
   return h;
 }
 
-/** Hands out the raw access token. Recorded, since calls made with it no longer pass through the hub. */
+/** Hands out the raw access token. Recorded, since calls made with it no longer pass through Switchboard. */
 export async function issueToken(user: User, connectionRef: string, force = false, caller?: Caller) {
   const { conn, service, method } = loadConnection(user.id, connectionRef);
   const started = Date.now();

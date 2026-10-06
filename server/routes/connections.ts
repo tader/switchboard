@@ -278,7 +278,7 @@ oauth.get('/callback', async (c) => {
   const params = Object.fromEntries(new URL(c.req.url).searchParams.entries());
   const back = (q: Record<string, string>) => c.redirect(`${config.publicUrl}/connections?${new URLSearchParams(q)}`);
   try {
-    if (!identify(c)) throw new HttpError(401, 'Sign in to the hub first, then connect again');
+    if (!identify(c)) throw new HttpError(401, 'Sign in to Switchboard first, then connect again');
     if (!params.state) throw badRequest('The provider did not return a state');
     const conn = await completeRedirect(params.state, params, c.get('user'));
     return back({ connected: conn.id });

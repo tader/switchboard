@@ -268,7 +268,7 @@ const common: Field[] = [
   { key: 'clientId', label: 'Client ID', required: true },
   { key: 'clientSecret', label: 'Client secret', type: 'secret' },
   { key: 'scopes', label: 'Scopes', placeholder: 'Separated by spaces' },
-  { key: 'label', label: 'Account label', description: 'Shown in the hub to tell accounts apart' },
+  { key: 'label', label: 'Account label', description: 'Shown in Switchboard to tell accounts apart' },
   { key: 'allowedHosts', label: 'Other allowed hosts', advanced: true, placeholder: 'api2.example.com, *.example.com', description: 'Hosts besides the base URL that may receive the token' },
   { key: 'openapi', label: 'OpenAPI URL', type: 'url', advanced: true },
   { key: 'tokenAuth', label: 'Client authentication', type: 'select', advanced: true, default: 'post', options: [{ value: 'post', label: 'In the request body' }, { value: 'basic', label: 'HTTP Basic' }] },

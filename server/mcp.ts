@@ -11,16 +11,16 @@ import { all, one } from './db.ts';
 import { HttpError } from './http.ts';
 import { describe } from './openapi.ts';
 import { execute } from './proxy.ts';
-import { tokenUser } from './users.ts';
+import { isApiToken, tokenUser } from './users.ts';
 
 const MODERN = ['2026-07-28'];
 const LEGACY = ['2025-11-25', '2025-06-18', '2025-03-26'];
-const SERVER_INFO = { name: 'hub', title: 'Hub', version: '1.0.0' };
+const SERVER_INFO = { name: 'switchboard', title: 'Switchboard', version: '1.0.0' };
 const META = 'io.modelcontextprotocol/';
 
-const INSTRUCTIONS = `Hub signs in to services (Gmail, GitHub, Jira, ...) on the user's behalf and adds credentials to requests.
+const INSTRUCTIONS = `Switchboard signs in to services (Gmail, GitHub, Jira, ...) on the user's behalf and adds credentials to requests.
 Start with list_connections. Use search_operations and get_operation to find the right endpoint in a service's API reference, then call.
-Paths are relative to the connection's base URL. Credentials are added by the hub; never send your own Authorization header.`;
+Paths are relative to the connection's base URL. Credentials are added by Switchboard; never send your own Authorization header.`;
 
 type Json = Record<string, any>;
 
@@ -85,7 +85,7 @@ const tools = [
     name: 'call',
     title: 'Call an API',
     description:
-      'Make an HTTP request through a connection. The hub adds the credentials. path is relative to the base URL (e.g. /gmail/v1/users/me/messages) or an absolute URL on an allowed host; {placeholders} are filled from path_params.',
+      'Make an HTTP request through a connection. Switchboard adds the credentials. path is relative to the base URL (e.g. /gmail/v1/users/me/messages) or an absolute URL on an allowed host; {placeholders} are filled from path_params.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -320,13 +320,13 @@ const resourceMetadataUrl = `${config.publicUrl}/.well-known/oauth-protected-res
 export const mcp = new Hono<Env>();
 
 mcp.post('/', async (c) => {
-  // DNS rebinding protection: browsers send Origin, and only the hub's own pages may use it.
+  // DNS rebinding protection: browsers send Origin, and only Switchboard's own pages may use it.
   const origin = c.req.header('origin');
   if (origin && origin !== new URL(config.publicUrl).origin) return c.json({ jsonrpc: '2.0', error: { code: -32600, message: 'Origin not allowed' } }, 403);
 
   const auth = c.req.header('authorization');
   const secret = auth?.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : undefined;
-  const found = secret?.startsWith('hub_') ? tokenUser(secret) : undefined;
+  const found = isApiToken(secret) ? tokenUser(secret) : undefined;
   if (!found) {
     c.header('www-authenticate', `Bearer resource_metadata="${resourceMetadataUrl}"${secret ? ', error="invalid_token"' : ''}`);
     return c.json({ jsonrpc: '2.0', error: { code: -32001, message: secret ? 'Invalid or expired token' : 'Authorization required' } }, 401);

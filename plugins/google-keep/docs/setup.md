@@ -14,18 +14,18 @@ Google only offers the Keep API to **Google Workspace** organizations, and its s
 
 - A Google Cloud project, where you can create service accounts.
 - A **super administrator** of the Workspace organization, for step 5.
-- The email address of the Workspace user whose notes Hub should use.
+- The email address of the Workspace user whose notes Switchboard should use.
 
 ## 1. Create a service account
 
 1. Open [console.cloud.google.com](https://console.cloud.google.com) and select or create a project.
 2. Go to **IAM & Admin → Service Accounts** and choose **Create service account**.
-3. Give it a name, such as *hub-keep*, and choose **Done**. It needs no roles or permissions in the project.
+3. Give it a name, such as *switchboard-keep*, and choose **Done**. It needs no roles or permissions in the project.
 
 ## 2. Create a key
 
 1. Open the service account, go to the **Keys** tab and choose **Add key → Create new key**.
-2. Choose **JSON** and **Create**. A file downloads; you will paste its contents into Hub.
+2. Choose **JSON** and **Create**. A file downloads; you will paste its contents into Switchboard.
 
 > [!TIP]
 > If Google says key creation is disabled, the organization policy *Disable service account key creation* (`iam.disableServiceAccountKeyCreation`) is on. This is the default for organizations created since 2024. An organization policy administrator can turn it off for this project under **IAM & Admin → Organization policies**.
@@ -50,17 +50,17 @@ This needs a super administrator.
    https://www.googleapis.com/auth/keep,https://www.googleapis.com/auth/keep.readonly
    ```
 
-   Leave out the first scope if Hub should only read notes.
+   Leave out the first scope if Switchboard should only read notes.
 4. Choose **Authorize**. It can take a few minutes, occasionally longer, before Google applies it.
 
-## 6. Connect in Hub
+## 6. Connect in Switchboard
 
 1. On the [Connections](/connections) page, choose **Connect → Google Keep**.
 2. Paste the whole JSON key file into **Service account key**.
 3. Under **Act as**, enter the email address of the Workspace user whose notes to use.
 4. Choose the access level and **Continue**.
 
-Hub stores the key encrypted and never shows it again. Repeat step 6 to connect more users with the same key.
+Switchboard stores the key encrypted and never shows it again. Repeat step 6 to connect more users with the same key.
 
 ## What the API can do
 
@@ -81,5 +81,5 @@ Google's Keep API can list, create, get and delete notes, download attachments, 
 > With domain-wide delegation, the key can act as **any** user in the organization, for the authorized scopes. Treat it like an administrator password.
 
 - Authorize only the Keep scopes.
-- Remove the key in Google Cloud when you no longer use it. This immediately stops every Hub connection made with it.
+- Remove the key in Google Cloud when you no longer use it. This immediately stops every Switchboard connection made with it.
 - Check what was done under [Activity](/activity).

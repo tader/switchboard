@@ -17,7 +17,7 @@ const serverField: Field = {
   type: 'url',
   advanced: true,
   placeholder: 'https://192-168-1-10.abc123.plex.direct:32400',
-  description: 'Found automatically when empty: the first server the hub can reach.',
+  description: 'Found automatically when empty: the first server Switchboard can reach.',
 };
 
 export default function setup(ctx: PluginContext) {
@@ -27,7 +27,7 @@ export default function setup(ctx: PluginContext) {
   const clientId = fs.readFileSync(idFile, 'utf8').trim();
   const plexHeaders = (token?: string): Record<string, string> => ({
     accept: 'application/json',
-    'x-plex-product': 'Hub',
+    'x-plex-product': 'Switchboard',
     'x-plex-client-identifier': clientId,
     ...(token ? { 'x-plex-token': token } : {}),
   });
@@ -101,7 +101,7 @@ export default function setup(ctx: PluginContext) {
         clientID: clientId,
         code: pin.code,
         forwardUrl: `${callbackUrl}?state=${encodeURIComponent(state)}`,
-        'context[device][product]': 'Hub',
+        'context[device][product]': 'Switchboard',
       });
       return { redirect: `https://app.plex.tv/auth#?${q}`, pending: { pinId: pin.id } };
     },

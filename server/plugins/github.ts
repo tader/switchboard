@@ -40,7 +40,7 @@ export function parseRepo(input: string, ref?: string, subpath?: string): RepoRe
 }
 
 async function gh(url: string, accept = 'application/vnd.github+json') {
-  const headers: Record<string, string> = { accept, 'user-agent': 'hub', 'x-github-api-version': '2022-11-28' };
+  const headers: Record<string, string> = { accept, 'user-agent': 'switchboard', 'x-github-api-version': '2022-11-28' };
   if (config.githubToken) headers.authorization = `Bearer ${config.githubToken}`;
   const res = await fetch(url, { headers, redirect: 'follow' });
   if (!res.ok) {

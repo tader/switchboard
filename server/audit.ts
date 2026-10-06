@@ -1,5 +1,5 @@
-// Audit trail of every request the hub makes on a user's behalf, and every raw token it hands out.
-// Everything is redacted before it is written: credentials the hub added are already masked by the
+// Audit trail of every request Switchboard makes on a user's behalf, and every raw token it hands out.
+// Everything is redacted before it is written: credentials Switchboard added are already masked by the
 // proxy, and secret-looking values the caller sent are masked here.
 import type { Context } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
@@ -49,7 +49,7 @@ const NOT_SECRET = /^(next_?)?page_?token$|^sync_?token$|^token_?type$|^max_?tok
 const SECRET_NAME = { test: (name: string) => SECRET_PATTERN.test(name) && !NOT_SECRET.test(name) };
 const BODY_LIMIT = 4096;
 
-/** Masks query parameters with secret-looking names (the hub's own credentials are already masked). */
+/** Masks query parameters with secret-looking names (Switchboard's own credentials are already masked). */
 export function redactUrl(url: string): string {
   try {
     const u = new URL(url);

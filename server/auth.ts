@@ -2,7 +2,7 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { config } from './config.ts';
 import { HttpError, forbidden } from './http.ts';
-import { type ApiToken, type User, createSession, sessionUser, tokenUser } from './users.ts';
+import { type ApiToken, type User, createSession, isApiToken, sessionUser, tokenUser } from './users.ts';
 
 export type Env = {
   Variables: {
@@ -12,7 +12,13 @@ export type Env = {
   };
 };
 
-export const COOKIE = config.secure ? '__Host-hub_session' : 'hub_session';
+export const COOKIE = config.secure ? '__Host-switchboard_session' : 'switchboard_session';
+/** The cookie's name before the rename to Switchboard; still read so nobody is signed out. */
+const LEGACY_COOKIE = config.secure ? '__Host-hub_session' : 'hub_session';
+
+export function sessionCookie(c: Context): string | undefined {
+  return getCookie(c, COOKIE) ?? getCookie(c, LEGACY_COOKIE);
+}
 
 export function startSession(c: Context, userId: string) {
   const token = createSession(userId);
@@ -28,12 +34,14 @@ export function startSession(c: Context, userId: string) {
 
 export function endSession(c: Context) {
   deleteCookie(c, COOKIE, { path: '/', secure: config.secure });
+  deleteCookie(c, LEGACY_COOKIE, { path: '/', secure: config.secure });
 }
 
 function bearer(c: Context): string | undefined {
   const h = c.req.header('authorization');
   if (h?.toLowerCase().startsWith('bearer ')) return h.slice(7).trim();
-  return c.req.header('x-hub-token') ?? undefined;
+  // X-Hub-Token is the header's name from before the rename to Switchboard.
+  return c.req.header('x-switchboard-token') ?? c.req.header('x-hub-token') ?? undefined;
 }
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -41,7 +49,7 @@ const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** Resolves the caller from an API token or the session cookie. */
 export function identify(c: Context<Env>): boolean {
   const secret = bearer(c);
-  if (secret?.startsWith('hub_')) {
+  if (isApiToken(secret)) {
     const found = tokenUser(secret);
     if (!found) throw new HttpError(401, 'Invalid or expired API token');
     // Tokens an MCP client got through OAuth are bound to the MCP endpoint (RFC 8707 audience).
@@ -50,7 +58,7 @@ export function identify(c: Context<Env>): boolean {
     c.set('token', found.token);
     return true;
   }
-  const session = getCookie(c, COOKIE);
+  const session = sessionCookie(c);
   if (!session) return false;
   const user = sessionUser(session);
   if (!user) return false;

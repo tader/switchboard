@@ -420,7 +420,7 @@ function EntryDialog({ id, onClose, onFilter }: { id: number | null; onClose: ()
                         {h.value}
                         {h.byHub && (
                           <Badge tone="indigo" className="ml-2 align-middle font-sans">
-                            Added by hub
+                            Added by Switchboard
                           </Badge>
                         )}
                       </td>

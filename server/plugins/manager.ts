@@ -374,7 +374,7 @@ class PluginManager {
     return out;
   }
 
-  /** Suppresses the file watcher for a plugin while the hub itself writes its files. */
+  /** Suppresses the file watcher for a plugin while Switchboard itself writes its files. */
   quiet(id: string, ms = 3000) {
     this.quietUntil.set(id, Date.now() + ms);
   }
@@ -395,7 +395,7 @@ class PluginManager {
         this.onFileChange(root, top);
       });
       // Node's recursive watcher errors when a directory disappears while it scans it (e.g. a
-      // plugin folder being removed). Unhandled, that would crash the hub; start over instead.
+      // plugin folder being removed). Unhandled, that would crash Switchboard; start over instead.
       w.on('error', (e) => {
         console.warn(`[plugins] watcher for ${root} failed (${(e as NodeJS.ErrnoException).code ?? e.message}), restarting it`);
         w.close();

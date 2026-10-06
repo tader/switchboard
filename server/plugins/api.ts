@@ -1,7 +1,7 @@
-// Types shared between the hub and its plugins.
+// Types shared between Switchboard and its plugins.
 //
 // Plugins only need `import type` from this file, which is erased at runtime, so a
-// plugin installed from any repository can use these types without depending on the hub.
+// plugin installed from any repository can use these types without depending on Switchboard.
 
 export interface PluginManifest {
   id: string;
@@ -44,9 +44,9 @@ export interface PluginContext {
   /** Exports of a plugin listed in `dependencies`. */
   require<T = any>(pluginId: string): T;
   log: Logger;
-  /** Public base URL of the hub, without trailing slash. */
+  /** Public base URL of Switchboard, without trailing slash. */
   publicUrl: string;
-  /** The single OAuth redirect URI of the hub. Register this at providers. */
+  /** The single OAuth redirect URI of Switchboard. Register this at providers. */
   callbackUrl: string;
   /** Absolute path of the plugin's directory. */
   dir: string;
@@ -71,7 +71,7 @@ export interface AccountInfo {
   avatarUrl?: string;
 }
 
-/** What the hub knows about one connected account. */
+/** What Switchboard knows about one connected account. */
 export interface Connection {
   id: string;
   name: string;

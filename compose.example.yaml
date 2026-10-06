@@ -5,23 +5,23 @@ networks:
     external: true
 
 services:
-  hub:
+  switchboard:
     build: .
-    container_name: hub
+    container_name: switchboard
     restart: unless-stopped
     networks:
       - default
       - traefik
     environment:
-      HUB_PUBLIC_URL: https://hub.example.com
-      HUB_ADMIN_USERNAME: "${HUB_ADMIN_USERNAME:-admin}"
-      HUB_GITHUB_TOKEN: "${HUB_GITHUB_TOKEN:-}"
+      SWITCHBOARD_PUBLIC_URL: https://switchboard.example.com
+      SWITCHBOARD_ADMIN_USERNAME: "${SWITCHBOARD_ADMIN_USERNAME:-admin}"
+      SWITCHBOARD_GITSWITCHBOARD_TOKEN: "${SWITCHBOARD_GITSWITCHBOARD_TOKEN:-}"
     volumes:
       - ./.data:/data
     labels:
       traefik.enable: true
       traefik.docker.network: traefik
-      traefik.http.routers.hub.entrypoints: websecure
-      traefik.http.routers.hub.rule: "Host(`hub.example.com`)"
-      traefik.http.routers.hub.tls.certresolver: letsencrypt
-      traefik.http.services.hub.loadbalancer.server.port: 8770
+      traefik.http.routers.switchboard.entrypoints: websecure
+      traefik.http.routers.switchboard.rule: "Host(`switchboard.example.com`)"
+      traefik.http.routers.switchboard.tls.certresolver: letsencrypt
+      traefik.http.services.switchboard.loadbalancer.server.port: 8770

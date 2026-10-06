@@ -10,7 +10,7 @@ const urlField: Field = {
   type: 'url',
   required: true,
   placeholder: 'http://homeassistant.local:8123',
-  description: 'As the hub reaches it. Browser sign-in also needs this address to work from your browser.',
+  description: 'As Switchboard reaches it. Browser sign-in also needs this address to work from your browser.',
 };
 
 const instance = (c: Cfg) => String(c.url ?? '').replace(/\/+$/, '');

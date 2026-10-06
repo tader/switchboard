@@ -28,7 +28,7 @@ export default function setup(ctx: PluginContext) {
             default: 'full',
             options: [
               { value: 'readonly', label: 'View all files' },
-              { value: 'file', label: 'Only files created or opened through the hub' },
+              { value: 'file', label: 'Only files created or opened through Switchboard' },
               { value: 'full', label: 'View and edit all files' },
             ],
           },
