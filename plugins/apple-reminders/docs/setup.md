@@ -15,3 +15,7 @@ The first connection asks macOS for full Reminders access. If the prompt cannot 
 The Mac needs the Xcode Command Line Tools (`xcode-select --install`) once so the plugin can compile its small EventKit helper. The resulting helper is kept in Switchboard's data directory and reused.
 
 Available operations list reminder lists, list or fetch reminders, create reminders, update their title, notes, list, due date, completion state or priority, and delete reminders. Due dates use ISO 8601 date-times; set `notes` or `dueDate` to `null` to clear it. EventKit priorities are `0` (none), `1` (high), `5` (medium), and `9` (low).
+
+List operations return at most 100 items in an `items` array. When more results exist, send the returned `nextToken` with the same filters to fetch the next page. `pageSize` can request a smaller page.
+
+`GET /reminders` accepts `hideCompleted=true`, a `listId`, and ISO 8601 comparison filters: `dueDateLt`, `dueDateLte`, `dueDateGt`, `dueDateGte`, plus the equivalent `completionDate…` parameters. The `due` shortcut accepts `overdue`, `today`, `tomorrow`, or `next7Days`; these windows use the Mac's local time, and `overdue` excludes completed reminders.

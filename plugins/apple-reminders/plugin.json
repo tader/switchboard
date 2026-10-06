@@ -1,7 +1,7 @@
 {
   "id": "apple-reminders",
   "name": "Apple Reminders",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Access the local user's Apple Reminders through EventKit on macOS.",
   "icon": "icon.svg"
 }

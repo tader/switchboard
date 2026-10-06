@@ -7,19 +7,84 @@ import type { Connection, OutgoingRequest, PluginContext } from '../../server/pl
 
 const MAX_BODY = 1024 * 1024;
 const HELPER_TIMEOUT_MS = 60_000;
+const MAX_PAGE_SIZE = 100;
+const dateFilters = ['dueDateLt', 'dueDateLte', 'dueDateGt', 'dueDateGte', 'completionDateLt', 'completionDateLte', 'completionDateGt', 'completionDateGte'] as const;
+
+export function pagination(url: URL) {
+  const rawSize = url.searchParams.get('pageSize');
+  const limit = rawSize === null ? MAX_PAGE_SIZE : Number(rawSize);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) throw new Error(`pageSize must be between 1 and ${MAX_PAGE_SIZE}`);
+  const filters = new URLSearchParams(url.searchParams);
+  filters.delete('pageSize');
+  filters.delete('nextToken');
+  filters.sort();
+  const fingerprint = crypto.createHash('sha256').update(filters.toString()).digest('base64url').slice(0, 16);
+  let offset = 0;
+  const token = url.searchParams.get('nextToken');
+  if (token) {
+    try {
+      const decoded = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+      if (!Number.isInteger(decoded.offset) || decoded.offset < 0 || decoded.fingerprint !== fingerprint) throw new Error();
+      offset = decoded.offset;
+    } catch {
+      throw new Error('nextToken is invalid or belongs to a different query');
+    }
+  }
+  return { limit, offset, fingerprint };
+}
+
+export function pageResult(body: any, fingerprint: string) {
+  if (!body || !Array.isArray(body.items)) throw new Error('Invalid paginated response from EventKit helper');
+  const result: { items: unknown[]; nextToken?: string } = { items: body.items };
+  if (Number.isInteger(body.nextOffset)) {
+    result.nextToken = Buffer.from(JSON.stringify({ offset: body.nextOffset, fingerprint })).toString('base64url');
+  }
+  return result;
+}
+
+export function reminderFilters(url: URL) {
+  const input: Record<string, unknown> = { listId: url.searchParams.get('listId') ?? undefined };
+  const hideCompleted = url.searchParams.get('hideCompleted');
+  if (hideCompleted !== null) {
+    if (hideCompleted !== 'true' && hideCompleted !== 'false') throw new Error('hideCompleted must be true or false');
+    input.hideCompleted = hideCompleted === 'true';
+  }
+  const due = url.searchParams.get('due');
+  if (due && !['overdue', 'today', 'tomorrow', 'next7Days'].includes(due)) throw new Error('due must be overdue, today, tomorrow, or next7Days');
+  if (due) input.due = due;
+  for (const name of dateFilters) {
+    const value = url.searchParams.get(name);
+    if (value !== null) input[name] = value;
+  }
+  return input;
+}
 
 const openapi = {
   openapi: '3.0.3',
   info: { title: 'Apple Reminders', version: '1.0.0', description: 'The reminders and lists belonging to the macOS user running Switchboard.' },
   paths: {
     '/lists': {
-      get: { operationId: 'listReminderLists', summary: 'List reminder lists', responses: { 200: { description: 'Reminder lists' } } },
+      get: {
+        operationId: 'listReminderLists', summary: 'List reminder lists',
+        parameters: [
+          { name: 'pageSize', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 100 } },
+          { name: 'nextToken', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'A page of reminder lists' } },
+      },
     },
     '/reminders': {
       get: {
         operationId: 'listReminders', summary: 'List reminders',
-        parameters: [{ name: 'listId', in: 'query', description: 'Only reminders in this list', schema: { type: 'string' } }],
-        responses: { 200: { description: 'Reminders' } },
+        parameters: [
+          { name: 'listId', in: 'query', description: 'Only reminders in this list', schema: { type: 'string' } },
+          { name: 'hideCompleted', in: 'query', description: 'Hide completed reminders; false by default', schema: { type: 'boolean', default: false } },
+          { name: 'due', in: 'query', description: 'Convenient local-time due-date window; overdue also excludes completed reminders', schema: { type: 'string', enum: ['overdue', 'today', 'tomorrow', 'next7Days'] } },
+          ...dateFilters.map((name) => ({ name, in: 'query', description: `${name.replace(/(Lt|Lte|Gt|Gte)$/, '')} comparison as an ISO 8601 date-time`, schema: { type: 'string', format: 'date-time' } })),
+          { name: 'pageSize', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 100 } },
+          { name: 'nextToken', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'A page of reminders' } },
       },
       post: {
         operationId: 'createReminder', summary: 'Create a reminder',
@@ -130,8 +195,17 @@ export default async function setup(ctx: PluginContext) {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const match = url.pathname.match(/^\/reminders\/([^/]+)$/);
       let input: Record<string, unknown>;
-      if (request.method === 'GET' && url.pathname === '/lists') input = { operation: 'lists' };
-      else if (request.method === 'GET' && url.pathname === '/reminders') input = { operation: 'list', listId: url.searchParams.get('listId') ?? undefined };
+      let pageFingerprint: string | undefined;
+      if (request.method === 'GET' && url.pathname === '/lists') {
+        const page = pagination(url);
+        pageFingerprint = page.fingerprint;
+        input = { operation: 'lists', offset: page.offset, limit: page.limit };
+      }
+      else if (request.method === 'GET' && url.pathname === '/reminders') {
+        const page = pagination(url);
+        pageFingerprint = page.fingerprint;
+        input = { operation: 'list', ...reminderFilters(url), offset: page.offset, limit: page.limit };
+      }
       else if (request.method === 'POST' && url.pathname === '/reminders') input = { ...await jsonBody(request), operation: 'create' };
       else if (request.method === 'GET' && match) input = { operation: 'get', id: decodeURIComponent(match[1]) };
       else if (request.method === 'PATCH' && match) input = { ...await jsonBody(request), operation: 'update', id: decodeURIComponent(match[1]) };
@@ -143,7 +217,7 @@ export default async function setup(ctx: PluginContext) {
       }
       const result = await runHelper(helper, input);
       response.writeHead(result.status, { 'content-type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify(result.body));
+      response.end(JSON.stringify(pageFingerprint && result.status === 200 ? pageResult(result.body, pageFingerprint) : result.body));
     } catch (error: any) {
       response.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({ error: error.message }));

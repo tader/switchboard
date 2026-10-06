@@ -10,6 +10,18 @@ struct Input: Decodable {
     let dueDate: String?
     let completed: Bool?
     let priority: Int?
+    let hideCompleted: Bool?
+    let due: String?
+    let dueDateLt: String?
+    let dueDateLte: String?
+    let dueDateGt: String?
+    let dueDateGte: String?
+    let completionDateLt: String?
+    let completionDateLte: String?
+    let completionDateGt: String?
+    let completionDateGte: String?
+    let offset: Int?
+    let limit: Int?
 }
 
 enum HelperError: Error, CustomStringConvertible {
@@ -123,6 +135,34 @@ func parsedDate(_ value: String) throws -> Date {
     throw HelperError.message("dueDate must be an ISO 8601 date-time")
 }
 
+func optionalDate(_ value: String?) throws -> Date? {
+    guard let value else { return nil }
+    return try parsedDate(value)
+}
+
+func page(_ values: [[String: Any]], offset: Int?, limit: Int?) -> [String: Any] {
+    let start = max(0, min(offset ?? 0, values.count))
+    let size = max(1, min(limit ?? 100, 100))
+    let end = min(start + size, values.count)
+    var result: [String: Any] = ["items": Array(values[start..<end])]
+    if end < values.count { result["nextOffset"] = end }
+    return result
+}
+
+func reminderDate(_ reminder: EKReminder) -> Date? {
+    guard let components = reminder.dueDateComponents else { return nil }
+    return Calendar.current.date(from: components)
+}
+
+func datesMatch(_ value: Date?, lt: Date?, lte: Date?, gt: Date?, gte: Date?) -> Bool {
+    guard let value else { return lt == nil && lte == nil && gt == nil && gte == nil }
+    if let lt, !(value < lt) { return false }
+    if let lte, !(value <= lte) { return false }
+    if let gt, !(value > gt) { return false }
+    if let gte, !(value >= gte) { return false }
+    return true
+}
+
 do {
     let inputData = FileHandle.standardInput.readDataToEndOfFile()
     let input = try JSONDecoder().decode(Input.self, from: inputData)
@@ -135,8 +175,10 @@ do {
     try requireAccess()
     switch input.operation {
     case "lists":
-        let lists = store.calendars(for: .reminder).map { ["id": $0.calendarIdentifier, "title": $0.title, "source": $0.source.title] }
-        output(200, lists)
+        let lists: [[String: Any]] = store.calendars(for: .reminder)
+            .map { ["id": $0.calendarIdentifier, "title": $0.title, "source": $0.source.title] as [String: Any] }
+            .sorted { String(describing: $0["title"]) < String(describing: $1["title"]) }
+        output(200, page(lists, offset: input.offset, limit: input.limit))
     case "list":
         let calendars: [EKCalendar]?
         if let listId = input.listId {
@@ -144,8 +186,40 @@ do {
         } else {
             calendars = nil
         }
-        let reminders = try fetch(calendars).map(reminderJSON).sorted { String(describing: $0["title"]) < String(describing: $1["title"]) }
-        output(200, reminders)
+        let dueLt = try optionalDate(input.dueDateLt)
+        let dueLte = try optionalDate(input.dueDateLte)
+        let dueGt = try optionalDate(input.dueDateGt)
+        let dueGte = try optionalDate(input.dueDateGte)
+        let completionLt = try optionalDate(input.completionDateLt)
+        let completionLte = try optionalDate(input.completionDateLte)
+        let completionGt = try optionalDate(input.completionDateGt)
+        let completionGte = try optionalDate(input.completionDateGte)
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
+        let dayAfterTomorrow = calendar.date(byAdding: .day, value: 2, to: today)!
+        let weekEnd = calendar.date(byAdding: .day, value: 7, to: today)!
+        let reminders = try fetch(calendars).filter { reminder in
+            if input.hideCompleted == true && reminder.isCompleted { return false }
+            let dueDate = reminderDate(reminder)
+            switch input.due {
+            case "overdue": if reminder.isCompleted || dueDate == nil || dueDate! >= today { return false }
+            case "today": if dueDate == nil || dueDate! < today || dueDate! >= tomorrow { return false }
+            case "tomorrow": if dueDate == nil || dueDate! < tomorrow || dueDate! >= dayAfterTomorrow { return false }
+            case "next7Days": if dueDate == nil || dueDate! < today || dueDate! >= weekEnd { return false }
+            case nil: break
+            default: return false
+            }
+            return datesMatch(dueDate, lt: dueLt, lte: dueLte, gt: dueGt, gte: dueGte)
+                && datesMatch(reminder.completionDate, lt: completionLt, lte: completionLte, gt: completionGt, gte: completionGte)
+        }.sorted { left, right in
+            let leftDate = reminderDate(left)
+            let rightDate = reminderDate(right)
+            if leftDate != rightDate { return leftDate == nil ? false : rightDate == nil ? true : leftDate! < rightDate! }
+            if left.title != right.title { return (left.title ?? "").localizedCaseInsensitiveCompare(right.title ?? "") == .orderedAscending }
+            return left.calendarItemIdentifier < right.calendarItemIdentifier
+        }.map(reminderJSON)
+        output(200, page(reminders, offset: input.offset, limit: input.limit))
     case "get":
         output(200, reminderJSON(try reminder(input.id)))
     case "create":
