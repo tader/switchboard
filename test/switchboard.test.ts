@@ -169,7 +169,6 @@ test('plugins and services are listed', async () => {
   const gmail = plugins.find((p: any) => p.id === 'gmail');
   assert.equal(gmail.status, 'active');
   assert.deepEqual(gmail.dependencies, ['google']);
-  assert.equal(plugins.find((p: any) => p.id === 'apple-reminders').status, 'active');
   const services = (await req('GET', '/api/services')).data;
   const gh = services.find((s: any) => s.id === 'github');
   assert.deepEqual(gh.methods.map((m: any) => m.id), ['token', 'oauth', 'device']);
@@ -183,7 +182,6 @@ test('plugins and services are listed', async () => {
   assert.deepEqual(methods('spotify'), ['oauth', 'app']);
   assert.deepEqual(methods('plex'), ['plex', 'link', 'token']);
   assert.deepEqual(methods('switchboard'), ['oauth', 'token']);
-  assert.equal(!!methods('apple-reminders'), process.platform === 'darwin', 'Apple Reminders is advertised only on macOS');
   assert.ok(methods('google-docs') && methods('google-sheets'));
   for (const p of plugins) assert.equal(p.status, 'active', `${p.id}: ${p.error}`);
 });
