@@ -160,6 +160,14 @@ Every request through Switchboard is logged per user, whether it goes through th
 
 The web app has guides under *Docs*: using Switchboard from AI assistants (Claude, Codex, Copilot, OpenCode), the Switchboard API with a reference generated from its OpenAPI description, and setup guides that plugins ship in their `docs/` folder (for example Google sign-in and Google Keep). Switchboard's own guides live in `docs/guides/`.
 
+## macOS plugins
+
+Apple Reminders, Apple Mail and Apple Calendar are maintained in [tader/switchboard-plugin-macos](https://github.com/tader/switchboard-plugin-macos). Install that repository through **Plugins → Install from GitHub** on the Mac running the services, including a Mac satellite when the main instance runs elsewhere.
+
+**Before upgrading an existing Apple Reminders installation, install the external repository on every Mac providing Reminders.** It replaces the built-in plugin using the same `apple-reminders` service ID, `eventkit` authentication method and persistent data directory. Existing connections and credentials remain valid; do not delete or reconnect them. The external installed plugin takes precedence over the built-in one during the transition.
+
+Mail and Calendar require macOS 14+, Node 24+, Xcode Command Line Tools and the logged-in user's session. See the external repository's setup guides and validation record for permission requirements and current limitations.
+
 ## Plugins
 
 See [docs/plugins.md](docs/plugins.md). Built-in plugins live in `plugins/`; plugins installed from GitHub go to `<data>/plugins/` and take precedence over a built-in plugin with the same id.
