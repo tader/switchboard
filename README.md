@@ -9,6 +9,7 @@ One place that signs in to services (Gmail, Outlook, Google Calendar, GitHub, an
 - A service can offer several sign-in methods: personal access token, API key, basic auth, OAuth authorization code (with PKCE), OAuth device code, client credentials.
 - Web console to build calls (method, URL, query, headers, body), browse the service's OpenAPI description, and save calls for reuse.
 - Admins install and update plugins from GitHub and manage users.
+- Satellites expose plugins on intermittently connected private machines through an outbound WebSocket; connections remain per-user and credentials remain on that machine.
 
 ## Run
 
@@ -33,10 +34,46 @@ On first start, and whenever no administrator can sign in, the log contains a se
 | `SWITCHBOARD_SESSION_TTL_SECS` | 14 days | |
 | `SWITCHBOARD_WATCH_PLUGINS` | `true` | Reload plugins when their files change. |
 | `SWITCHBOARD_AUDIT_RETENTION_DAYS` | `90` | How long the activity log is kept; `0` keeps it forever. |
+| `SWITCHBOARD_SATELLITE_CENTRAL_URL` | | On a satellite, the public URL of its central Switchboard. Set together with `SWITCHBOARD_SATELLITE_TOKEN`. |
+| `SWITCHBOARD_SATELLITE_TOKEN` | | One-time-shown device credential created on the central instance's Satellites page. |
 
 Switchboard was called Hub before: `HUB_*` variables, `hub_` tokens, the `X-Hub-Token` header and an existing `hub.db` keep working.
 
 Back up the data dir. Without `secret.key` (or `SWITCHBOARD_SECRET_KEY`) stored credentials cannot be decrypted.
+
+### Satellites
+
+A satellite is another Switchboard instance on a machine that is not always online. It makes an outbound WebSocket connection to the central instance, so the machine needs no inbound port through its firewall or NAT. Add it under *Satellites*, copy the two environment variables shown there to the private instance, and start that instance normally. Its active plugin services then appear when an allowed user creates a connection.
+
+Satellite connections belong to one central user and cannot be shared. Provider credentials and secret connection fields are encrypted only in the satellite's data directory. Calls are audited on both Switchboards: the central user's Activity page records the routed call, while a satellite administrator's Activity page includes every upstream call executed there and identifies its upstream client. Raw provider tokens cannot be handed out for satellite connections. When the machine is offline calls fail immediately with `503` and error code `satellite_offline`; calls are not queued or rapidly retried.
+
+#### Run a satellite without Docker
+
+Install Node.js 24, then build Switchboard from a checkout:
+
+```bash
+npm ci
+npm --prefix web ci
+npm --prefix web run build
+```
+
+Create the machine under **Satellites** on the central Switchboard and copy the token it shows. Start the local instance with a separate persistent data directory and bind it to loopback:
+
+```bash
+export SWITCHBOARD_HOST=127.0.0.1
+export SWITCHBOARD_PORT=8770
+export SWITCHBOARD_PUBLIC_URL=http://127.0.0.1:8770
+export SWITCHBOARD_DATA_DIR="$HOME/.local/share/switchboard-satellite"
+
+export SWITCHBOARD_SATELLITE_CENTRAL_URL=https://switchboard.example.com
+export SWITCHBOARD_SATELLITE_TOKEN='sws_…'
+
+npm start
+```
+
+The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Machine-specific plugins are configured in this local UI; for example, enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service is advertised upstream.
+
+The satellite needs only outbound HTTPS/WebSocket access to the central URL. No inbound firewall or router port is required. For unattended use, put the variables in a permission-restricted service configuration and run Switchboard as a dedicated low-privilege OS user. Shell commands execute with that user's filesystem permissions.
 
 ### Setting up Google and GitHub
 
@@ -80,7 +117,7 @@ Credentials are only attached to the hosts a service allows (for Gmail `gmail.go
 
 ### MCP
 
-`https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), `call`, `list_saved_calls`, `run_saved_call`. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
+`https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), structured `call_operation`, lower-level `call`, `list_saved_calls`, and `run_saved_call`. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
 
     claude mcp add --transport http switchboard https://switchboard.example.com/mcp            # signs in through the browser
     claude mcp add --transport http switchboard https://switchboard.example.com/mcp --header "Authorization: Bearer $SWITCHBOARD_TOKEN"
@@ -106,6 +143,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `POST /api/admin/plugins/install` `{repo, ref?, path?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` | Install/update from GitHub |
 | `POST /api/admin/plugins/:id/reload`, `PATCH /api/admin/plugins/:id` `{enabled}`, `GET/PUT /api/admin/plugins/:id/settings`, `DELETE /api/admin/plugins/:id` | |
 | `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/:id`, `POST /api/admin/users/:id/invite` | Admin: users |
+| `GET/POST /api/admin/satellites`, `GET/PATCH/DELETE /api/admin/satellites/:id`, `POST /api/admin/satellites/:id/rotate-token` | Admin: outbound satellite enrolment, user access and credential rotation |
 | `GET /api/audit`, `GET /api/audit/:id`, `GET /api/audit/facets`, `GET /api/audit/histogram?by=…` | Activity log. Filters: `connection`, `client` (token id or `web`), `status` (`2xx`…`5xx`, `error` or a code), `method`, `source`, `q`, `from`/`to` (ms); `sort` (`time`, `duration`, `status`, `size`), `order`, `limit`, `offset`. Not readable with tokens limited to connections. |
 | `DELETE /api/me/token` | Revoke the token making the request |
 | `GET /api/openapi.json` | OpenAPI description of this API |
@@ -121,6 +159,14 @@ Every request through Switchboard is logged per user, whether it goes through th
 ### Docs
 
 The web app has guides under *Docs*: using Switchboard from AI assistants (Claude, Codex, Copilot, OpenCode), the Switchboard API with a reference generated from its OpenAPI description, and setup guides that plugins ship in their `docs/` folder (for example Google sign-in and Google Keep). Switchboard's own guides live in `docs/guides/`.
+
+## macOS plugins
+
+Apple Reminders, Apple Mail and Apple Calendar are maintained in [tader/switchboard-plugin-macos](https://github.com/tader/switchboard-plugin-macos). Install that repository through **Plugins → Install from GitHub** on the Mac running the services, including a Mac satellite when the main instance runs elsewhere.
+
+**Before upgrading an existing Apple Reminders installation, install the external repository on every Mac providing Reminders.** It replaces the built-in plugin using the same `apple-reminders` service ID, `eventkit` authentication method and persistent data directory. Existing connections and credentials remain valid; do not delete or reconnect them. The external installed plugin takes precedence over the built-in one during the transition.
+
+Mail and Calendar require macOS 14+, Node 24+, Xcode Command Line Tools and the logged-in user's session. See the external repository's setup guides and validation record for permission requirements and current limitations.
 
 ## Plugins
 

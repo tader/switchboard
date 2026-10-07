@@ -3,6 +3,8 @@ import type { Connection, ServiceDefinition } from './plugins/api.ts';
 import { loadConnection, markError, resolveBaseUrl, saveCredentials, touch, withLock } from './connections.ts';
 import type { User } from './users.ts';
 import { type Caller, countingStream, record, redactBody, setResponseSize } from './audit.ts';
+import { getConnectionRow } from './connections.ts';
+import { requestSatellite } from './satellites.ts';
 
 export interface CallInput {
   method: string;
@@ -114,6 +116,8 @@ function describeSent(method: string, before: { url: URL; headers: Headers }, af
 export async function execute(user: User, connectionRef: string, input: CallInput, signal?: AbortSignal, caller?: Caller): Promise<Executed> {
   const method = (input.method || 'GET').toUpperCase();
   if (!/^[A-Z]+$/.test(method)) throw badRequest('Invalid HTTP method');
+  const remoteRow = getConnectionRow(user.id, connectionRef);
+  if (remoteRow.satellite_id) return executeRemote(user, remoteRow, input, method, signal, caller);
   const loaded = loadConnection(user.id, connectionRef);
   const { conn } = loaded;
   const started = Date.now();
@@ -158,6 +162,51 @@ export async function execute(user: User, connectionRef: string, input: CallInpu
       });
     }
     throw e;
+  }
+}
+
+async function executeRemote(user: User, row: any, input: CallInput, method: string, signal?: AbortSignal, caller?: Caller): Promise<Executed> {
+  const started = Date.now();
+  const encoded = {
+    ...input,
+    body: input.body == null ? null : Buffer.from(input.body as any).toString('base64'),
+    bodyEncoding: input.body == null ? undefined : 'base64',
+  };
+  let aborted = false;
+  const abort = () => { aborted = true; };
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    if (signal?.aborted) throw new HttpError(499, 'Request cancelled');
+    const r = await requestSatellite<any>(row.satellite_id, user.id, 'call', { connection: row.remote_connection_id, input: encoded, caller });
+    if (aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
+    const sent: SentRequest = {
+      ...r.sent,
+      body: r.sent?.body == null ? undefined : Buffer.from(r.sent.body, r.sent.bodyEncoding === 'base64' ? 'base64' : 'utf8'),
+    };
+    const ex: Executed = {
+      response: new Response(Buffer.from(r.body ?? '', 'base64'), { status: r.status, statusText: r.statusText, headers: r.headers }),
+      url: new URL(r.url), durationMs: r.durationMs, sent,
+    };
+    if (caller) {
+      const type = sent.headers.find(([k]) => k === 'content-type')?.[1] ?? '';
+      ex.auditId = record({
+        userId: user.id, caller, connection: { id: row.id, name: row.name, serviceId: row.service_id }, method,
+        url: sent.url, status: ex.response.status, durationMs: ex.durationMs,
+        requestSize: sent.body ? Buffer.byteLength(sent.body as any) : 0,
+        responseSize: Buffer.byteLength(r.body ?? '', 'base64'), responseType: ex.response.headers.get('content-type'), retried: sent.retried,
+        requestHeaders: sent.headers.map(([name, value, byHub]) => ({ name, value, byHub })), requestBody: redactBody(sent.body, type),
+      });
+    }
+    touch(row.id);
+    return ex;
+  } catch (e: any) {
+    if (caller) record({
+      userId: user.id, caller, connection: { id: row.id, name: row.name, serviceId: row.service_id }, method,
+      url: input.url, status: e instanceof HttpError ? e.status : 500, durationMs: Date.now() - started, error: e?.message ?? String(e),
+    });
+    throw e;
+  } finally {
+    signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -233,6 +282,8 @@ export function responseHeaders(res: Response): Headers {
 
 /** Hands out the raw access token. Recorded, since calls made with it no longer pass through Switchboard. */
 export async function issueToken(user: User, connectionRef: string, force = false, caller?: Caller) {
+  const row = getConnectionRow(user.id, connectionRef);
+  if (row.satellite_id) throw badRequest('Satellite connections do not hand out raw access tokens; use the proxy instead');
   const { conn, service, method } = loadConnection(user.id, connectionRef);
   const started = Date.now();
   const audit = (status: number, error?: string) =>

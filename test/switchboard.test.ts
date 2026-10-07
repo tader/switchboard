@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
+import WebSocket from 'ws';
 
 const saKeys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 let saTokens = 0;
@@ -57,7 +58,22 @@ function startUpstream() {
       return json(400, { error: 'invalid_grant' });
     }
     if (url.pathname === '/spec.json') {
-      return json(200, { openapi: '3.0.0', info: { title: 'Fake', version: '1' }, servers: [{ url: 'https://{domain}/api/v2', variables: { domain: { default: 'example.com' } } }], paths: { '/things/{id}': { get: { summary: 'Get a thing', parameters: [{ name: 'id', in: 'path', required: true }] } } } });
+      return json(200, {
+        openapi: '3.0.0', info: { title: 'Fake', version: '1' },
+        servers: [{ url: 'https://{domain}/api/v2', variables: { domain: { default: 'example.com' } } }],
+        paths: { '/things/{id}': {
+          get: { summary: 'Get a thing', parameters: [
+            { name: 'id', in: 'path', required: true },
+            { name: 'hideCompleted', in: 'query', schema: { type: 'boolean', default: false } },
+            { name: 'nextToken', in: 'query', schema: { type: 'string' } },
+          ] },
+          post: {
+            operationId: 'updateThing', summary: 'Update a thing',
+            parameters: [{ name: 'id', in: 'path', required: true }, { name: 'x-mode', in: 'header', required: true, schema: { type: 'string', enum: ['safe', 'fast'] } }],
+            requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string' } } } } } },
+          },
+        } },
+      });
     }
     if (url.pathname === '/client.json') return json(200, { client_id: `${up}/client.json`, client_name: 'CIMD App', redirect_uris: ['http://localhost:9000/cb'] });
     if (url.pathname === '/forged-client.json') return json(200, { client_id: 'https://claude.ai/oauth/client.json', client_name: 'Claude', redirect_uris: ['http://localhost:9000/cb'] });
@@ -119,6 +135,8 @@ after(() => {
 
 let apiToken = '';
 let connId = '';
+let aliceId = '';
+let aliceCookie = '';
 
 test('setup link lets the admin set a password and sign in', async () => {
   const token = output.match(/\/invite#(\S+)/)![1];
@@ -151,6 +169,7 @@ test('plugins and services are listed', async () => {
   const gmail = plugins.find((p: any) => p.id === 'gmail');
   assert.equal(gmail.status, 'active');
   assert.deepEqual(gmail.dependencies, ['google']);
+  assert.equal(plugins.find((p: any) => p.id === 'apple-reminders'), undefined, 'Apple Reminders is installed from its external repository');
   const services = (await req('GET', '/api/services')).data;
   const gh = services.find((s: any) => s.id === 'github');
   assert.deepEqual(gh.methods.map((m: any) => m.id), ['token', 'oauth', 'device']);
@@ -164,6 +183,7 @@ test('plugins and services are listed', async () => {
   assert.deepEqual(methods('spotify'), ['oauth', 'app']);
   assert.deepEqual(methods('plex'), ['plex', 'link', 'token']);
   assert.deepEqual(methods('switchboard'), ['oauth', 'token']);
+  assert.equal(methods('apple-reminders'), undefined, 'Apple Reminders is no longer a built-in service');
   assert.ok(methods('google-docs') && methods('google-sheets'));
   for (const p of plugins) assert.equal(p.status, 'active', `${p.id}: ${p.error}`);
 });
@@ -646,6 +666,7 @@ test('Microsoft: services, sign-in request, tenant and permissions', async () =>
 
 test('users: invite, sign in, admin-only areas', async () => {
   const r = await req('POST', '/api/admin/users', { username: 'alice' });
+  aliceId = r.data.user.id;
   const token = r.data.invite.url.split('#')[1];
   const adminCookie = cookie;
   cookie = '';
@@ -659,7 +680,81 @@ test('users: invite, sign in, admin-only areas', async () => {
   cookie = '';
   assert.equal((await req('POST', '/api/auth/login', { username: 'alice', password: 'wrong' })).status, 401);
   assert.equal((await req('POST', '/api/auth/login', { username: 'alice', password: 'alice password' })).status, 200);
+  aliceCookie = cookie;
   cookie = adminCookie;
+});
+
+test('satellites: outbound socket, catalogue, per-user connection, call and offline state', async () => {
+  const admin = (await req('GET', '/api/me')).data;
+  const made = await req('POST', '/api/admin/satellites', { name: 'Home PC', ownerUserId: admin.id });
+  assert.equal(made.status, 201, JSON.stringify(made.data));
+  assert.match(made.data.token, /^sws_/);
+  const satellite = made.data.satellite;
+
+  const messages: any[] = [];
+  const waiters: ((m: any) => void)[] = [];
+  const wsUrl = base.replace(/^http/, 'ws') + '/api/satellites/connect';
+  const ws = new WebSocket(wsUrl, { headers: { authorization: `Bearer ${made.data.token}` } });
+  ws.on('message', (raw) => {
+    const message = JSON.parse(String(raw));
+    const waiter = waiters.shift();
+    if (waiter) waiter(message); else messages.push(message);
+  });
+  const next = () => messages.length ? Promise.resolve(messages.shift()) : new Promise<any>((resolve) => waiters.push(resolve));
+  await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  assert.equal((await next()).type, 'welcome');
+  ws.send(JSON.stringify({
+    protocol: 1, type: 'catalog', version: 'test-1', catalog: { services: [{
+      id: 'family-tree', name: 'Family Tree', description: 'Local genealogy', pluginId: 'family-tree', hasOpenapi: true,
+      methods: [{ id: 'local', name: 'Local profile', fields: [{ key: 'tree', label: 'Tree', required: true }] }],
+    }] },
+  }));
+  assert.equal((await next()).type, 'catalog.accepted');
+  await waitFor(async () => (await req('GET', '/api/services')).data.some((s: any) => s.id === `sat/${satellite.id}/family-tree`));
+
+  // Merely enrolling a machine does not expose it to another user.
+  const adminCookie = cookie;
+  cookie = aliceCookie;
+  assert.ok(!(await req('GET', '/api/services')).data.some((s: any) => s.id.includes(satellite.id)));
+  cookie = adminCookie;
+
+  const connecting = req('POST', '/api/connections', { service: `sat/${satellite.id}/family-tree`, method: 'local', config: { tree: 'Smith' } });
+  const connectMessage = await next();
+  assert.equal(connectMessage.operation, 'connect.start');
+  assert.equal(connectMessage.userId, admin.id);
+  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: connectMessage.requestId, result: {
+    status: 'connected', connection: { id: 'remote-c1', name: 'family-tree', serviceId: 'family-tree', methodId: 'local', methodName: 'Local profile', account: { label: 'Smith tree' }, config: { tree: 'Smith' } },
+  } }));
+  const connected = await connecting;
+  assert.equal(connected.status, 200, JSON.stringify(connected.data));
+  assert.equal(connected.data.connection.satellite.id, satellite.id);
+  assert.equal(connected.data.connection.canIssueToken, false);
+
+  const calling = req('POST', '/api/call', { connection: connected.data.connection.id, method: 'GET', url: '/people' });
+  const callMessage = await next();
+  assert.equal(callMessage.operation, 'call');
+  assert.equal(callMessage.payload.connection, 'remote-c1');
+  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: callMessage.requestId, result: {
+    status: 200, statusText: 'OK', headers: [['content-type', 'application/json']], body: Buffer.from('{"people":2}').toString('base64'),
+    url: 'http://127.0.0.1:9999/people', durationMs: 4,
+    sent: { method: 'GET', url: 'http://127.0.0.1:9999/people', headers: [], authQuery: [], retried: false },
+  } }));
+  const called = await calling;
+  assert.equal(called.status, 200, JSON.stringify(called.data));
+  assert.equal(JSON.parse(called.data.body).people, 2);
+
+  const deleting = req('DELETE', `/api/connections/${connected.data.connection.id}`);
+  const deleteMessage = await next();
+  assert.equal(deleteMessage.operation, 'connection.delete');
+  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: deleteMessage.requestId, result: { ok: true } }));
+  assert.equal((await deleting).status, 200);
+
+  ws.close();
+  await waitFor(async () => !(await req('GET', '/api/admin/satellites')).data.find((s: any) => s.id === satellite.id).online);
+  const offlineConnect = await req('POST', '/api/connections', { service: `sat/${satellite.id}/family-tree`, method: 'local', config: { tree: 'Smith' } });
+  assert.equal(offlineConnect.status, 503, JSON.stringify(offlineConnect.data));
+  assert.equal(offlineConnect.data.code, 'satellite_offline');
+  await req('DELETE', `/api/admin/satellites/${satellite.id}`);
 });
 
 // --- MCP ---
@@ -719,15 +814,59 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   assert.equal(note.status, 202);
 
   const list = await rpc({ id: 2, method: 'tools/list' }, { token: mcpToken, headers: { 'mcp-protocol-version': '2025-06-18' } });
-  assert.deepEqual(list.data.result.tools.map((t: any) => t.name), ['list_connections', 'search_operations', 'get_operation', 'call', 'list_saved_calls', 'run_saved_call']);
+  assert.deepEqual(list.data.result.tools.map((t: any) => t.name), ['list_connections', 'search_operations', 'get_operation', 'call', 'call_operation', 'list_saved_calls', 'run_saved_call']);
 
   const conns = await rpc({ id: 3, method: 'tools/call', params: { name: 'list_connections', arguments: {} } }, { token: mcpToken });
-  assert.ok(conns.data.result.structuredContent.items.some((x: any) => x.name === 'mcp-api' && x.hasApiReference));
+  assert.ok(conns.data.result.structuredContent.items.some((x: any) => x.name === 'mcp-api' && x.hasApiReference && x.location.type === 'local'));
 
   const found = await rpc({ id: 4, method: 'tools/call', params: { name: 'search_operations', arguments: { connection: 'mcp-api', query: 'thing' } } }, { token: mcpToken });
-  assert.deepEqual(found.data.result.structuredContent.operations[0], { operationId: 'get /things/{id}', method: 'GET', path: '/api/v2/things/{id}', summary: 'Get a thing' });
+  assert.deepEqual(found.data.result.structuredContent.operations[0], {
+    operationId: 'get /things/{id}', method: 'GET', path: '/api/v2/things/{id}', summary: 'Get a thing',
+    parameters: {
+      path: [{ name: 'id', in: 'path', required: true }],
+      query: [{ name: 'hideCompleted', in: 'query', required: false, type: 'boolean', default: 'false' }, { name: 'nextToken', in: 'query', required: false, type: 'string' }],
+      header: [],
+    },
+    pagination: {
+      nextTokenParameter: 'nextToken',
+      instruction: "Preserve all filters and pass the response's nextToken value as nextToken on the next call. Continue until the response omits it.",
+    },
+  });
   const op = await rpc({ id: 5, method: 'tools/call', params: { name: 'get_operation', arguments: { connection: 'mcp-api', method: 'GET', path: '/api/v2/things/{id}' } } }, { token: mcpToken });
   assert.equal(op.data.result.structuredContent.params[0].name, 'id');
+  assert.equal(op.data.result.structuredContent.parameters.query[0].default, 'false');
+  assert.equal(op.data.result.structuredContent.pagination.nextTokenParameter, 'nextToken');
+  assert.equal(op.data.result.structuredContent.callMapping.parameters, 'call_operation.parameters');
+
+  const operationCall = await rpc(
+    { id: 51, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'get /things/{id}', parameters: { id: 'structured/1', hideCompleted: true } } } },
+    { token: mcpToken },
+  );
+  assert.equal(operationCall.data.result.isError, undefined, JSON.stringify(operationCall.data));
+  const operationEcho = JSON.parse(toolText(operationCall).split('\n\n')[1]);
+  assert.equal(operationEcho.path, '/api/v2/things/structured/1');
+  assert.equal(operationEcho.query.hideCompleted, 'true');
+  assert.match(toolText(operationCall), /Pagination:/);
+  const invalidOperationCall = await rpc(
+    { id: 52, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'get /things/{id}', parameters: { id: 'x', unknown: true } } } },
+    { token: mcpToken },
+  );
+  assert.equal(invalidOperationCall.data.result.isError, true);
+  assert.match(toolText(invalidOperationCall), /Unknown parameter: unknown/);
+  const bodyOperationCall = await rpc(
+    { id: 53, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'updateThing', parameters: { id: 'body-1', 'x-mode': 'safe' }, body: { title: 'Updated' } } } },
+    { token: mcpToken },
+  );
+  assert.equal(bodyOperationCall.data.result.isError, undefined, JSON.stringify(bodyOperationCall.data));
+  assert.equal(seen.at(-1)!.headers['x-mode'], 'safe');
+  assert.equal(seen.at(-1)!.headers['content-type'], 'application/json');
+  assert.equal(seen.at(-1)!.body, '{"title":"Updated"}');
+  const invalidEnum = await rpc(
+    { id: 54, method: 'tools/call', params: { name: 'call_operation', arguments: { connection: 'mcp-api', operationId: 'updateThing', parameters: { id: 'body-1', 'x-mode': 'reckless' }, body: {} } } },
+    { token: mcpToken },
+  );
+  assert.equal(invalidEnum.data.result.isError, true);
+  assert.match(toolText(invalidEnum), /x-mode must be one of: safe, fast/);
 
   const called = await rpc(
     { id: 6, method: 'tools/call', params: { name: 'call', arguments: { connection: 'mcp-api', method: 'POST', path: '/api/v2/things/{id}', path_params: { id: 'x/1' }, query: { a: '1' }, body: { hello: 'world' } } } },
@@ -750,7 +889,7 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   assert.equal(JSON.parse(toolText(saved).split('\n\n')[1]).query.p, '2');
 
   const audit = (await req('GET', `/api/audit?connection=${mcpConn.id}&source=mcp`)).data;
-  assert.equal(audit.total, 3);
+  assert.equal(audit.total, 5);
   assert.equal(audit.items[0].savedCall, 'MCP saved');
   assert.equal(audit.items[0].client.name, 'claude-desktop');
 });

@@ -160,6 +160,37 @@ const migrations: string[] = [
   ALTER TABLE connect_flows ADD COLUMN redirect_uri TEXT;
   ALTER TABLE connections ADD COLUMN redirect_uri TEXT;
   `,
+  // Intermittently connected machines establish an outbound WebSocket to this instance.
+  `
+  CREATE TABLE satellites (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    disabled INTEGER NOT NULL DEFAULT 0,
+    catalog_json TEXT,
+    catalog_version TEXT,
+    last_seen_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE satellite_users (
+    satellite_id TEXT NOT NULL REFERENCES satellites(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (satellite_id, user_id)
+  );
+  `,
+  `
+  ALTER TABLE users ADD COLUMN satellite_shadow INTEGER NOT NULL DEFAULT 0;
+  `,
+  `
+  ALTER TABLE connections ADD COLUMN satellite_id TEXT REFERENCES satellites(id) ON DELETE RESTRICT;
+  ALTER TABLE connections ADD COLUMN remote_connection_id TEXT;
+  ALTER TABLE connect_flows ADD COLUMN satellite_id TEXT REFERENCES satellites(id) ON DELETE CASCADE;
+  ALTER TABLE connect_flows ADD COLUMN remote_flow_id TEXT;
+  CREATE INDEX connections_satellite ON connections (satellite_id);
+  `,
 ];
 
 export function initDb() {

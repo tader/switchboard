@@ -11,13 +11,14 @@ import { describe } from '../openapi.ts';
 import { type CallInput, envelope, execute, issueToken, passThrough } from '../proxy.ts';
 import { auditFacets, auditHistogram, callerFrom, getAudit, queryAudit } from '../audit.ts';
 import { getDoc, guidesByService, listDocs } from '../docs.ts';
+import { requestSatellite } from '../satellites.ts';
 
 export const api = new Hono<Env>();
 api.use('*', requireUser);
 
 api.get('/services', (c) => {
   const guides = guidesByService();
-  return c.json(listServices().map((s) => ({ ...s, guides: guides.get(s.id) ?? [] })));
+  return c.json(listServices(c.get('user').id).map((s) => ({ ...s, guides: guides.get(s.id) ?? [] })));
 });
 
 api.get('/docs', (c) => c.json(listDocs(c.get('user').role === 'admin')));
@@ -60,8 +61,14 @@ api.get('/connections/:ref/token', tokenHandler);
 api.post('/connections/:ref/token', tokenHandler);
 
 api.get('/connections/:ref/openapi', async (c) => {
-  const { row, conn, service } = loadConnection(c.get('user').id, c.req.param('ref'));
+  const row = getConnectionRow(c.get('user').id, c.req.param('ref'));
   assertConnectionAccess(c, row.id);
+  if (row.satellite_id) {
+    const d = await requestSatellite(row.satellite_id, c.get('user').id, 'openapi', { connection: row.remote_connection_id, refresh: c.req.query('refresh') === '1' });
+    if (!d) throw notFound('This service has no API description');
+    return c.json(d);
+  }
+  const { conn, service } = loadConnection(c.get('user').id, row.id);
   const d = await describe(service, conn, c.req.query('refresh') === '1');
   if (!d) throw notFound(`${service.name} has no API description`);
   return c.json(d);
@@ -131,18 +138,19 @@ api.post('/call', async (c) => {
 // --- audit trail ---
 
 // Limited tokens (agents) cannot read the trail: it covers all of the user's connections.
+const includeUpstreamActivity = (c: Context<Env>) => c.get('user').role === 'admin' && !!(config.satelliteCentralUrl && config.satelliteToken);
 api.get('/audit', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);
-  return c.json(queryAudit(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), limit: num(q.limit), offset: num(q.offset) }));
+  return c.json(queryAudit(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), limit: num(q.limit), offset: num(q.offset) }, includeUpstreamActivity(c)));
 });
 api.get('/audit/histogram', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);
-  return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }));
+  return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }, includeUpstreamActivity(c)));
 });
-api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id)));
-api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')))));
+api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id, includeUpstreamActivity(c))));
+api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')), includeUpstreamActivity(c))));
 
 // --- saved calls ---
 

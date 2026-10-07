@@ -4,6 +4,8 @@ import { badRequest } from '../http.ts';
 import { checkUpdates, install, parseRepo, uninstall, update } from '../plugins/github.ts';
 import { type PluginRecord, pluginIcon, plugins } from '../plugins/manager.ts';
 import { type Role, createInvite, createUser, deleteUser, getUser, listUsers, pendingInvites, updateUser } from '../users.ts';
+import { createSatellite, deleteSatellite, getSatellite, listSatellites, rotateSatelliteToken, updateSatellite } from '../satellites.ts';
+import { satelliteAgentStatus } from '../satellite-agent.ts';
 
 export const admin = new Hono<Env>();
 admin.use('*', requireUser, requireAdmin);
@@ -73,6 +75,30 @@ admin.delete('/plugins/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+// --- satellites ---
+
+admin.get('/satellites', (c) => c.json(listSatellites()));
+admin.get('/satellite-upstream', (c) => c.json(satelliteAgentStatus()));
+
+admin.get('/satellites/:id', (c) => c.json(getSatellite(c.req.param('id'))));
+
+admin.post('/satellites', async (c) => {
+  const b = await c.req.json<{ name: string; ownerUserId?: string }>();
+  return c.json(createSatellite(b.name, b.ownerUserId ?? c.get('user').id), 201);
+});
+
+admin.patch('/satellites/:id', async (c) => {
+  const b = await c.req.json<{ name?: string; disabled?: boolean; userIds?: string[] }>();
+  return c.json(updateSatellite(c.req.param('id'), b));
+});
+
+admin.post('/satellites/:id/rotate-token', (c) => c.json(rotateSatelliteToken(c.req.param('id'))));
+
+admin.delete('/satellites/:id', (c) => {
+  deleteSatellite(c.req.param('id'));
+  return c.json({ ok: true });
+});
+
 // --- users ---
 
 admin.get('/users', (c) => {
@@ -100,8 +126,8 @@ admin.post('/users/:id/invite', async (c) => {
   return c.json(createInvite(c.req.param('id'), b.validHours ?? 72));
 });
 
-admin.delete('/users/:id', (c) => {
+admin.delete('/users/:id', async (c) => {
   if (c.req.param('id') === c.get('user').id) throw badRequest('You cannot delete yourself');
-  deleteUser(c.req.param('id'));
+  await deleteUser(c.req.param('id'));
   return c.json({ ok: true });
 });

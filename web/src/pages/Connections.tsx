@@ -5,7 +5,7 @@ import { api, type Connection, type FlowResult, type Service } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
-  Alert, Avatar, Badge, Button, Card, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, ServiceIcon, Spinner, useConfirm, useToast,
+  Alert, Avatar, Badge, Button, Card, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, Select, ServiceIcon, Spinner, useConfirm, useToast,
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
 
@@ -183,7 +183,7 @@ export function Connections() {
 function ServiceGrid({ services, onPick, filter = '' }: { services: Service[]; onPick: (s: Service) => void; filter?: string }) {
   const q = filter.trim().toLowerCase();
   const list = services.filter((s) => !q || s.name.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q) || s.id.includes(q));
-  if (!list.length) return <p className="py-8 text-center text-[13px] text-zinc-500">No services match “{filter}”.</p>;
+  if (!list.length) return <p className="py-8 text-center text-[13px] text-zinc-500">{filter ? `No services match “${filter}”.` : 'No services are available on this Switchboard.'}</p>;
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {list.map((s) => (
@@ -219,9 +219,16 @@ export function ConnectDialog({
   const [methodId, setMethodId] = useState<string>('');
   const [values, setValues] = useState<Record<string, any>>({});
   const [search, setSearch] = useState('');
+  const [target, setTarget] = useState('local');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const reconnecting = initial.connection;
+  const targets = useMemo(() => {
+    const satellites = new Map<string, { id: string; name: string; online: boolean }>();
+    for (const s of services) if (s.satellite) satellites.set(s.satellite.id, s.satellite);
+    return [{ id: 'local', name: 'This Switchboard', online: true }, ...[...satellites.values()].sort((a, b) => a.name.localeCompare(b.name))];
+  }, [services]);
+  const targetServices = services.filter((s) => target === 'local' ? !s.satellite : s.satellite?.id === target);
 
   const choose = (s: Service, preferMethod?: string, config?: Record<string, any>) => {
     setService(s);
@@ -235,6 +242,7 @@ export function ConnectDialog({
   useEffect(() => {
     if (!open) return;
     setSearch('');
+    setTarget(initial.service?.satellite?.id ?? initial.connection?.satellite?.id ?? 'local');
     setError('');
     setBusy(false);
     if (initial.service) choose(initial.service, initial.connection?.methodId, initial.connection?.config);
@@ -346,11 +354,16 @@ export function ConnectDialog({
     >
       {step.kind === 'pick' && (
         <div className="space-y-3">
+          {targets.length > 1 && <FormField label="Switchboard" htmlFor="connection-target">
+            <Select id="connection-target" value={target} onChange={(e) => { setTarget(e.target.value); setSearch(''); }}>
+              {targets.map((t) => <option key={t.id} value={t.id}>{t.name}{t.online ? '' : ' (offline)'}</option>)}
+            </Select>
+          </FormField>}
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-400" />
             <Input autoFocus placeholder="Search services" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
           </div>
-          <ServiceGrid services={services} filter={search} onPick={(s) => choose(s)} />
+          <ServiceGrid services={targetServices} filter={search} onPick={(s) => choose(s)} />
         </div>
       )}
 

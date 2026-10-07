@@ -17,8 +17,11 @@ Switchboard is an [MCP](https://modelcontextprotocol.io) server. Claude, Codex, 
 |---|---|
 | `list_connections` | See the connections it may use |
 | `search_operations`, `get_operation` | Look up endpoints in a service's API reference, e.g. "list gmail messages" |
-| `call` | Make a request through a connection; Switchboard adds the credentials |
+| `call_operation` | Call a discovered operation with validated, automatically mapped parameters |
+| `call` | Make a lower-level request for an undocumented or unusual endpoint |
 | `list_saved_calls`, `run_saved_call` | Use the calls you saved in the console |
+
+For documented APIs, use `list_connections` → `search_operations` → `get_operation` → `call_operation`. Switchboard maps named inputs to the operation's path, query string, headers and body. Paginated operations explain how to pass `nextToken`; keep the same filters and continue until the response no longer contains one.
 
 Everything an assistant does is listed under [Activity](/activity?source=mcp) with source **MCP**.
 

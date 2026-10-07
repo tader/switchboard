@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router';
-import { BookOpen, ChevronsUpDown, History, KeyRound, LogOut, Menu as MenuIcon, Moon, Plug, Puzzle, SquareTerminal, Sun, UserRound, Users, X } from 'lucide-react';
+import { BookOpen, ChevronsUpDown, History, KeyRound, LogOut, Menu as MenuIcon, MonitorUp, Moon, Plug, Puzzle, SquareTerminal, Sun, UserRound, Users, X } from 'lucide-react';
 import { api } from '../api';
 import { useSession } from '../auth';
 import { cx } from '../lib';
@@ -76,6 +76,9 @@ export function Layout({ children }: { children: ReactNode }) {
           </NavItem>
           <NavItem to="/admin/users" icon={<Users />}>
             Users
+          </NavItem>
+          <NavItem to="/admin/satellites" icon={<MonitorUp />}>
+            Satellites
           </NavItem>
         </nav>
       )}

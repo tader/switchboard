@@ -2,6 +2,7 @@ import { all, now, one, run } from './db.ts';
 import { hashPassword, randomId, randomToken, sha256, verifyPassword } from './crypto.ts';
 import { config } from './config.ts';
 import { badRequest, notFound } from './http.ts';
+import { requestSatellite } from './satellites.ts';
 
 export type Role = 'admin' | 'user';
 
@@ -46,8 +47,17 @@ const USERNAME = /^[a-zA-Z0-9][a-zA-Z0-9._@-]{0,63}$/;
 export function listUsers(): (User & { connections: number })[] {
   return all(
     `SELECT u.*, (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections
-     FROM users u ORDER BY u.username COLLATE NOCASE`,
+     FROM users u WHERE COALESCE(u.satellite_shadow, 0) = 0 ORDER BY u.username COLLATE NOCASE`,
   ).map((r) => ({ ...toUser(r), connections: r.connections }));
+}
+
+/** Creates the local, non-login principal used to enforce ownership on a satellite. */
+export function ensureSatelliteUser(id: string): User {
+  const found = getUser(id);
+  if (found) return found;
+  const suffix = id.replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || randomToken(8);
+  run('INSERT INTO users (id, username, role, disabled, created_at, satellite_shadow) VALUES (?, ?, ?, 0, ?, 1)', id, `remote-${suffix}`, 'user', now());
+  return getUser(id)!;
 }
 
 export function getUser(id: string): User | undefined {
@@ -89,10 +99,13 @@ function activeAdminCount(excludeId: string) {
   )!.n;
 }
 
-export function deleteUser(id: string) {
+export async function deleteUser(id: string) {
   const user = getUser(id);
   if (!user) throw notFound();
   if (user.role === 'admin' && activeAdminCount(id) === 0) throw badRequest('At least one active administrator is required');
+  const satellites = all<{ satellite_id: string }>('SELECT DISTINCT satellite_id FROM connections WHERE user_id = ? AND satellite_id IS NOT NULL', id);
+  // Do not silently orphan credentials on an offline machine. The administrator can retry when it returns.
+  for (const { satellite_id } of satellites) await requestSatellite(satellite_id, id, 'user.delete', {});
   run('DELETE FROM users WHERE id = ?', id);
 }
 
