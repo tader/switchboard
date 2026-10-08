@@ -237,3 +237,9 @@ Streamable HTTP's SSE response bodies are in scope.
   Container became healthy, public `/healthz` returned `{"ok":true}`, and
   public asset `index-YesGcWWv.js` includes the persisted Normal/Compact switch,
   method icons and Location column. No database or server changes in this update.
+
+- Connections location follow-up: use `Local` in the compact Location column
+  and connection target picker. Normal cards show Local/satellite inline with
+  sign-in metadata, removing the separate satellite line. Add account remains
+  in service headers and is removed from row menus. Web build and scratch
+  light/dark/mobile checks passed, including menu removal and normal labels.

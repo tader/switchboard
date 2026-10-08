@@ -83,7 +83,6 @@ export function Connections() {
     { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
     { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
     { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c) },
-    { label: 'Add account', icon: <Plus />, onSelect: () => setConnect({ service }), hidden: !service },
     { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service },
     'separator',
     { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true },
@@ -138,7 +137,7 @@ export function Connections() {
             <tbody>{visible.map(c => {
               const service = serviceById(c.serviceId);
               const status = c.status === 'ok' ? 'Connected' : c.status === 'error' ? 'Error' : 'Unavailable';
-              const location = c.satellite?.name ?? 'This Switchboard';
+              const location = c.satellite?.name ?? 'Local';
               const LocationIcon = c.satellite ? Laptop : Server;
               return <tr key={c.id} className={cx(highlight === c.id && 'bg-indigo-50/70 dark:bg-indigo-500/10')}>
                 <td><div className="flex min-w-0 items-center gap-2.5" title={c.serviceName}>
@@ -179,8 +178,14 @@ export function Connections() {
                     <Link to={`/console?connection=${c.id}`} className="truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400">{c.account?.label ?? c.name}</Link>
                     <code className="max-w-full truncate rounded bg-zinc-100 px-1.5 py-px font-mono text-[11.5px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.name}</code>
                   </div>
-                  <div className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{c.status === 'ok' ? `${c.methodName} · ${c.lastUsedAt ? `Used ${ago(c.lastUsedAt).toLowerCase()}` : 'Not used yet'}` : <span className="text-rose-600 dark:text-rose-400" title={c.statusMessage ?? undefined}>{c.statusMessage}</span>}</div>
-                  {c.satellite && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500" title={`Satellite: ${c.satellite.name}`}><Laptop className="size-3 shrink-0" aria-hidden="true" /><span className="truncate">{c.satellite.name}</span></div>}
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                    <span className="inline-flex min-w-0 max-w-[45%] items-center gap-1 shrink-0" title={c.satellite ? `Satellite: ${c.satellite.name}${c.satellite.online ? '' : ' (offline)'}` : 'Local'}>
+                      {c.satellite ? <Laptop className="size-3 shrink-0" aria-hidden="true" /> : <Server className="size-3 shrink-0" aria-hidden="true" />}
+                      <span className="truncate">{c.satellite?.name ?? 'Local'}</span>
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span className="truncate" title={c.status === 'ok' ? `${c.methodName} · ${c.lastUsedAt ? `Used ${ago(c.lastUsedAt).toLowerCase()}` : 'Not used yet'}` : c.statusMessage ?? undefined}>{c.status === 'ok' ? `${c.methodName} · ${c.lastUsedAt ? `Used ${ago(c.lastUsedAt).toLowerCase()}` : 'Not used yet'}` : <span className="text-rose-600 dark:text-rose-400">{c.statusMessage}</span>}</span>
+                  </div>
                 </div>
                 {c.status === 'error' && service && <Button size="sm" icon={<RefreshCw className="size-3.5" />} onClick={() => setConnect({ service, connection: c })}>Reconnect</Button>}
                 {c.status === 'unavailable' && <Badge tone="amber">Unavailable</Badge>}
@@ -274,7 +279,7 @@ export function ConnectDialog({
   const targets = useMemo(() => {
     const satellites = new Map<string, { id: string; name: string; online: boolean }>();
     for (const s of services) if (s.satellite) satellites.set(s.satellite.id, s.satellite);
-    return [{ id: 'local', name: 'This Switchboard', online: true }, ...[...satellites.values()].sort((a, b) => a.name.localeCompare(b.name))];
+    return [{ id: 'local', name: 'Local', online: true }, ...[...satellites.values()].sort((a, b) => a.name.localeCompare(b.name))];
   }, [services]);
   const targetServices = services.filter((s) => target === 'local' ? !s.satellite : s.satellite?.id === target);
 
