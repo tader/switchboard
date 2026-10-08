@@ -93,6 +93,10 @@ A service has one or more `authMethods`; the user picks one when connecting. A m
 
 `account.id` identifies the account at the provider: connecting the same account again updates the existing connection instead of adding one.
 
+`ServiceDefinition.kind` identifies the connection protocol (`http` or `mcp`). Omitting it defaults to `http` for existing plugins. Switchboard persists the kind on connections and includes it in service and connection API views.
+
+For `kind: 'mcp'`, `baseUrl` is the exact Streamable HTTP endpoint, including its path and query. Core execution performs MCP negotiation, capability checks, pagination, timeouts and cleanup. Plugins still use only type imports. `ctx.mcp.oauth()` provides the MCP OAuth auth method with endpoint/scopes/client fields, discovery, PKCE and encrypted refresh state. See `plugins/mcp/index.ts` for OAuth, bearer, header and no-auth methods. MCP connections use the scoped MCP API and cannot be called through the HTTP proxy.
+
 Credentials and config are stored encrypted. Secrets the user typed are only returned to plugins, never to the web app.
 
 Credentials are only sent to `allowedHosts` (default: the host of `baseUrl`). Entries may be `*.example.com`. `baseUrl`, `allowedHosts` and `openapi` may be functions of the connection, for services where the user enters the URL.
@@ -128,6 +132,8 @@ Guides can use GitHub-style callouts: a blockquote starting with `[!NOTE]`, `[!T
 
 Files are watched: editing a plugin (built in, or under `<data>/plugins/`) reloads it and its dependents within a second. Each load imports a fresh copy of the plugin directory, so relative imports are reloaded too. Plugins cannot have their own `node_modules`; bundle third-party code or use Node built-ins and `fetch`.
 
-To publish, push the directory to GitHub. Admins install with `owner/repo`, a URL to a folder (`https://github.com/owner/repo/tree/main/plugins/linear`), or `owner/repo@tag`. A repository may contain several plugins at the top level or under `plugins/`; all are installed. *Check for updates* compares the installed commit with the branch or tag it came from.
+To publish, push the directory to GitHub. Admins install with `owner/repo`, a URL to a folder (`https://github.com/owner/repo/tree/main/plugins/linear`), or `owner/repo@tag`. A repository may contain several plugins at the top level or under `plugins/`; all are installed. *Check for updates* compares the installed commit with the branch or tag it came from. When updates are available, it becomes *Update all*, showing the count. This updates every available plugin on its own tracked ref, regardless of the search filter. Updates run one at a time; failures are reported separately and can be retried.
+
+Use **Update from…** on an installed plugin to change its branch, tag, or commit. The choice is remembered for subsequent updates, including when both refs point to the same commit. **Use default branch** returns to the repository's default branch. Only the selected plugin's files change; its dependents reload. Settings and connections remain in place. A failed activation restores the previous files and source, but cannot undo external side effects performed by plugin code.
 
 Plugins run in Switchboard process with full access. Only install plugins you trust.

@@ -114,6 +114,7 @@ export function Layout({ children }: { children: ReactNode }) {
             },
           ]}
         />
+        <div className="px-2 pt-2 text-[11px] text-zinc-500 dark:text-zinc-400">Version {import.meta.env.VITE_APP_VERSION}</div>
       </div>
     </div>
   );

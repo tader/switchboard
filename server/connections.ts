@@ -1,4 +1,5 @@
 import { callbackUrl } from './config.ts';
+import { connectionChanged } from './connection-events.ts';
 import { decrypt, encrypt, randomId, randomToken } from './crypto.ts';
 import { all, now, one, run } from './db.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
@@ -8,6 +9,7 @@ import type { User } from './users.ts';
 import { getSatellite, parseRemoteServiceId, remoteServiceId, requestSatellite, satelliteService, servicesForUser } from './satellites.ts';
 
 export interface ConnectionView {
+  kind: 'http' | 'mcp';
   id: string;
   name: string;
   serviceId: string;
@@ -35,6 +37,7 @@ const NAME = /^[a-zA-Z0-9][a-zA-Z0-9._@+-]{0,99}$/;
 function rowToConnection(r: any): Connection {
   return {
     id: r.id,
+    kind: r.kind ?? 'http',
     name: r.name,
     serviceId: r.service_id,
     methodId: r.method_id,
@@ -72,6 +75,7 @@ export function toView(r: any): ConnectionView {
     const method = remote?.methods?.find((m: any) => m.id === conn.methodId);
     const offline = !sat?.online;
     return {
+      kind: r.kind ?? 'http',
       id: conn.id, name: conn.name, serviceId: conn.serviceId, serviceName: remote?.name ?? parsed?.serviceId ?? conn.serviceId,
       methodId: conn.methodId, methodName: method?.name ?? conn.methodId, account: conn.account ?? null,
       config: conn.config, status: offline ? 'unavailable' : r.status,
@@ -90,6 +94,7 @@ export function toView(r: any): ConnectionView {
   const unavailable = !service ? 'The plugin providing this service is not active' : !method ? 'This sign-in method is no longer offered' : null;
   return {
     id: conn.id,
+    kind: r.kind ?? 'http',
     name: conn.name,
     serviceId: conn.serviceId,
     serviceName: service?.name ?? conn.serviceId,
@@ -145,6 +150,7 @@ export function renameConnection(userId: string, ref: string, name: string) {
 
 export async function deleteConnection(userId: string, ref: string) {
   const row = getConnectionRow(userId, ref);
+  connectionChanged(row.id);
   if (row.satellite_id) {
     await requestSatellite(row.satellite_id, userId, 'connection.delete', { connection: row.remote_connection_id });
     run('DELETE FROM connections WHERE id = ?', row.id);
@@ -191,6 +197,7 @@ export function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
 // --- connect flows ---
 
 export interface ServiceView {
+  kind: 'http' | 'mcp';
   id: string;
   name: string;
   description?: string;
@@ -204,6 +211,7 @@ export interface ServiceView {
 export function listServices(userId?: string): ServiceView[] {
   const local = [...plugins.services.values()]
     .map(({ service: s, pluginId }) => ({
+      kind: s.kind ?? 'http',
       id: s.id,
       name: s.name,
       description: s.description,
@@ -213,6 +221,7 @@ export function listServices(userId?: string): ServiceView[] {
       methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback })),
     }))
   const remote: ServiceView[] = userId ? servicesForUser(userId).map(({ satellite, service }) => ({
+    kind: service.kind ?? 'http',
     id: remoteServiceId(satellite.id, service.id),
     name: service.name,
     description: service.description,
@@ -258,9 +267,10 @@ export async function startConnect(
   input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string; redirectUri?: string },
 ): Promise<FlowResult> {
   const existingRow = input.connection ? getConnectionRow(user.id, input.connection) : undefined;
+  if (existingRow) connectionChanged(existingRow.id);
   const remoteParsed = existingRow?.satellite_id
     ? parseRemoteServiceId(existingRow.service_id)
-    : parseRemoteServiceId(input.service);
+    : parseRemoteServiceId(existingRow?.service_id ?? input.service ?? '');
   if (remoteParsed) return startRemoteConnect(user, input, existingRow, remoteParsed);
   let existing: Connection | undefined;
   if (input.connection) existing = rowToConnection(getConnectionRow(user.id, input.connection));
@@ -321,21 +331,22 @@ async function startRemoteConnect(
 }
 
 function storeRemoteConnection(user: User, existingRow: any, remote: { satelliteId: string; serviceId: string }, result: any): ConnectionView {
+  if (result.kind !== undefined && result.kind !== 'http' && result.kind !== 'mcp') throw badRequest('The satellite returned an invalid connection kind');
   const t = now();
   const id = existingRow?.id ?? randomId('c');
   const serviceKey = remoteServiceId(remote.satelliteId, remote.serviceId);
   const name = existingRow?.name ?? uniqueName(user.id, result.name || remote.serviceId);
   if (existingRow) {
     run(`UPDATE connections SET method_id = ?, name = ?, account_id = ?, account_label = ?, account_avatar = ?, config_enc = ?,
-         credentials_enc = NULL, status = 'ok', status_message = NULL, updated_at = ?, remote_connection_id = ? WHERE id = ?`,
+         credentials_enc = NULL, status = 'ok', status_message = NULL, updated_at = ?, remote_connection_id = ?, kind = ? WHERE id = ?`,
       result.methodId, result.name ?? name, result.account?.id ?? null, result.account?.label ?? null, result.account?.avatarUrl ?? null,
-      encrypt(result.config ?? {}), t, result.id, id);
+      encrypt(result.config ?? {}), t, result.id, result.kind ?? 'http', id);
   } else {
     run(`INSERT INTO connections (id, user_id, service_id, method_id, name, account_id, account_label, account_avatar, config_enc, credentials_enc,
-         status, created_at, updated_at, satellite_id, remote_connection_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ok', ?, ?, ?, ?)`,
+         status, created_at, updated_at, satellite_id, remote_connection_id, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ok', ?, ?, ?, ?, ?)`,
       id, user.id, serviceKey, result.methodId, name, result.account?.id ?? null, result.account?.label ?? null, result.account?.avatarUrl ?? null,
-      encrypt(result.config ?? {}), t, t, remote.satelliteId, result.id);
+      encrypt(result.config ?? {}), t, t, remote.satelliteId, result.id, result.kind ?? 'http');
   }
   return toView(one('SELECT * FROM connections WHERE id = ?', id));
 }
@@ -413,7 +424,8 @@ export async function completeRedirect(flowId: string, params: Record<string, st
   const { r, service, method, cfg, pending } = loadFlow(flowId, 'redirect');
   if (r.user_id !== user.id) throw badRequest('This sign-in was started by another user');
   run('DELETE FROM connect_flows WHERE id = ?', flowId);
-  if (params.error) throw badRequest(params.error_description || params.error);
+  // MCP validates the issuer even on denied-consent callbacks.
+  if (params.error && service.kind !== 'mcp') throw badRequest(params.error_description || params.error);
   if (!method.callback) throw badRequest('This method does not support redirects');
   const connection = existingConn(user.id, r.connection_id);
   // The token request must name the same redirect URI as the authorization request.
@@ -515,17 +527,17 @@ function storeConnection(user: User, f: FlowInfo, result: Connected): Connection
     run(
       `UPDATE connections SET method_id = ?, config_enc = ?, credentials_enc = ?, account_id = COALESCE(?, account_id),
          account_label = COALESCE(?, account_label), account_avatar = COALESCE(?, account_avatar),
-         status = 'ok', status_message = NULL, updated_at = ?, redirect_uri = ? WHERE id = ?`,
-      f.method.id, encrypt(cfg), encrypt(result.credentials), account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, t, f.redirectUri ?? null, id,
+         status = 'ok', status_message = NULL, updated_at = ?, redirect_uri = ?, kind = ? WHERE id = ?`,
+      f.method.id, encrypt(cfg), encrypt(result.credentials), account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, t, f.redirectUri ?? null, f.service.kind ?? 'http', id,
     );
     if (f.name) renameConnection(user.id, id, f.name);
   } else {
     id = randomId('c');
     const name = uniqueName(user.id, f.name || defaultName(f.service, account?.label));
     run(
-      `INSERT INTO connections (id, user_id, service_id, method_id, name, account_id, account_label, account_avatar, config_enc, credentials_enc, created_at, updated_at, redirect_uri)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, user.id, f.service.id, f.method.id, name, account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, encrypt(cfg), encrypt(result.credentials), t, t, f.redirectUri ?? null,
+      `INSERT INTO connections (id, user_id, service_id, method_id, name, account_id, account_label, account_avatar, config_enc, credentials_enc, created_at, updated_at, redirect_uri, kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, user.id, f.service.id, f.method.id, name, account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, encrypt(cfg), encrypt(result.credentials), t, t, f.redirectUri ?? null, f.service.kind ?? 'http',
     );
   }
   return toView(one('SELECT * FROM connections WHERE id = ?', id));

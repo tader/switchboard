@@ -43,6 +43,8 @@ Keep these working: `HUB_*` environment variables (read after `SWITCHBOARD_*`), 
 
 ## Changing things
 
+- **Implementation checklist:** `development-plan.md` at the repository root. Keep development handoffs outside the end-user `docs/` directory.
+
 - **Database:** migrations are an append-only list in `server/db.ts`. Never edit an existing one; add a new entry.
 - **Plugins:** see `docs/plugins.md`. They may only `import type` from the hub or other plugins (erased at runtime); runtime access goes through `ctx.require()`. They cannot have their own `node_modules`. Each load imports a fresh copy of the plugin folder from `<data>/runtime/`; dependents reload with their dependency.
 - **A service with several sign-in methods** gets one `authMethods` entry each. A method with `callback` is redirect-based, and gets the generic redirect-URI override (paste the address to complete) for free.

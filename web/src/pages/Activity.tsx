@@ -15,6 +15,9 @@ interface Entry {
   client: { tokenId: string; name: string } | null;
   savedCall: string | null;
   method: string | null;
+  mcpOperation: string | null;
+  mcpTarget: string | null;
+  mcpOutcome: string | null;
   url: string | null;
   host: string | null;
   status: number | null;
@@ -379,7 +382,7 @@ export function Activity() {
                             {e.method}
                           </span>
                           <span className="min-w-0 truncate font-mono text-[12px]" title={e.url ?? undefined}>
-                            {path}
+                            {e.mcpOperation ? `${e.mcpOperation}${e.mcpTarget ? ` · ${e.mcpTarget}` : ''}` : path}
                           </span>
                           {e.savedCall && <Badge className="max-w-40 shrink-0 truncate">{e.savedCall}</Badge>}
                         </div>
@@ -387,7 +390,7 @@ export function Activity() {
                       </td>
                       <td className="whitespace-nowrap px-3 py-2">
                         <span className={cx('rounded-md px-1.5 py-0.5 font-mono text-[11px] font-semibold ring-1 ring-inset', statusTone(e))} title={e.error ?? undefined}>
-                          {e.status ?? '—'}
+                          {e.mcpOutcome === 'tool-error' ? 'Tool error' : e.status ?? '—'}
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-zinc-500">{e.durationMs != null ? `${e.durationMs} ms` : '—'}</td>
@@ -455,6 +458,7 @@ function EntryDialog({ id, onClose, onFilter }: { id: number | null; onClose: ()
             <Alert tone="amber">The raw access token was handed out. Requests made with it go to the service directly and are not in this trail.</Alert>
           )}
           <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-1.5">
+            {e.mcpOperation && <><Row label="Operation">{e.mcpOperation}</Row><Row label="Target">{e.mcpTarget ?? '—'}</Row><Row label="Outcome">{e.mcpOutcome}</Row></>}
             <Row label="Status">
               {e.status ?? '—'}
               {e.retried && <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">retried after 401 with refreshed credentials</span>}

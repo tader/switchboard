@@ -191,6 +191,17 @@ const migrations: string[] = [
   ALTER TABLE connect_flows ADD COLUMN remote_flow_id TEXT;
   CREATE INDEX connections_satellite ON connections (satellite_id);
   `,
+  // Preserve the transport even while the providing plugin is disabled.
+  `ALTER TABLE connections ADD COLUMN kind TEXT NOT NULL DEFAULT 'http' CHECK (kind IN ('http', 'mcp'));`,
+  `
+  ALTER TABLE audit_log ADD COLUMN mcp_operation TEXT;
+  ALTER TABLE audit_log ADD COLUMN mcp_target TEXT;
+  ALTER TABLE audit_log ADD COLUMN mcp_outcome TEXT;
+  `,
+  `
+  ALTER TABLE saved_calls ADD COLUMN kind TEXT NOT NULL DEFAULT 'http' CHECK (kind IN ('http', 'mcp'));
+  ALTER TABLE saved_calls ADD COLUMN mcp_request TEXT;
+  `,
 ];
 
 export function initDb() {

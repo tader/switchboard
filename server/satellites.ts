@@ -9,6 +9,8 @@ const REQUEST_TIMEOUT = 120_000;
 const MAX_MESSAGE = 2 * 1024 * 1024;
 
 export interface SatelliteService {
+  kind?: 'http' | 'mcp';
+  mcpExecution?: boolean;
   id: string;
   name: string;
   description?: string;
@@ -159,8 +161,11 @@ function validateCatalog(value: any): { services: SatelliteService[] } {
   const services = value.services.map((s: any) => {
     if (!s || typeof s.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(s.id) || seen.has(s.id)) throw new Error('Invalid or duplicate service id');
     if (typeof s.name !== 'string' || !s.name.trim() || !Array.isArray(s.methods) || s.methods.length > 20) throw new Error(`Invalid service ${s.id}`);
+    if (s.kind !== undefined && s.kind !== 'http' && s.kind !== 'mcp') throw new Error(`Invalid service kind for ${s.id}`);
     seen.add(s.id);
     return {
+      kind: s.kind ?? 'http',
+      mcpExecution: s.kind === 'mcp' && s.mcpExecution === true,
       id: s.id,
       name: s.name.slice(0, 100),
       description: typeof s.description === 'string' ? s.description.slice(0, 500) : undefined,
@@ -268,7 +273,8 @@ export function attachSatelliteWebSockets(server: Server) {
   };
 }
 
-export async function requestSatellite<T>(satelliteId: string, userId: string, operation: string, payload: unknown, timeoutMs = REQUEST_TIMEOUT): Promise<T> {
+export async function requestSatellite<T>(satelliteId: string, userId: string, operation: string, payload: unknown, timeoutMs = REQUEST_TIMEOUT, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
   if (!userCanUseSatellite(userId, satelliteId)) throw new HttpError(403, 'You cannot use this satellite');
   const satellite = getSatellite(satelliteId);
   const session = sessions.get(satelliteId);
@@ -280,12 +286,26 @@ export async function requestSatellite<T>(satelliteId: string, userId: string, o
   const requestId = randomId('sr');
   const deadline = now() + Math.min(Math.max(timeoutMs, 1), REQUEST_TIMEOUT);
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const cancel = () => {
       session.pending.delete(requestId);
-      session.socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'cancel', requestId }));
+      if (session.socket.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'cancel', requestId }));
+    };
+    const abort = () => {
+      clearTimeout(timer);
+      cancel();
+      signal?.removeEventListener('abort', abort);
+      reject(new HttpError(499, 'Request cancelled; the upstream outcome may be unknown'));
+    };
+    const timer = setTimeout(() => {
+      cancel();
+      signal?.removeEventListener('abort', abort);
       reject(new HttpError(504, `Request to ${satellite.name} timed out; the outcome may be unknown`));
     }, deadline - now());
-    session.pending.set(requestId, { resolve, reject, timer });
+    session.pending.set(requestId, {
+      resolve: value => { signal?.removeEventListener('abort', abort); resolve(value); },
+      reject: error => { signal?.removeEventListener('abort', abort); reject(error); }, timer,
+    });
+    signal?.addEventListener('abort', abort, { once: true });
     session.socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'request', requestId, userId, operation, deadline, payload }));
   });
 }

@@ -1,0 +1,6 @@
+{
+  "id": "mcp",
+  "name": "MCP",
+  "version": "1.0.0",
+  "description": "Connect to an HTTP MCP server"
+}

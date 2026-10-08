@@ -9,6 +9,7 @@ import { KeyValueEditor } from '../components/forms';
 import { Alert, Badge, Button, CopyButton, Dialog, FormField, IconButton, Input, Menu, ServiceIcon, Spinner, Tabs, Textarea, useConfirm, useToast } from '../components/ui';
 import { METHOD_COLORS, bytes, copy, cx, shellQuote, useResource } from '../lib';
 import { JsonView } from '../components/JsonView';
+import { McpConsole } from './McpConsole';
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -83,6 +84,7 @@ export function Console() {
   }, [savedParam, saved.data]);
 
   const loadSaved = (s: SavedCall) => {
+    if (s.kind === 'mcp') { if (s.connectionId) setParams({ connection: s.connectionId, saved: s.id }, { replace: true }); return; }
     setDraft({ method: s.method, url: s.url, pathParams: s.pathParams, query: s.query, headers: s.headers, body: s.body });
     setCurrent(s);
     setOperation(null);
@@ -141,6 +143,7 @@ export function Console() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (connection?.kind === 'mcp') return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
         send();
@@ -204,6 +207,7 @@ export function Console() {
   }
 
   const service = services.data?.find((s) => s.id === connection?.serviceId);
+  if (connection?.kind === 'mcp') return <McpConsole key={connection.id} connection={connection} connections={usable} onConnection={setConnection} />;
   const groups = new Map<string, Connection[]>();
   for (const c of usable) groups.set(c.serviceName, [...(groups.get(c.serviceName) ?? []), c]);
 
@@ -256,7 +260,7 @@ export function Console() {
       />
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         {side === 'saved' ? (
-          <SavedList calls={saved.data ?? []} connections={usable} currentId={current?.id} onPick={loadSaved} onDelete={deleteSaved} />
+          <SavedList calls={(saved.data ?? []).filter(s => s.kind !== 'mcp')} connections={usable} currentId={current?.id} onPick={loadSaved} onDelete={deleteSaved} />
         ) : !connection?.hasOpenapi ? (
           <p className="p-4 text-[13px] text-zinc-500">{connection?.serviceName} has no API description.</p>
         ) : description === 'loading' || description === undefined ? (

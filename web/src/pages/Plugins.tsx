@@ -4,11 +4,11 @@ import { api, type Field, type PluginInfo } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
-  Alert, Badge, Button, Card, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, ServiceIcon, Spinner, Switch, useConfirm, useToast,
+  Alert, Badge, Button, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, ServiceIcon, Spinner, Switch, Table, useConfirm, useToast,
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
 
-type UpdateInfo = { id: string; current: string; latest?: string; updateAvailable: boolean; error?: string };
+type UpdateInfo = { id: string; ref: string | null; current: string; latest?: string; updateAvailable: boolean; error?: string };
 
 const STATUS: Record<PluginInfo['status'], { label: string; tone: 'green' | 'red' | 'amber' | 'neutral' }> = {
   active: { label: 'Active', tone: 'green' },
@@ -21,11 +21,17 @@ export function Plugins() {
   const toast = useToast();
   const confirm = useConfirm();
   const plugins = useResource(() => api<PluginInfo[]>('/admin/plugins'));
+  const [filter, setFilter] = useState('');
+  const [details, setDetails] = useState<PluginInfo | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [settings, setSettings] = useState<PluginInfo | null>(null);
   const [logs, setLogs] = useState<PluginInfo | null>(null);
+  const [updateFrom, setUpdateFrom] = useState<PluginInfo | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateInfo>>({});
   const [checking, setChecking] = useState(false);
+  const [updatingAll, setUpdatingAll] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState({ current: 0, total: 0 });
+  const [updateErrors, setUpdateErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
   const run = async (id: string, fn: () => Promise<unknown>, done?: string) => {
@@ -43,15 +49,51 @@ export function Plugins() {
 
   const checkUpdates = async () => {
     setChecking(true);
+    setUpdateErrors([]);
     try {
       const list = await api<UpdateInfo[]>('/admin/plugins/check-updates', { method: 'POST' });
       setUpdates(Object.fromEntries(list.map((u) => [u.id, u])));
-      const n = list.filter((u) => u.updateAvailable).length;
+      const n = list.filter(u => u.updateAvailable && plugins.data?.some(p => p.id === u.id && p.source?.commit === u.current && (p.source?.ref ?? null) === u.ref)).length;
       toast(list.length ? (n ? `${n} update${n > 1 ? 's' : ''} available` : 'Everything is up to date') : 'No plugins installed from GitHub', 'info');
     } catch (e: any) {
       toast(e.message, 'error');
     } finally {
       setChecking(false);
+    }
+  };
+
+  const updateFor = (plugin: PluginInfo) => {
+    const checked = updates[plugin.id];
+    return plugin.source && checked?.current === plugin.source.commit && checked.ref === (plugin.source.ref ?? null) ? checked : undefined;
+  };
+  const availableUpdates = (plugins.data ?? []).filter(p => updateFor(p)?.updateAvailable);
+  const updateAll = async () => {
+    if (updatingAll || busy || checking || !availableUpdates.length) return;
+    const queue = [...availableUpdates];
+    setUpdatingAll(true);
+    setUpdateErrors([]);
+    let succeeded = 0;
+    const errors: string[] = [];
+    try {
+      for (const [index, plugin] of queue.entries()) {
+        setUpdateProgress({ current: index + 1, total: queue.length });
+        setBusy(plugin.id);
+        try {
+          // Omit ref to retain each plugin's own tracked branch/tag/commit.
+          const result = await api<{ plugin: PluginInfo }>(`/admin/plugins/${plugin.id}/update`, { method: 'POST' });
+          plugins.setData(list => list?.map(p => p.id === plugin.id ? result.plugin : p));
+          setUpdates(prev => { const next = { ...prev }; delete next[plugin.id]; return next; });
+          succeeded++;
+        } catch (error: any) {
+          errors.push(`${plugin.name}: ${error.message}`);
+          setUpdateErrors([...errors]);
+        }
+      }
+      toast(`${succeeded} plugin${succeeded === 1 ? '' : 's'} updated${errors.length ? `; ${errors.length} failed` : ''}`, errors.length ? 'error' : 'success');
+    } finally {
+      setBusy(null);
+      setUpdatingAll(false);
+      plugins.reload();
     }
   };
 
@@ -63,15 +105,18 @@ export function Plugins() {
         title="Plugins"
         actions={
           <>
-            <Button icon={<RefreshCw className="size-4" />} loading={checking} onClick={checkUpdates}>
+            {availableUpdates.length || updatingAll ? <Button icon={<ArrowUpCircle className="size-4" />} loading={updatingAll} disabled={checking || !!busy || updatingAll} onClick={updateAll}>
+              {updatingAll ? `Updating ${updateProgress.current}/${updateProgress.total}…` : `Update all (${availableUpdates.length})`}
+            </Button> : <Button icon={<RefreshCw className="size-4" />} loading={checking} disabled={checking || !!busy || updatingAll} onClick={checkUpdates}>
               Check for updates
-            </Button>
-            <Button variant="primary" icon={<Download className="size-4" />} onClick={() => setInstallOpen(true)}>
+            </Button>}
+            <Button variant="primary" icon={<Download className="size-4" />} disabled={updatingAll} onClick={() => setInstallOpen(true)}>
               Install
             </Button>
           </>
         }
       />
+      {updateErrors.length > 0 && <Alert><ul className="space-y-1">{updateErrors.map((error, i) => <li key={i}>{error}</li>)}</ul></Alert>}
       {plugins.loading && !plugins.data ? (
         <div className="flex justify-center py-20">
           <Spinner className="size-5" />
@@ -79,63 +124,38 @@ export function Plugins() {
       ) : !plugins.data?.length ? (
         <Empty icon={<Puzzle className="size-5" />} title="No plugins" action={<Button variant="primary" onClick={() => setInstallOpen(true)}>Install from GitHub</Button>} />
       ) : (
-        <div className="grid gap-3">
-          {plugins.data.map((p) => {
+        <div className="space-y-3">
+          <div className="flex items-center gap-3"><Input aria-label="Search plugins" placeholder="Search plugins…" value={filter} onChange={e => setFilter(e.target.value)} className="max-w-sm" /><span className="shrink-0 text-xs text-zinc-500">{plugins.data.filter(p => `${p.name} ${p.description ?? ''} ${p.id} ${p.services.map(s => s.name).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())).length} of {plugins.data.length}</span></div>
+          <Table label="Plugins"><thead><tr>
+            <th scope="col">Plugin</th>
+            <th scope="col" className="hidden w-20 sm:table-cell">Version</th>
+            <th scope="col" className="w-24">Status</th>
+            <th scope="col" className="hidden w-[28%] lg:table-cell">Source</th>
+            <th scope="col" className="w-24 sm:w-32"><span className="sr-only">Actions</span></th>
+          </tr></thead><tbody>
+          {plugins.data.filter(p => `${p.name} ${p.description ?? ''} ${p.id} ${p.services.map(s => s.name).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())).map((p) => {
             const st = STATUS[p.status];
-            const upd = updates[p.id];
+            const upd = updateFor(p);
             return (
-              <Card key={p.id} className={cx('p-4', !p.enabled && 'opacity-70')}>
-                <div className="flex items-start gap-3.5">
-                  <ServiceIcon icon={p.icon} name={p.name} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-semibold">{p.name}</h2>
-                      <span className="font-mono text-xs text-zinc-400">{p.version}</span>
-                      <Badge tone={st.tone}>{st.label}</Badge>
-                      {upd?.updateAvailable && <Badge tone="indigo">Update available</Badge>}
-                    </div>
-                    {p.description && <p className="mt-0.5 text-[13px] text-zinc-500 dark:text-zinc-400">{p.description}</p>}
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-                      {p.source ? (
-                        <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-zinc-800 dark:hover:text-zinc-200">
-                          <GitBranch className="size-3.5" />
-                          {p.source.repo}
-                          {p.source.path && `/${p.source.path}`}
-                          <span className="font-mono">@{p.source.ref ?? p.source.commit.slice(0, 7)}</span>
-                        </a>
-                      ) : (
-                        <span>Built in</span>
-                      )}
-                      {p.overridesBuiltin && <span>Replaces the built-in version</span>}
-                      {p.dependencies.length > 0 && (
-                        <span className="flex items-center gap-1">
-                          Uses
-                          {p.dependencies.map((d) => (
-                            <code key={d} className={cx('rounded bg-zinc-100 px-1 font-mono text-[11px] dark:bg-zinc-800', byId.get(d)?.status !== 'active' && 'text-rose-600 dark:text-rose-400')}>
-                              {d}
-                            </code>
-                          ))}
-                        </span>
-                      )}
-                      {p.services.length > 0 && <span>Provides {p.services.map((s) => s.name).join(', ')}</span>}
-                    </div>
-                    {p.error && p.status !== 'disabled' && (
-                      <Alert tone={p.status === 'blocked' ? 'amber' : 'red'} className="mt-3 font-mono text-xs">
-                        {p.error}
-                      </Alert>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
+              <tr key={p.id} className={cx(!p.enabled && 'opacity-70')}>
+                <td><div className="flex min-w-0 items-center gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0 flex-1">
+                  <button type="button" onClick={() => setDetails(p)} className="block max-w-full truncate font-semibold hover:text-indigo-600 dark:hover:text-indigo-400" title={p.name}>{p.name}</button>
+                  {p.description && <div className="truncate text-xs text-zinc-500" title={p.description}>{p.description}</div>}
+                  {p.error && p.status !== 'disabled' && <div className="truncate text-xs text-rose-600 dark:text-rose-400" title={p.error}>{p.error}</div>}
+                </div></div></td>
+                <td className="hidden font-mono text-xs text-zinc-500 sm:table-cell">{p.version}</td>
+                <td><Badge tone={st.tone}>{st.label}</Badge>{upd?.updateAvailable && <div className="mt-1"><Badge tone="indigo">Update</Badge></div>}</td>
+                <td className="hidden lg:table-cell">{p.source ? <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="block min-w-0 hover:text-indigo-600 dark:hover:text-indigo-400" title={`${p.source.repo}/${p.source.path}`}><span className="block truncate text-xs">{p.source.repo}{p.source.path && `/${p.source.path}`}</span><span className="block truncate text-xs text-zinc-500">{p.source.ref ?? 'Default branch'} <span className="font-mono">@{p.source.commit.slice(0, 7)}</span></span></a> : <span className="text-xs text-zinc-500">Built in</span>}</td>
+                <td><div className="flex items-center justify-end gap-1">
+
                     {busy === p.id && <Spinner className="mr-1" />}
                     {p.hasSettings && (
-                      <Button size="sm" icon={<Settings2 className="size-3.5" />} onClick={() => setSettings(p)}>
-                        Settings
-                      </Button>
+                      <IconButton label={`Settings for ${p.name}`} disabled={updatingAll} onClick={() => setSettings(p)}><Settings2 className="size-3.5" /></IconButton>
                     )}
                     <Switch
-                      label={p.enabled ? 'Disable' : 'Enable'}
+                      label={`${p.enabled ? 'Disable' : 'Enable'} ${p.name}`}
                       checked={p.enabled}
-                      disabled={busy === p.id}
+                      disabled={updatingAll || busy === p.id}
                       onChange={async (v) => {
                         if (!v && p.dependents.length) {
                           const ok = await confirm({
@@ -150,7 +170,7 @@ export function Plugins() {
                     />
                     <Menu
                       trigger={(t) => (
-                        <IconButton label="Actions" {...t}>
+                        <IconButton label={`Actions for ${p.name}`} disabled={updatingAll || busy === p.id} {...t}>
                           <MoreHorizontal className="size-4" />
                         </IconButton>
                       )}
@@ -166,6 +186,7 @@ export function Plugins() {
                               toast(r.from === r.to ? `${p.name} is up to date` : `${p.name} updated to ${r.plugin.version}`);
                             }),
                         },
+                        { label: 'Update from…', icon: <GitBranch />, hidden: !p.source, onSelect: () => setUpdateFrom(p) },
                         { label: 'Reload', icon: <RefreshCw />, onSelect: () => run(p.id, () => api(`/admin/plugins/${p.id}/reload`, { method: 'POST' }), `${p.name} reloaded`) },
                         { label: 'Log', icon: <ScrollText />, onSelect: () => setLogs(p) },
                         ...(p.origin === 'installed'
@@ -191,13 +212,25 @@ export function Plugins() {
                           : []),
                       ]}
                     />
-                  </div>
-                </div>
-              </Card>
+                </div></td>
+              </tr>
             );
           })}
+          </tbody></Table>
         </div>
       )}
+      <Dialog open={!!details} onClose={() => setDetails(null)} title={details?.name ?? 'Plugin'}>
+        {details && <div className="space-y-3 text-[13px]">
+          <p className="text-zinc-500">{details.description}</p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+            <dt className="text-zinc-500">Version</dt><dd>{details.version}</dd>
+            <dt className="text-zinc-500">Source</dt><dd className="break-all">{details.source ? <a href={`https://github.com/${details.source.repo}/tree/${details.source.commit}/${details.source.path}`} target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400">{details.source.repo}/{details.source.path} · {details.source.ref ?? 'Default branch'} @{details.source.commit.slice(0, 7)}</a> : 'Built in'}{details.overridesBuiltin && ' · Replaces the built-in version'}</dd>
+            <dt className="text-zinc-500">Uses</dt><dd>{details.dependencies.length ? details.dependencies.map(d => <span key={d} className={cx('mr-2', byId.get(d)?.status !== 'active' && 'text-rose-600 dark:text-rose-400')}>{d}</span>) : 'None'}</dd>
+            <dt className="text-zinc-500">Provides</dt><dd>{details.services.map(s => s.name).join(', ') || 'No services'}</dd>
+          </dl>
+          {details.error && <Alert>{details.error}</Alert>}
+        </div>}
+      </Dialog>
       <InstallDialog
         open={installOpen}
         onClose={() => setInstallOpen(false)}
@@ -208,8 +241,58 @@ export function Plugins() {
         }}
       />
       <SettingsDialog plugin={settings} onClose={() => setSettings(null)} onSaved={() => { setSettings(null); plugins.reload(); toast('Settings saved'); }} />
+      <UpdateDialog plugin={updateFrom} onClose={() => setUpdateFrom(null)} onUpdated={(r) => {
+        setUpdateFrom(null);
+        setUpdates((prev) => { const next = { ...prev }; delete next[r.id]; return next; });
+        plugins.reload();
+        toast(r.fromRef !== r.ref ? `${r.plugin.name} now tracks ${r.ref ?? 'the default branch'}` : r.from === r.to ? `${r.plugin.name} is up to date` : `${r.plugin.name} updated to ${r.plugin.version}`);
+      }} />
       <LogDialog plugin={logs} onClose={() => setLogs(null)} />
     </>
+  );
+}
+
+function UpdateDialog({ plugin, onClose, onUpdated }: { plugin: PluginInfo | null; onClose: () => void; onUpdated: (result: { id: string; from: string; to: string; fromRef: string | null; ref: string | null; plugin: PluginInfo }) => void }) {
+  const [ref, setRef] = useState('');
+  const [useDefault, setUseDefault] = useState(true);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!plugin) return;
+    setRef(plugin.source?.ref ?? '');
+    setUseDefault(!plugin.source?.ref);
+    setError('');
+  }, [plugin]);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      onUpdated(await api(`/admin/plugins/${plugin!.id}/update`, { body: { ref: useDefault ? null : ref.trim() } }));
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open={!!plugin} onClose={() => { if (!busy) onClose(); }} title={`Update ${plugin?.name ?? 'plugin'} from…`}>
+      <form onSubmit={submit} className="space-y-4">
+        <p className="break-all text-[13px] text-zinc-500">{plugin?.source?.repo}{plugin?.source?.path ? `/${plugin.source.path}` : ''}</p>
+        <div className="flex items-center gap-2 text-[13px]">
+          <Switch label="Use default branch" checked={useDefault} disabled={busy} onChange={setUseDefault} />
+          <span>Use default branch</span>
+        </div>
+        {!useDefault && <FormField label="Branch, tag or commit" htmlFor="update-ref" description="Future updates will use this ref.">
+          <Input id="update-ref" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="feature/my-change" spellCheck={false} required disabled={busy} autoFocus />
+        </FormField>}
+        {error && <Alert>{error}</Alert>}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={busy}>Update</Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 

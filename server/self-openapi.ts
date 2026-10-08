@@ -24,11 +24,24 @@ const call = {
   },
 };
 
+const mcpRequest = {
+  type: 'object',
+  properties: {
+    operation: { type: 'string', enum: ['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get', 'completion/complete'] },
+    name: { type: 'string' }, uri: { type: 'string' }, arguments: { type: 'object' },
+    cursor: { type: 'string', description: 'Omit to collect pages; an explicit cursor returns one page' },
+    query: { type: 'string', description: 'Filter tools by name or description' },
+    ref: { type: 'object' }, argument: { type: 'object' }, context: { type: 'object' },
+  },
+};
+
 const saved = {
   type: 'object',
   required: ['name'],
   properties: {
     name: { type: 'string', description: 'Unique per user; saved calls run by name or id' },
+    kind: { type: 'string', enum: ['http', 'mcp'], default: 'http' },
+    mcpRequest: { ...mcpRequest, description: 'For kind=mcp, save tools/call, resources/read or prompts/get' },
     connectionId: { type: 'string' },
     method: { type: 'string', default: 'GET' },
     url: { type: 'string', description: 'Like the call API: relative or absolute, may contain {placeholders}' },
@@ -82,6 +95,12 @@ export function openapiDocument() {
           parameters: [ref, { name: 'force', in: 'query', description: '1 to refresh even if still valid', schema: { type: 'string' } }],
         }),
       },
+      ...Object.fromEntries(['tools/list', 'tools/get', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get', 'completion/complete'].map(operation => [
+        `/api/connections/{ref}/mcp/${operation}`, { post: op('MCP connections', `MCP ${operation}`, {
+          parameters: [ref], requestBody: json(mcpRequest, {}),
+          description: 'Runs only on an MCP connection accessible to this token. Returns the MCP result, including rich content and isError. tools/get accepts name and returns its schema. tools/list accepts query. Protocol and authorization errors use HTTP error statuses; tool isError results use HTTP 200.',
+        }) },
+      ])),
       '/api/connections/{ref}/openapi': { get: op('Connections', 'Operations from the service API description', { parameters: [ref] }) },
       '/api/connect/{flow}/complete': {
         post: op('Connections', 'Complete a sign-in with the address the provider redirected to', {
@@ -106,7 +125,7 @@ export function openapiDocument() {
       },
       '/api/calls/{id}/run': {
         post: op('Saved calls', 'Run a saved call', {
-          description: 'Passes the response through. The body may override connection, pathParams, query, headers and body.',
+          description: 'HTTP calls pass the upstream response through and accept connection, pathParams, query, headers and body overrides. MCP requests return an MCP result and accept connection, arguments (merged) and uri overrides.',
           parameters: [id('Saved call id or name')],
           requestBody: { content: { 'application/json': { schema: { type: 'object' }, example: {} } } },
         }),
@@ -146,7 +165,12 @@ export function openapiDocument() {
         }),
       },
       '/api/admin/plugins/check-updates': { post: op('Admin', 'Check plugins for updates') },
-      '/api/admin/plugins/{id}/update': { post: op('Admin', 'Update a plugin', { parameters: [id('Plugin id')] }) },
+      '/api/admin/plugins/{id}/update': { post: op('Admin', 'Update a plugin', {
+        parameters: [id('Plugin id')],
+        requestBody: { ...json({ type: 'object', properties: {
+          ref: { type: 'string', nullable: true, minLength: 1, description: 'Branch, tag or commit. Omit to keep the tracked ref; null follows the repository default branch. Remembered for future updates.' },
+        } }), required: false },
+      }) },
       '/api/admin/plugins/{id}/reload': { post: op('Admin', 'Reload a plugin', { parameters: [id('Plugin id')] }) },
       '/api/admin/users': {
         get: op('Admin', 'List users'),
