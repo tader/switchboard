@@ -277,3 +277,8 @@ Streamable HTTP's SSE response bodies are in scope.
 - [x] Web typecheck/production build and Docker web-stage build passed.
   Scratch browser checks and screenshot inspection passed in light/dark/mobile
   with the version visible and no browser errors or horizontal overflow.
+- [x] Deployed application commit `eab4672` on 2026-10-08 with `just deploy`.
+  Container health passed before public checks; public health and page returned
+  successfully, and asset `index-8sTzU7RB.js` includes Version 0.1.0.
+  Image SHA256:
+  `040e5afa71188c5a6c8bd298d75b25f1b3d0cdf007984f0f91386fcc0a0dfdbc`.
