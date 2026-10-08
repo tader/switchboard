@@ -29,7 +29,7 @@ Connections are referred to by id or by name, for example `gmail-work`. Names ca
 
 ## Calling a service
 
-There are four ways to use a connection.
+HTTP connections support the four methods below. MCP connections use the scoped MCP endpoints described afterwards.
 
 ### 1. Proxy
 
@@ -88,6 +88,22 @@ Ask again rather than storing it.
 
 > [!NOTE]
 > Calls made with this token go directly to the service, so they do not appear in the activity log. Only the hand-out itself is recorded.
+
+## MCP connections
+
+For a connection with `kind: "mcp"`, send JSON to `POST /api/connections/<id-or-name>/mcp/<operation>`. The operations are `tools/list`, `tools/get`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list`, `prompts/get` and `completion/complete`.
+
+```bash
+curl -H "Authorization: Bearer $SWITCHBOARD_TOKEN" -H "content-type: application/json" \
+  {{publicUrl}}/api/connections/mcp-work/mcp/tools/call \
+  -d '{ "name": "search", "arguments": { "query": "notes" } }'
+```
+
+`tools/list` accepts `query`; `tools/get` accepts `name` and returns the schema. Lists collect pages when `cursor` is omitted; supply a cursor (including an empty string for the first page) to request one page. Reads accept `uri`; prompt requests accept `name` and string-valued `arguments`. Completions accept `ref`, `argument` and optional `context` as defined by MCP.
+
+Responses retain rich content, structured results and `isError`. Tool errors return HTTP 200 with `isError: true`; transport, protocol and authentication failures use error statuses. The proxy and raw token endpoint are for HTTP connections.
+
+Save tool calls, reads and prompts with `POST /api/calls` using `kind: "mcp"`, `connectionId`, `name` and `mcpRequest` (an object with `operation` and its inputs). Run them through `/api/calls/<id-or-name>/run`; `arguments` overrides merge with saved arguments, and `uri` can override a resource URI. Existing saved HTTP calls keep their behavior.
 
 ## Examples
 

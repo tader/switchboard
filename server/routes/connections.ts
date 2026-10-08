@@ -12,6 +12,8 @@ import { type CallInput, envelope, execute, issueToken, passThrough } from '../p
 import { auditFacets, auditHistogram, callerFrom, getAudit, queryAudit } from '../audit.ts';
 import { getDoc, guidesByService, listDocs } from '../docs.ts';
 import { requestSatellite } from '../satellites.ts';
+import { mcpClientMetadata } from '../mcp-auth.ts';
+import { executeMcp, validateMcpInput, type McpInput, type McpOperation } from '../upstream-mcp.ts';
 
 export const api = new Hono<Env>();
 api.use('*', requireUser);
@@ -31,6 +33,27 @@ api.get('/connections/:ref', (c) => {
   assertConnectionAccess(c, row.id);
   return c.json(listConnections(c.get('user').id, [row.id])[0]);
 });
+
+// POST keeps argument values out of query strings and requires same-origin cookie requests.
+api.post('/connections/:ref/mcp/tools/get', async c => {
+  const row = getConnectionRow(c.get('user').id, c.req.param('ref'));
+  assertConnectionAccess(c, row.id);
+  const { name } = await c.req.json();
+  if (typeof name !== 'string' || !name) throw badRequest('MCP tool name is required');
+  const result = await executeMcp(c.get('user'), row.id, { operation: 'tools/list' }, c.req.raw.signal, callerFrom(c, 'call'));
+  const tool = result.tools.find((t: any) => t.name === name);
+  if (!tool) throw notFound('MCP tool not found');
+  return c.json(tool);
+});
+for (const operation of ['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get', 'completion/complete'] as McpOperation[]) {
+  api.post(`/connections/:ref/mcp/${operation}`, async (c) => {
+    const row = getConnectionRow(c.get('user').id, c.req.param('ref')!);
+    assertConnectionAccess(c, row.id);
+    const body = await c.req.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw badRequest('MCP input must be an object');
+    return c.json(await executeMcp(c.get('user'), row.id, { ...body, operation } as McpInput, c.req.raw.signal, callerFrom(c, 'call')));
+  });
+}
 
 api.post('/connections', requireFullAccess, async (c) => {
   const body = await c.req.json();
@@ -156,6 +179,8 @@ api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id
 
 const toSaved = (r: any) => ({
   id: r.id,
+  kind: r.kind,
+  mcpRequest: r.mcp_request ? JSON.parse(r.mcp_request) : null,
   name: r.name,
   connectionId: r.connection_id,
   method: r.method,
@@ -169,10 +194,18 @@ const toSaved = (r: any) => ({
 });
 
 function savedFields(b: any) {
+  const kind = b.kind ?? 'http';
+  if (kind !== 'http' && kind !== 'mcp') throw badRequest('Saved request kind must be http or mcp');
+  if (kind === 'mcp') {
+    validateMcpInput(b.mcpRequest);
+    if (!['tools/call', 'resources/read', 'prompts/get'].includes(b.mcpRequest.operation)) throw badRequest('Save a tool call, resource read or prompt request');
+  }
   const name = String(b.name ?? '').trim();
   if (!name) throw badRequest('Give the call a name');
   const list = (v: any): Pair[] => (Array.isArray(v) ? v.filter((p) => p && (p.key || p.value)).map((p) => ({ key: String(p.key ?? ''), value: String(p.value ?? ''), enabled: p.enabled !== false })) : []);
   return {
+    kind,
+    mcpRequest: kind === 'mcp' ? JSON.stringify(b.mcpRequest) : null,
     name,
     method: String(b.method ?? 'GET').toUpperCase(),
     url: String(b.url ?? ''),
@@ -183,10 +216,11 @@ function savedFields(b: any) {
   };
 }
 
-function savedConnectionId(c: Context<Env>, ref: unknown): string | null {
+function savedConnectionId(c: Context<Env>, ref: unknown, kind?: string): string | null {
   if (!ref) return null;
   const row = getConnectionRow(c.get('user').id, String(ref));
   assertConnectionAccess(c, row.id);
+  if (kind && row.kind !== kind) throw badRequest('The saved request and connection must use the same protocol');
   return row.id;
 }
 
@@ -201,9 +235,9 @@ api.post('/calls', requireFullAccess, async (c) => {
   const f = savedFields(b);
   const id = randomId('s');
   run(
-    `INSERT INTO saved_calls (id, user_id, connection_id, name, method, url, path_params, query, headers, body, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    id, c.get('user').id, savedConnectionId(c, b.connectionId), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), now(),
+    `INSERT INTO saved_calls (id, user_id, connection_id, name, method, url, path_params, query, headers, body, created_at, updated_at, kind, mcp_request)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, c.get('user').id, savedConnectionId(c, b.connectionId, f.kind), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), now(), f.kind, f.mcpRequest,
   );
   return c.json(toSaved(one('SELECT * FROM saved_calls WHERE id = ?', id)), 201);
 });
@@ -223,8 +257,8 @@ api.put('/calls/:id', requireFullAccess, async (c) => {
   const b = await c.req.json();
   const f = savedFields(b);
   run(
-    `UPDATE saved_calls SET connection_id = ?, name = ?, method = ?, url = ?, path_params = ?, query = ?, headers = ?, body = ?, updated_at = ? WHERE id = ?`,
-    savedConnectionId(c, b.connectionId), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), r.id,
+    `UPDATE saved_calls SET connection_id = ?, name = ?, method = ?, url = ?, path_params = ?, query = ?, headers = ?, body = ?, updated_at = ?, kind = ?, mcp_request = ? WHERE id = ?`,
+    savedConnectionId(c, b.connectionId, f.kind), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), f.kind, f.mcpRequest, r.id,
   );
   return c.json(toSaved(one('SELECT * FROM saved_calls WHERE id = ?', r.id)));
 });
@@ -245,6 +279,11 @@ api.post('/calls/:id/run', async (c) => {
   if (!connection) throw badRequest('This saved call has no connection; pass one as "connection"');
   const row = getConnectionRow(c.get('user').id, connection);
   assertConnectionAccess(c, row.id);
+  if (s.kind === 'mcp') {
+    if (o.arguments !== undefined && (!o.arguments || typeof o.arguments !== 'object' || Array.isArray(o.arguments))) throw badRequest('MCP arguments must be an object');
+    const input = { ...s.mcpRequest, ...(o.arguments === undefined ? {} : { arguments: { ...s.mcpRequest.arguments, ...o.arguments } }), ...(o.uri === undefined ? {} : { uri: o.uri }) };
+    return c.json(await executeMcp(c.get('user'), row.id, input, c.req.raw.signal, callerFrom(c, 'saved-call', s.name)));
+  }
   const merge = (base: Pair[], extra: unknown) => {
     const m = new Map(pairs(base).map(([k, v]) => [k.toLowerCase(), [k, v] as [string, string]]));
     for (const [k, v] of pairs(extra)) m.set(k.toLowerCase(), [k, v]);
@@ -290,6 +329,7 @@ proxy.all('/:ref/*', requireUser, proxyHandler);
 // --- OAuth redirect target ---
 
 export const oauth = new Hono<Env>();
+oauth.get('/mcp-client-metadata', (c) => c.json(mcpClientMetadata));
 
 oauth.get('/callback', async (c) => {
   const params = Object.fromEntries(new URL(c.req.url).searchParams.entries());

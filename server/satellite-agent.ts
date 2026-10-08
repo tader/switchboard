@@ -7,6 +7,7 @@ import { describe } from './openapi.ts';
 import { ensureSatelliteUser } from './users.ts';
 import WebSocket from 'ws';
 import { all, run } from './db.ts';
+import { executeMcp } from './upstream-mcp.ts';
 
 const PROTOCOL = 1;
 const auditSources = new Set<AuditSource>(['proxy', 'call', 'saved-call', 'console', 'token', 'mcp']);
@@ -49,6 +50,7 @@ function catalogue() {
       ...s,
       methods: s.methods,
       hasOpenapi: !!plugins.service(s.id)?.openapi,
+      mcpExecution: s.kind === 'mcp',
     })),
   };
 }
@@ -78,9 +80,11 @@ function upstreamCaller(userId: string, raw: any): Caller {
   };
 }
 
-async function handle(userId: string, operation: string, payload: any) {
+async function handle(userId: string, operation: string, payload: any, signal?: AbortSignal) {
   const user = ensureSatelliteUser(userId);
   switch (operation) {
+    case 'mcp':
+      return executeMcp(user, String(payload.connection), payload.input, signal, upstreamCaller(user.id, payload.caller));
     case 'connect.start':
       return startConnect(user, payload);
     case 'connect.complete':
@@ -137,6 +141,7 @@ export function startSatelliteAgent() {
   let retry: NodeJS.Timeout | undefined;
   let retryMs = 1_000;
   let sentCatalog = '';
+  const inFlight = new Map<string, AbortController>();
 
   const connect = () => {
     if (stopped) return;
@@ -169,16 +174,24 @@ export function startSatelliteAgent() {
         socket?.close(1007, 'Invalid JSON');
         return;
       }
-      if (message.protocol !== PROTOCOL || message.type !== 'request') return;
+      if (message.protocol !== PROTOCOL) return;
+      if (message.type === 'cancel') { inFlight.get(message.requestId)?.abort(); return; }
+      if (message.type !== 'request') return;
+      const controller = new AbortController();
+      inFlight.set(message.requestId, controller);
       try {
         if (Date.now() > Number(message.deadline)) throw Object.assign(new Error('Request deadline expired'), { status: 504 });
-        const result = await handle(String(message.userId), String(message.operation), message.payload);
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(Math.max(1, Number(message.deadline) - Date.now()))]);
+        const result = await handle(String(message.userId), String(message.operation), message.payload, signal);
         socket?.send(JSON.stringify({ protocol: PROTOCOL, type: 'result', requestId: message.requestId, result }));
       } catch (e: any) {
         socket?.send(JSON.stringify({ protocol: PROTOCOL, type: 'error', requestId: message.requestId, status: e?.status ?? 502, error: e?.message ?? String(e) }));
+      } finally {
+        inFlight.delete(message.requestId);
       }
     });
     socket.addEventListener('close', () => {
+      for (const controller of inFlight.values()) controller.abort();
       if (heartbeat) clearInterval(heartbeat);
       if (catalogTimer) clearInterval(catalogTimer);
       sentCatalog = '';
@@ -193,6 +206,7 @@ export function startSatelliteAgent() {
   };
   connect();
   return () => {
+    for (const controller of inFlight.values()) controller.abort();
     stopped = true;
     Object.assign(agentStatus, { state: 'offline', connectedAt: null, nextRetryAt: null });
     if (retry) clearTimeout(retry);

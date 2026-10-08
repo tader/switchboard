@@ -39,11 +39,26 @@ after(() => {
   fs.rmSync(scratch, { recursive: true, force: true });
 });
 
+let waitingMcp = false;
+
 test('a real satellite keeps credentials local and executes a per-user connection', async () => {
   upstream = http.createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
     response.writeHead(200, { 'content-type': 'application/json' });
+    if (request.url === '/mcp') {
+      const msg = JSON.parse(body);
+      assert.equal(request.headers.authorization, 'Bearer satellite-mcp-secret');
+      if (msg.method === 'tools/call' && msg.params.name === 'wait') { waitingMcp = true; return; }
+      const modern = msg.params?._meta?.['io.modelcontextprotocol/protocolVersion'] === '2026-07-28';
+      const result = msg.method === 'server/discover' ? { supportedVersions: ['2026-07-28'], capabilities: { tools: {}, resources: {} }, _meta: { 'io.modelcontextprotocol/serverInfo': { name: 'Satellite MCP', version: '1' } } }
+        : msg.method === 'tools/list' ? { tools: [{ name: 'echo', inputSchema: { type: 'object' } }], ttlMs: 0, cacheScope: 'private' }
+        : msg.method === 'resources/list' ? { resources: [{ name: 'notes', uri: 'file:///satellite-notes' }], ttlMs: 0, cacheScope: 'private' }
+        : msg.method === 'resources/read' ? { contents: [{ uri: msg.params.uri, text: 'Satellite note' }], ttlMs: 0, cacheScope: 'private' }
+        : { content: [{ type: 'text', text: 'Satellite MCP result' }], structuredContent: msg.params.arguments };
+      response.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { ...(modern ? { resultType: 'complete' } : {}), ...result } }));
+      return;
+    }
     if (request.url === '/spec.json') {
       response.end(JSON.stringify({ openapi: '3.0.0', info: { title: 'Satellite test', version: '1' }, paths: { '/local': { post: { operationId: 'localCall', summary: 'Call the local API', responses: { 200: { description: 'OK' } } } } } }));
       return;
@@ -163,6 +178,31 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   const satelliteMcpAudit = await satelliteRequest('GET', '/api/audit?source=mcp');
   assert.equal(satelliteMcpAudit.data.total, 1);
   assert.equal(satelliteMcpAudit.data.items[0].client.name, 'Upstream: Satellite MCP test');
+
+  const remoteMcp = await request('POST', '/api/connections', {
+    service: `sat/${enrolled.data.satellite.id}/mcp`, method: 'token',
+    config: { endpoint: `${upstreamUrl}/mcp`, token: 'satellite-mcp-secret' },
+  });
+  assert.equal(remoteMcp.status, 200, JSON.stringify(remoteMcp.data));
+  const remoteMcpId = remoteMcp.data.connection.id;
+  assert.equal(remoteMcp.data.connection.kind, 'mcp');
+  assert.equal(remoteMcp.data.connection.config.token, undefined);
+  const remoteTools = await request('POST', `/api/connections/${remoteMcpId}/mcp/tools/list`, {});
+  assert.equal(remoteTools.status, 200, JSON.stringify(remoteTools.data));
+  assert.equal(remoteTools.data.tools[0].name, 'echo');
+  const remoteRich = await mcp('call_mcp_tool', { connection: remoteMcpId, name: 'echo', arguments: { remote: true } });
+  assert.deepEqual(remoteRich.result.structuredContent, { remote: true });
+  const nativeResources = await fetch(`${centralUrl}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${mcpToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'resources/list' }) }).then(r => r.json());
+  assert.equal(nativeResources.result.resources[0].uri, `switchboard-mcp:${remoteMcpId}:file:///satellite-notes`);
+  const savedRemote = await request('POST', '/api/calls', { kind: 'mcp', name: 'satellite-read', connectionId: remoteMcpId, mcpRequest: { operation: 'resources/read', uri: 'file:///satellite-notes' } });
+  assert.equal(savedRemote.status, 201);
+  const savedResult = await request('POST', `/api/calls/${savedRemote.data.id}/run`, {});
+  assert.equal(savedResult.data.contents[0].text, 'Satellite note');
+  assert.equal(fs.readFileSync(path.join(centralDir, 'switchboard.db')).includes(Buffer.from('satellite-mcp-secret')), false);
+  const pendingMcp = request('POST', `/api/connections/${remoteMcpId}/mcp/tools/call`, { name: 'wait' });
+  await waitFor(() => waitingMcp);
+  assert.equal((await request('DELETE', `/api/connections/${remoteMcpId}`)).status, 200);
+  assert.equal((await pendingMcp).status, 499, 'connection deletion cancels an in-flight satellite MCP request');
 
   const centralDb = fs.readFileSync(path.join(centralDir, 'switchboard.db'));
   assert.equal(centralDb.includes(Buffer.from('satellite-only-secret')), false, 'central database contains no local credential plaintext');

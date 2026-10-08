@@ -13,6 +13,8 @@ import { describe } from './openapi.ts';
 import { execute } from './proxy.ts';
 import { isApiToken, tokenUser } from './users.ts';
 import { requestSatellite } from './satellites.ts';
+import { executeMcp, type McpInput } from './upstream-mcp.ts';
+import { federatedList, federatedRequest, namespaceResult } from './mcp-federation.ts';
 
 const MODERN = ['2026-07-28'];
 const LEGACY = ['2025-11-25', '2025-06-18', '2025-03-26'];
@@ -23,6 +25,7 @@ const INSTRUCTIONS = `Switchboard signs in to services (Gmail, GitHub, Jira, ...
 Use this sequence: list_connections → search_operations → get_operation → call_operation. Always inspect get_operation before calling so you use its supported path, query, header, and body parameters. Use the lower-level call only for undocumented or unusual endpoints.
 These are MCP tools. If your host exposes them as deferred tools, invoke them through the host's deferred tool-call mechanism; do not treat a discovered operationId as a new native tool.
 Paths are relative to the connection's base URL. Credentials are added by Switchboard; never send your own Authorization header.
+For MCP connections use search_mcp_tools → get_mcp_tool → call_mcp_tool, or list/read_mcp_resources and list/get_mcp_prompts. Native resources and prompts use immutable connection IDs in their namespace.
 For paginated operations, preserve the same filters and keep calling with the returned nextToken until it is absent before claiming the result is complete. Prefer restrictive filters before paginating.`;
 
 type Json = Record<string, any>;
@@ -42,6 +45,8 @@ class RpcError extends Error {
 // --- tools ---
 
 const MAX_TEXT = 100_000;
+
+const mcpTool = (name: string, description: string, properties: Json, required: string[], readOnlyHint = true) => ({ name, description, inputSchema: { type: 'object', properties: { connection: { type: 'string' }, ...properties }, required: ['connection', ...required], additionalProperties: false }, annotations: { readOnlyHint, openWorldHint: true, ...(readOnlyHint ? {} : { destructiveHint: true, idempotentHint: false }) } });
 
 const tools = [
   {
@@ -141,12 +146,21 @@ const tools = [
         query: { type: 'object', additionalProperties: { type: 'string' } },
         headers: { type: 'object', additionalProperties: { type: 'string' } },
         body: {},
+        arguments: { type: 'object', description: 'Overrides saved MCP tool or prompt arguments' },
       },
       required: ['name'],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
+  mcpTool('search_mcp_tools', 'List or search tools on an MCP connection, including schemas and annotations.', { query: { type: 'string' }, cursor: { type: 'string' } }, []),
+  mcpTool('get_mcp_tool', 'Inspect the schema and annotations of one upstream MCP tool before calling it.', { name: { type: 'string' } }, ['name']),
+  mcpTool('call_mcp_tool', 'Call an upstream MCP tool. Arguments follow its input schema; rich content and tool errors are preserved.', { name: { type: 'string' }, arguments: { type: 'object' } }, ['name'], false),
+  mcpTool('list_mcp_resources', 'List resources or resource templates on an MCP connection.', { templates: { type: 'boolean' }, cursor: { type: 'string' } }, []),
+  mcpTool('read_mcp_resource', 'Read an upstream resource URI through an MCP connection.', { uri: { type: 'string' } }, ['uri']),
+  mcpTool('list_mcp_prompts', 'List prompts and their argument definitions on an MCP connection.', { cursor: { type: 'string' } }, []),
+  mcpTool('get_mcp_prompt', 'Get an upstream prompt with messages and roles preserved.', { name: { type: 'string' }, arguments: { type: 'object', additionalProperties: { type: 'string' } } }, ['name']),
+  mcpTool('complete_mcp_argument', 'Complete a prompt or resource-template argument if the upstream server supports it.', { ref: { type: 'object' }, argument: { type: 'object' }, context: { type: 'object' } }, ['ref', 'argument']),
 ];
 
 interface Ctx {
@@ -156,6 +170,14 @@ interface Ctx {
 }
 
 const text = (t: string, isError = false) => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError: true } : {}) });
+function richMcpResult(result: any, operation: string, id: string) {
+  const value = namespaceResult(result, id);
+  if (operation === 'tools/call') return value;
+  if (operation === 'resources/read') return { content: value.contents.map((resource: any) => ({ type: 'resource', resource })), structuredContent: value };
+  if (operation === 'prompts/get') return { content: value.messages.map((message: any) => message.content), structuredContent: value };
+  return json(value);
+}
+
 const json = (v: unknown) => ({ ...text(JSON.stringify(v, null, 2)), structuredContent: Array.isArray(v) ? { items: v } : v });
 
 function connectionFor(ctx: Ctx, ref: unknown) {
@@ -294,10 +316,26 @@ async function runCall(ctx: Ctx, connectionId: string, req: { method: string; ur
 }
 
 async function callTool(ctx: Ctx, name: string, args: Json) {
+  if (['search_mcp_tools', 'get_mcp_tool', 'call_mcp_tool', 'list_mcp_resources', 'read_mcp_resource', 'list_mcp_prompts', 'get_mcp_prompt', 'complete_mcp_argument'].includes(name)) {
+    const row = connectionFor(ctx, args.connection);
+    const operations: Record<string, McpInput['operation']> = { search_mcp_tools: 'tools/list', get_mcp_tool: 'tools/list', call_mcp_tool: 'tools/call', list_mcp_resources: args.templates ? 'resources/templates/list' : 'resources/list', read_mcp_resource: 'resources/read', list_mcp_prompts: 'prompts/list', get_mcp_prompt: 'prompts/get', complete_mcp_argument: 'completion/complete' };
+    try {
+      const result = await executeMcp(ctx.user, row.id, { ...args, operation: operations[name] } as McpInput, ctx.c.req.raw.signal, callerFrom(ctx.c, 'mcp'));
+      if (name === 'get_mcp_tool') {
+        const tool = result.tools.find((t: any) => t.name === args.name);
+        if (!tool) throw new ToolError('MCP tool not found');
+        return json({ tool });
+      }
+      if (['call_mcp_tool', 'read_mcp_resource', 'get_mcp_prompt'].includes(name)) return richMcpResult(result, operations[name], row.id);
+      return json(result);
+    } catch (error: any) { throw new ToolError(error.message); }
+  }
   switch (name) {
     case 'list_connections': {
       const list = listConnections(ctx.user.id, ctx.token.connectionIds).map((c) => ({
         name: c.name,
+        kind: c.kind,
+        id: c.id,
         service: c.serviceName,
         account: c.account?.label ?? null,
         baseUrl: c.baseUrl,
@@ -375,13 +413,20 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
         (r) => !ctx.token.connectionIds || ctx.token.connectionIds.includes(r.connection_id),
       );
       const names = new Map(listConnections(ctx.user.id).map((c) => [c.id, c.name]));
-      return json(rows.map((r) => ({ name: r.name, id: r.id, method: r.method, url: r.url, connection: names.get(r.connection_id) ?? null })));
+      return json(rows.map((r) => ({ name: r.name, id: r.id, kind: r.kind, method: r.method, url: r.url, mcpRequest: r.mcp_request ? JSON.parse(r.mcp_request) : null, connection: names.get(r.connection_id) ?? null })));
     }
     case 'run_saved_call': {
       const r = one('SELECT * FROM saved_calls WHERE user_id = ? AND (id = ? OR name = ?)', ctx.user.id, String(args.name ?? ''), String(args.name ?? ''));
       if (!r) throw new ToolError(`No saved call "${args.name}"; use list_saved_calls`);
       if (!r.connection_id) throw new ToolError('This saved call has no connection');
       const row = connectionFor(ctx, r.connection_id);
+      if (r.kind === 'mcp') {
+        const input = JSON.parse(r.mcp_request);
+        if (args.arguments !== undefined) input.arguments = { ...input.arguments, ...args.arguments };
+        try {
+          return richMcpResult(await executeMcp(ctx.user, row.id, input, ctx.c.req.raw.signal, callerFrom(ctx.c, 'mcp', r.name)), input.operation, row.id);
+        } catch (error: any) { throw new ToolError(error.message); }
+      }
       const merge = (stored: string | null, extra: unknown) => {
         const m = new Map<string, [string, string]>();
         for (const p of JSON.parse(stored ?? '[]')) if (p.key && p.enabled !== false) m.set(p.key.toLowerCase(), [p.key, p.value]);
@@ -408,7 +453,7 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
 
 // --- protocol ---
 
-const capabilities = { tools: { listChanged: false } };
+const capabilities = { tools: { listChanged: false }, resources: { listChanged: false, subscribe: false }, prompts: { listChanged: false }, completions: {} };
 
 async function dispatch(ctx: Ctx, msg: Json, modern: boolean) {
   const params = msg.params ?? {};
@@ -421,8 +466,16 @@ async function dispatch(ctx: Ctx, msg: Json, modern: boolean) {
       return { supportedVersions: [...MODERN, ...LEGACY], capabilities, _meta: { [`${META}serverInfo`]: SERVER_INFO }, instructions: INSTRUCTIONS };
     case 'ping':
       return {};
+    case 'resources/list':
+    case 'resources/templates/list':
+    case 'prompts/list':
+      return federatedList({ ...ctx, signal: ctx.c.req.raw.signal, caller: callerFrom(ctx.c, 'mcp') }, msg.method, params.cursor);
+    case 'resources/read':
+    case 'prompts/get':
+    case 'completion/complete':
+      return federatedRequest({ ...ctx, signal: ctx.c.req.raw.signal, caller: callerFrom(ctx.c, 'mcp') }, msg.method, params);
     case 'tools/list':
-      return { tools };
+      return modern ? { resultType: 'complete', tools, ttlMs: 0, cacheScope: 'private' } : { tools };
     case 'tools/call': {
       if (!tools.some((t) => t.name === params.name)) throw new RpcError(-32602, `Unknown tool: ${params.name}`);
       try {
@@ -488,7 +541,7 @@ mcp.post('/', async (c) => {
       if (c.req.header('mcp-protocol-version') !== version) mismatch('MCP-Protocol-Version does not match _meta');
       if (!MODERN.includes(version)) throw new RpcError(-32022, 'Unsupported protocol version', 400, { supported: [...MODERN, ...LEGACY], requested: version });
       if (c.req.header('mcp-method') !== msg.method) mismatch('Mcp-Method does not match the method');
-      if (msg.method === 'tools/call' && headerValue(c.req.header('mcp-name')) !== msg.params?.name) mismatch('Mcp-Name does not match the tool name');
+      if (['tools/call', 'prompts/get', 'resources/read'].includes(msg.method) && headerValue(c.req.header('mcp-name')) !== (msg.method === 'resources/read' ? msg.params?.uri : msg.params?.name)) mismatch('Mcp-Name does not match the tool name');
       if (msg.method === 'initialize') throw new RpcError(-32601, 'initialize is not used in this protocol version', 404);
     } else if (msg.method !== 'initialize') {
       const v = c.req.header('mcp-protocol-version');

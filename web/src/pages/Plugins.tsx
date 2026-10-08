@@ -4,7 +4,7 @@ import { api, type Field, type PluginInfo } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
-  Alert, Badge, Button, Card, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, ServiceIcon, Spinner, Switch, useConfirm, useToast,
+  Alert, Badge, Button, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, ServiceIcon, Spinner, Switch, Table, useConfirm, useToast,
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
 
@@ -21,6 +21,8 @@ export function Plugins() {
   const toast = useToast();
   const confirm = useConfirm();
   const plugins = useResource(() => api<PluginInfo[]>('/admin/plugins'));
+  const [filter, setFilter] = useState('');
+  const [details, setDetails] = useState<PluginInfo | null>(null);
   const [installOpen, setInstallOpen] = useState(false);
   const [settings, setSettings] = useState<PluginInfo | null>(null);
   const [logs, setLogs] = useState<PluginInfo | null>(null);
@@ -80,63 +82,37 @@ export function Plugins() {
       ) : !plugins.data?.length ? (
         <Empty icon={<Puzzle className="size-5" />} title="No plugins" action={<Button variant="primary" onClick={() => setInstallOpen(true)}>Install from GitHub</Button>} />
       ) : (
-        <div className="grid gap-3">
-          {plugins.data.map((p) => {
+        <div className="space-y-3">
+          <div className="flex items-center gap-3"><Input aria-label="Search plugins" placeholder="Search plugins…" value={filter} onChange={e => setFilter(e.target.value)} className="max-w-sm" /><span className="shrink-0 text-xs text-zinc-500">{plugins.data.filter(p => `${p.name} ${p.description ?? ''} ${p.id} ${p.services.map(s => s.name).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())).length} of {plugins.data.length}</span></div>
+          <Table label="Plugins"><thead><tr>
+            <th scope="col">Plugin</th>
+            <th scope="col" className="hidden w-20 sm:table-cell">Version</th>
+            <th scope="col" className="w-24">Status</th>
+            <th scope="col" className="hidden w-[28%] lg:table-cell">Source</th>
+            <th scope="col" className="w-24 sm:w-32"><span className="sr-only">Actions</span></th>
+          </tr></thead><tbody>
+          {plugins.data.filter(p => `${p.name} ${p.description ?? ''} ${p.id} ${p.services.map(s => s.name).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())).map((p) => {
             const st = STATUS[p.status];
             const checked = updates[p.id];
             const upd = checked?.current === p.source?.commit && checked?.ref === (p.source?.ref ?? null) ? checked : undefined;
             return (
-              <Card key={p.id} className={cx('p-4', !p.enabled && 'opacity-70')}>
-                <div className="flex items-start gap-3.5">
-                  <ServiceIcon icon={p.icon} name={p.name} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-semibold">{p.name}</h2>
-                      <span className="font-mono text-xs text-zinc-400">{p.version}</span>
-                      <Badge tone={st.tone}>{st.label}</Badge>
-                      {upd?.updateAvailable && <Badge tone="indigo">Update available</Badge>}
-                    </div>
-                    {p.description && <p className="mt-0.5 text-[13px] text-zinc-500 dark:text-zinc-400">{p.description}</p>}
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-                      {p.source ? (
-                        <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="flex flex-wrap items-center gap-1 break-all hover:text-zinc-800 dark:hover:text-zinc-200">
-                          <GitBranch className="size-3.5" />
-                          {p.source.repo}
-                          {p.source.path && `/${p.source.path}`}
-                          <span className="break-all">{p.source.ref ?? 'Default branch'}</span>
-                          <span className="font-mono">@{p.source.commit.slice(0, 7)}</span>
-                        </a>
-                      ) : (
-                        <span>Built in</span>
-                      )}
-                      {p.overridesBuiltin && <span>Replaces the built-in version</span>}
-                      {p.dependencies.length > 0 && (
-                        <span className="flex items-center gap-1">
-                          Uses
-                          {p.dependencies.map((d) => (
-                            <code key={d} className={cx('rounded bg-zinc-100 px-1 font-mono text-[11px] dark:bg-zinc-800', byId.get(d)?.status !== 'active' && 'text-rose-600 dark:text-rose-400')}>
-                              {d}
-                            </code>
-                          ))}
-                        </span>
-                      )}
-                      {p.services.length > 0 && <span>Provides {p.services.map((s) => s.name).join(', ')}</span>}
-                    </div>
-                    {p.error && p.status !== 'disabled' && (
-                      <Alert tone={p.status === 'blocked' ? 'amber' : 'red'} className="mt-3 font-mono text-xs">
-                        {p.error}
-                      </Alert>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
+              <tr key={p.id} className={cx(!p.enabled && 'opacity-70')}>
+                <td><div className="flex min-w-0 items-center gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0 flex-1">
+                  <button type="button" onClick={() => setDetails(p)} className="block max-w-full truncate font-semibold hover:text-indigo-600 dark:hover:text-indigo-400" title={p.name}>{p.name}</button>
+                  {p.description && <div className="truncate text-xs text-zinc-500" title={p.description}>{p.description}</div>}
+                  {p.error && p.status !== 'disabled' && <div className="truncate text-xs text-rose-600 dark:text-rose-400" title={p.error}>{p.error}</div>}
+                </div></div></td>
+                <td className="hidden font-mono text-xs text-zinc-500 sm:table-cell">{p.version}</td>
+                <td><Badge tone={st.tone}>{st.label}</Badge>{upd?.updateAvailable && <div className="mt-1"><Badge tone="indigo">Update</Badge></div>}</td>
+                <td className="hidden lg:table-cell">{p.source ? <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="block min-w-0 hover:text-indigo-600 dark:hover:text-indigo-400" title={`${p.source.repo}/${p.source.path}`}><span className="block truncate text-xs">{p.source.repo}{p.source.path && `/${p.source.path}`}</span><span className="block truncate text-xs text-zinc-500">{p.source.ref ?? 'Default branch'} <span className="font-mono">@{p.source.commit.slice(0, 7)}</span></span></a> : <span className="text-xs text-zinc-500">Built in</span>}</td>
+                <td><div className="flex items-center justify-end gap-1">
+
                     {busy === p.id && <Spinner className="mr-1" />}
                     {p.hasSettings && (
-                      <Button size="sm" icon={<Settings2 className="size-3.5" />} onClick={() => setSettings(p)}>
-                        Settings
-                      </Button>
+                      <IconButton label={`Settings for ${p.name}`} onClick={() => setSettings(p)}><Settings2 className="size-3.5" /></IconButton>
                     )}
                     <Switch
-                      label={p.enabled ? 'Disable' : 'Enable'}
+                      label={`${p.enabled ? 'Disable' : 'Enable'} ${p.name}`}
                       checked={p.enabled}
                       disabled={busy === p.id}
                       onChange={async (v) => {
@@ -153,7 +129,7 @@ export function Plugins() {
                     />
                     <Menu
                       trigger={(t) => (
-                        <IconButton label="Actions" {...t}>
+                        <IconButton label={`Actions for ${p.name}`} {...t}>
                           <MoreHorizontal className="size-4" />
                         </IconButton>
                       )}
@@ -195,13 +171,25 @@ export function Plugins() {
                           : []),
                       ]}
                     />
-                  </div>
-                </div>
-              </Card>
+                </div></td>
+              </tr>
             );
           })}
+          </tbody></Table>
         </div>
       )}
+      <Dialog open={!!details} onClose={() => setDetails(null)} title={details?.name ?? 'Plugin'}>
+        {details && <div className="space-y-3 text-[13px]">
+          <p className="text-zinc-500">{details.description}</p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+            <dt className="text-zinc-500">Version</dt><dd>{details.version}</dd>
+            <dt className="text-zinc-500">Source</dt><dd className="break-all">{details.source ? <a href={`https://github.com/${details.source.repo}/tree/${details.source.commit}/${details.source.path}`} target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400">{details.source.repo}/{details.source.path} · {details.source.ref ?? 'Default branch'} @{details.source.commit.slice(0, 7)}</a> : 'Built in'}{details.overridesBuiltin && ' · Replaces the built-in version'}</dd>
+            <dt className="text-zinc-500">Uses</dt><dd>{details.dependencies.length ? details.dependencies.map(d => <span key={d} className={cx('mr-2', byId.get(d)?.status !== 'active' && 'text-rose-600 dark:text-rose-400')}>{d}</span>) : 'None'}</dd>
+            <dt className="text-zinc-500">Provides</dt><dd>{details.services.map(s => s.name).join(', ') || 'No services'}</dd>
+          </dl>
+          {details.error && <Alert>{details.error}</Alert>}
+        </div>}
+      </Dialog>
       <InstallDialog
         open={installOpen}
         onClose={() => setInstallOpen(false)}

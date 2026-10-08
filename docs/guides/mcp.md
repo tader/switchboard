@@ -19,11 +19,30 @@ Switchboard is an [MCP](https://modelcontextprotocol.io) server. Claude, Codex, 
 | `search_operations`, `get_operation` | Look up endpoints in a service's API reference, e.g. "list gmail messages" |
 | `call_operation` | Call a discovered operation with validated, automatically mapped parameters |
 | `call` | Make a lower-level request for an undocumented or unusual endpoint |
+| `search_mcp_tools`, `get_mcp_tool`, `call_mcp_tool` | Discover, inspect and call tools on an MCP connection |
+| `list_mcp_resources`, `read_mcp_resource` | List resources or templates and read a resource |
+| `list_mcp_prompts`, `get_mcp_prompt`, `complete_mcp_argument` | Retrieve prompt messages and complete supported arguments |
 | `list_saved_calls`, `run_saved_call` | Use the calls you saved in the console |
 
 For documented APIs, use `list_connections` → `search_operations` → `get_operation` → `call_operation`. Switchboard maps named inputs to the operation's path, query string, headers and body. Paginated operations explain how to pass `nextToken`; keep the same filters and continue until the response no longer contains one.
 
 Everything an assistant does is listed under [Activity](/activity?source=mcp) with source **MCP**.
+
+## Connecting an MCP server
+
+On [Connections](/connections), choose **MCP server** and enter the exact HTTP endpoint. Choose OAuth, a bearer token, an API-key header, or no authentication. OAuth discovers the server's resource and issuer metadata, then uses a pre-registered client, client metadata document, or dynamic registration supported by that server. If a pre-registered client is required, enter its issuer, client ID and optional secret under advanced fields. Use Switchboard's callback URL when registering it:
+
+```text
+{{callbackUrl}}
+```
+
+Explicitly configured endpoints may be on a private network. Separate OAuth discovery endpoints must be public HTTPS unless you enable **Allow OAuth servers on private networks**. Redirecting HTTP endpoints are refused; enter the final URL. Reconnect if consent expires or a tool requires additional scopes.
+
+The [console](/console) provides Tools, Resources and Prompts, with schemas, editable arguments, rich results and saved requests. A tool result marked `isError` is shown as a tool error and recorded as failure in Activity.
+
+Assistants use `search_mcp_tools` → `get_mcp_tool` → `call_mcp_tool`. Native MCP resources, templates and prompts are also available to clients that expose them. Resource URIs begin with `switchboard-mcp:<connection-id>:`; prompt names begin with `<connection-id>:`. Pass those values back unchanged. The namespace uses immutable IDs, so renaming a connection does not break it. Each token sees only its shared connections, including satellite connections; upstream credentials stay on their owning instance.
+
+Upstream connections support Streamable HTTP JSON and SSE responses, MCP 2026-07-28 and negotiated 2025 versions. Lists collect at most 16 pages; results are limited to 2 MiB and operations to two minutes. Cancelled or failed mutating calls can have an unknown outcome; inspect upstream state before repeating them. Stdio, deprecated standalone SSE endpoints, subscriptions, sampling, elicitation and task extensions are not supported.
 
 ## Signing in
 

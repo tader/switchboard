@@ -117,6 +117,7 @@ export async function execute(user: User, connectionRef: string, input: CallInpu
   const method = (input.method || 'GET').toUpperCase();
   if (!/^[A-Z]+$/.test(method)) throw badRequest('Invalid HTTP method');
   const remoteRow = getConnectionRow(user.id, connectionRef);
+  if (remoteRow.kind === 'mcp') throw badRequest('This connection is an MCP server; use an MCP operation');
   if (remoteRow.satellite_id) return executeRemote(user, remoteRow, input, method, signal, caller);
   const loaded = loadConnection(user.id, connectionRef);
   const { conn } = loaded;

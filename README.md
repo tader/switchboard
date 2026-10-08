@@ -117,7 +117,9 @@ Credentials are only attached to the hosts a service allows (for Gmail `gmail.go
 
 ### MCP
 
-`https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), structured `call_operation`, lower-level `call`, `list_saved_calls`, and `run_saved_call`. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
+Connect upstream MCP servers from the Connections page using OAuth, bearer tokens, API-key headers or no authentication. The console provides Tools, Resources and Prompts with rich results and saved requests. Connection and plugin lists use compact, searchable tables.
+
+`https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), structured `call_operation`, lower-level `call`, `list_saved_calls`, and `run_saved_call`. MCP connections add `search_mcp_tools`, `get_mcp_tool`, `call_mcp_tool`, resource/prompt tools and native resources, templates, prompts and completions namespaced by immutable connection ID. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
 
     claude mcp add --transport http switchboard https://switchboard.example.com/mcp            # signs in through the browser
     claude mcp add --transport http switchboard https://switchboard.example.com/mcp --header "Authorization: Bearer $SWITCHBOARD_TOKEN"
@@ -135,6 +137,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `POST /api/connections` `{service, method, config, name?}` | Connect. Returns `connected`, `redirect` (open `url` in a browser) or `device` (show `device.userCode`, then `POST /api/connect/:flowId/poll` until connected) |
 | `POST /api/connections/:ref/reconnect` | Same, for an existing connection |
 | `POST /api/connect/:flowId/complete` `{url}` | Complete a sign-in started with `redirectUri` (a redirect URI other than Switchboard's, e.g. localhost) with the address the browser was sent to |
+| `POST /api/connections/:ref/mcp/:operation` | Tools, resources, prompts and completions on an MCP connection |
 | `GET /api/connections/:ref/openapi` | Operations from the service's OpenAPI description |
 | `ANY /proxy/:ref/*`, `POST /api/call`, `GET /api/connections/:ref/token` | See above |
 | `GET/POST /api/calls`, `GET/PUT/DELETE /api/calls/:id`, `POST /api/calls/:id/run` | Saved calls |
@@ -154,7 +157,7 @@ Apps (such as another Switchboard or an MCP client) can get a Switchboard token 
 
 ### Activity
 
-Every request through Switchboard is logged per user, whether it goes through the proxy, the call API, a saved call or the console. So is every raw access token handed out: requests made with that token go to the service directly and do not appear afterwards. Each entry records time, client (API token or web console), connection, method, URL, status, duration and sizes, IP and user agent, plus the request headers and the first 4 KB of the request body. Secrets are masked before anything is stored: credentials Switchboard added, and values with secret-looking names (token, secret, password, api_key, …) in query strings, headers and JSON or form bodies. Response bodies are not kept. Browse it on the *Activity* page, or from a connection's or token's menu. A stacked chart above the table shows requests over time, broken down by connection, client, method, status or URL (ids in paths are grouped as `{id}`); drag across it, or click a column, to zoom in, which also filters the table.
+Every request through Switchboard is logged per user, whether it goes through the proxy, the call API, a saved call or the console. So is every raw access token handed out: requests made with that token go to the service directly and do not appear afterwards. MCP entries also record operation, target and outcome, including `isError` failures. Each entry records time, client (API token or web console), connection, method, URL, status, duration and sizes, IP and user agent, plus the request headers and the first 4 KB of the request body. Secrets are masked before anything is stored: credentials Switchboard added, and values with secret-looking names (token, secret, password, api_key, …) in query strings, headers and JSON or form bodies. Response bodies are not kept. Browse it on the *Activity* page, or from a connection's or token's menu. A stacked chart above the table shows requests over time, broken down by connection, client, method, status or URL (ids in paths are grouped as `{id}`); drag across it, or click a column, to zoom in, which also filters the table.
 
 ### Docs
 

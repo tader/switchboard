@@ -105,6 +105,9 @@ export interface AuditEntry {
   error?: string;
   requestHeaders?: { name: string; value: string; byHub: boolean }[];
   requestBody?: string | null;
+  mcpOperation?: string;
+  mcpTarget?: string;
+  mcpOutcome?: 'success' | 'tool-error' | 'protocol-error' | 'auth-error' | 'cancelled';
 }
 
 /** Writes an entry and returns its id, e.g. to fill in the response size once streamed. */
@@ -116,12 +119,13 @@ export function record(e: AuditEntry): number {
   } catch {}
   const r = run(
     `INSERT INTO audit_log (user_id, created_at, source, connection_id, connection_name, service_id, token_id, token_name, saved_call,
-       method, url, host, status, duration_ms, request_size, response_size, response_type, retried, error, ip, user_agent, request_headers, request_body)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       method, url, host, status, duration_ms, request_size, response_size, response_type, retried, error, ip, user_agent, request_headers, request_body, mcp_operation, mcp_target, mcp_outcome)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     e.userId, now(), e.caller.source, e.connection?.id ?? null, e.connection?.name ?? null, e.connection?.serviceId ?? null,
     e.caller.tokenId, e.caller.tokenName, e.caller.savedCall ?? null, e.method ?? null, url, host, e.status ?? null, e.durationMs ?? null,
     e.requestSize ?? null, e.responseSize ?? null, e.responseType ?? null, e.retried ? 1 : 0, e.error?.slice(0, 1000) ?? null,
     e.caller.ip, e.caller.userAgent, e.requestHeaders ? JSON.stringify(redactHeaders(e.requestHeaders)) : null, e.requestBody ?? null,
+    e.mcpOperation ?? null, e.mcpTarget ? redactUrl(e.mcpTarget) : null, e.mcpOutcome ?? null,
   );
   return Number(r.lastInsertRowid);
 }
@@ -196,9 +200,9 @@ function where(userId: string, q: AuditQuery, includeSatelliteUsers = false) {
     params.push(q.source);
   }
   if (q.q) {
-    clauses.push(`(url LIKE ? ESCAPE '\\' OR error LIKE ? ESCAPE '\\' OR saved_call LIKE ? ESCAPE '\\')`);
+    clauses.push(`(url LIKE ? ESCAPE '\\' OR error LIKE ? ESCAPE '\\' OR saved_call LIKE ? ESCAPE '\\' OR mcp_operation LIKE ? ESCAPE '\\' OR mcp_target LIKE ? ESCAPE '\\')`);
     const like = `%${q.q.replace(/[\\%_]/g, (x) => `\\${x}`)}%`;
-    params.push(like, like, like);
+    params.push(like, like, like, like, like);
   }
   if (q.from) {
     clauses.push('created_at >= ?');
@@ -219,6 +223,9 @@ const toEntry = (r: any, full = false) => ({
   client: r.token_id ? { tokenId: r.token_id, name: r.token_name } : null,
   savedCall: r.saved_call,
   method: r.method,
+  mcpOperation: r.mcp_operation,
+  mcpTarget: r.mcp_target,
+  mcpOutcome: r.mcp_outcome,
   url: r.url,
   host: r.host,
   status: r.status,

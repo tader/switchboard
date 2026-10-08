@@ -5,7 +5,7 @@ import { api, type Connection, type FlowResult, type Service } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
-  Alert, Avatar, Badge, Button, Card, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, Select, ServiceIcon, Spinner, useConfirm, useToast,
+  Alert, Badge, Button, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, Select, ServiceIcon, Spinner, Table, useConfirm, useToast,
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
 
@@ -19,6 +19,7 @@ export function Connections() {
   const [connect, setConnect] = useState<{ service?: Service; connection?: Connection } | null>(null);
   const [rename, setRename] = useState<Connection | null>(null);
   const [scripts, setScripts] = useState<Connection | null>(null);
+  const [filter, setFilter] = useState('');
   const [highlight, setHighlight] = useState<string | null>(null);
 
   // Coming back from an OAuth redirect.
@@ -39,11 +40,10 @@ export function Connections() {
     return () => clearTimeout(t);
   }, [highlight, connections.data, toast]);
 
-  const byService = useMemo(() => {
-    const groups = new Map<string, Connection[]>();
-    for (const c of connections.data ?? []) groups.set(c.serviceId, [...(groups.get(c.serviceId) ?? []), c]);
-    return [...groups.entries()].sort((a, b) => a[1][0].serviceName.localeCompare(b[1][0].serviceName));
-  }, [connections.data]);
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return (connections.data ?? []).filter(c => !q || `${c.name} ${c.serviceName} ${c.account?.label ?? ''} ${c.satellite?.name ?? ''}`.toLowerCase().includes(q));
+  }, [connections.data, filter]);
 
   const serviceById = (id: string) => services.data?.find((s) => s.id === id);
 
@@ -84,7 +84,7 @@ export function Connections() {
         </div>
       ) : connections.error ? (
         <Alert>{connections.error.message}</Alert>
-      ) : byService.length === 0 ? (
+      ) : (connections.data?.length ?? 0) === 0 ? (
         <div className="space-y-6">
           <Empty icon={<Plug className="size-5" />} title="Connect your first account">
             Sign in once here, then use the account from any script with a Switchboard token.
@@ -92,67 +92,46 @@ export function Connections() {
           {services.data && <ServiceGrid services={services.data} onPick={(s) => setConnect({ service: s })} />}
         </div>
       ) : (
-        <div className="space-y-5">
-          {byService.map(([serviceId, list]) => {
-            const service = serviceById(serviceId);
-            return (
-              <Card key={serviceId} className="overflow-hidden">
-                <div className="flex items-center gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
-                  <ServiceIcon icon={service?.icon} name={list[0].serviceName} size="sm" />
-                  <h2 className="flex-1 text-[13px] font-semibold">{list[0].serviceName}</h2>
-                  {service && (
-                    <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => setConnect({ service })}>
-                      Add account
-                    </Button>
-                  )}
-                </div>
-                <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  {list.map((c) => (
-                    <li key={c.id} className={cx('flex items-center gap-3 px-4 py-3 transition-colors', highlight === c.id && 'bg-indigo-50/70 dark:bg-indigo-500/10')}>
-                      <Avatar src={c.account?.avatarUrl} label={c.account?.label ?? c.name} className="size-8" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <span className="truncate font-medium">{c.account?.label ?? c.name}</span>
-                          <code className="rounded bg-zinc-100 px-1.5 py-px font-mono text-[11.5px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.name}</code>
-                        </div>
-                        <div className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
-                          {c.status === 'ok' ? (
-                            <>
-                              {c.methodName} · {c.lastUsedAt ? `Used ${ago(c.lastUsedAt).toLowerCase()}` : 'Not used yet'}
-                            </>
-                          ) : (
-                            <span className="text-rose-600 dark:text-rose-400">{c.statusMessage}</span>
-                          )}
-                        </div>
-                      </div>
-                      {c.status === 'error' && (
-                        <Button size="sm" icon={<RefreshCw className="size-3.5" />} onClick={() => setConnect({ service, connection: c })}>
-                          Reconnect
-                        </Button>
-                      )}
-                      {c.status === 'unavailable' && <Badge tone="amber">Unavailable</Badge>}
-                      <Menu
-                        trigger={(p) => (
-                          <IconButton label="Actions" {...p}>
-                            <MoreHorizontal className="size-4" />
-                          </IconButton>
-                        )}
-                        items={[
-                          { label: 'Open in console', icon: <SquareTerminal />, onSelect: () => navigate(`/console?connection=${c.id}`), disabled: c.status === 'unavailable' },
-                          { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
-                          { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
-                          { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c) },
-                          { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service },
-                          'separator',
-                          { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true },
-                        ]}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              </Card>
-            );
-          })}
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <Input aria-label="Search connections" placeholder="Search connections…" value={filter} onChange={e => setFilter(e.target.value)} className="max-w-sm" />
+            <span className="shrink-0 text-xs text-zinc-500">{visible.length} of {connections.data?.length}</span>
+          </div>
+          <Table label="Connections">
+            <thead><tr>
+              <th scope="col">Connection</th>
+              <th scope="col" className="hidden w-[24%] sm:table-cell">Service</th>
+              <th scope="col" className="hidden w-[17%] lg:table-cell">Sign-in</th>
+              <th scope="col" className="w-24">Status</th>
+              <th scope="col" className="hidden w-28 md:table-cell">Last used</th>
+              <th scope="col" className="w-12"><span className="sr-only">Actions</span></th>
+            </tr></thead>
+            <tbody>{visible.map(c => {
+              const service = serviceById(c.serviceId);
+              return <tr key={c.id} className={cx(highlight === c.id && 'bg-indigo-50/70 dark:bg-indigo-500/10')}>
+                <td>
+                  <Link to={`/console?connection=${c.id}`} className="block truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400" title={c.name}>{c.name}</Link>
+                  <div className="truncate text-xs text-zinc-500" title={c.account?.label}>{c.account?.label ?? c.methodName}<span className="sm:hidden"> · {c.serviceName}</span></div>
+                  {c.status !== 'ok' && <div className="truncate text-xs text-rose-600 dark:text-rose-400" title={c.statusMessage ?? undefined}>{c.statusMessage}</div>}
+                </td>
+                <td className="hidden sm:table-cell"><div className="flex min-w-0 items-center gap-2"><ServiceIcon icon={service?.icon} name={c.serviceName} size="sm" /><span className="truncate" title={c.serviceName}>{c.serviceName}</span></div>{c.satellite && <div className="truncate text-xs text-zinc-500">{c.satellite.name}</div>}</td>
+                <td className="hidden truncate text-zinc-500 lg:table-cell" title={c.methodName}>{c.methodName}</td>
+                <td><Badge tone={c.status === 'ok' ? 'green' : c.status === 'error' ? 'red' : 'amber'}>{c.status === 'ok' ? 'Connected' : c.status === 'error' ? 'Error' : 'Unavailable'}</Badge></td>
+                <td className="hidden text-xs text-zinc-500 md:table-cell">{c.lastUsedAt ? ago(c.lastUsedAt) : 'Never'}</td>
+                <td><Menu trigger={p => <IconButton label={`Actions for ${c.name}`} {...p}><MoreHorizontal className="size-4" /></IconButton>} items={[
+                  { label: 'Open in console', icon: <SquareTerminal />, onSelect: () => navigate(`/console?connection=${c.id}`), disabled: c.status === 'unavailable' },
+                  { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
+                  { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
+                  { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c) },
+                  { label: 'Add account', icon: <Plus />, onSelect: () => setConnect({ service }), hidden: !service },
+                  { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service },
+                  'separator',
+                  { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true },
+                ]} /></td>
+              </tr>;
+            })}</tbody>
+          </Table>
+          {!visible.length && <p className="py-6 text-center text-zinc-500">No connections match your search.</p>}
         </div>
       )}
 
@@ -588,6 +567,13 @@ function RenameDialog({ connection, onClose, onDone }: { connection: Connection 
 function ScriptsDialog({ connection: c, onClose }: { connection: Connection | null; onClose: () => void }) {
   const { info } = useSession();
   if (!c) return null;
+  if (c.kind === 'mcp') return <Dialog open onClose={onClose} title="Use from scripts" description={`${c.name} · ${c.serviceName}`} size="lg">
+    <div className="space-y-4 text-[13px]">
+      <CopyField multiline value={`curl -X POST "${info.publicUrl}/api/connections/${c.id}/mcp/tools/list" -H "Authorization: Bearer $SWITCHBOARD_TOKEN" -H "Content-Type: application/json" --data '{}'`} />
+      <CopyField multiline value={`curl -X POST "${info.publicUrl}/api/connections/${c.id}/mcp/tools/call" -H "Authorization: Bearer $SWITCHBOARD_TOKEN" -H "Content-Type: application/json" --data '{"name":"tool_name","arguments":{}}'`} />
+      <Link to="/tokens" onClick={onClose} className="text-indigo-600 dark:text-indigo-400">Create a token limited to this connection</Link>
+    </div>
+  </Dialog>;
   const proxy = `${info.publicUrl}/proxy/${c.name}`;
   const examplePath = c.serviceId === 'gmail' ? '/gmail/v1/users/me/profile' : c.serviceId === 'github' ? '/user' : '/';
   return (

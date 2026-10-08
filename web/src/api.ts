@@ -62,6 +62,7 @@ export interface AuthMethod {
 }
 
 export interface Service {
+  kind: 'http' | 'mcp';
   id: string;
   name: string;
   description?: string;
@@ -75,6 +76,7 @@ export interface Service {
 }
 
 export interface Connection {
+  kind: 'http' | 'mcp';
   id: string;
   name: string;
   serviceId: string;
@@ -108,6 +110,8 @@ export interface Pair {
 
 export interface SavedCall {
   id: string;
+  kind: 'http' | 'mcp';
+  mcpRequest: { operation: 'tools/call' | 'resources/read' | 'prompts/get'; name?: string; uri?: string; arguments?: Record<string, unknown> } | null;
   name: string;
   connectionId: string | null;
   method: string;

@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const saKeys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 let saTokens = 0;
@@ -189,6 +190,8 @@ test('plugins and services are listed', async () => {
   assert.deepEqual(gmail.dependencies, ['google']);
   assert.equal(plugins.find((p: any) => p.id === 'apple-reminders'), undefined, 'Apple Reminders is installed from its external repository');
   const services = (await req('GET', '/api/services')).data;
+  assert.ok(services.filter((s: any) => s.id !== 'mcp').every((s: any) => s.kind === 'http'));
+  assert.equal(services.find((s: any) => s.id === 'mcp').kind, 'mcp');
   const gh = services.find((s: any) => s.id === 'github');
   assert.deepEqual(gh.methods.map((m: any) => m.id), ['token', 'oauth', 'device']);
   assert.ok(gh.methods.find((m: any) => m.id === 'oauth').unavailable);
@@ -208,6 +211,8 @@ test('plugins and services are listed', async () => {
 
 test('API descriptions with a placeholder server use the connection base URL', async () => {
   const c = await req('POST', '/api/connections', { service: 'http', method: 'token', config: { baseUrl: up, token: 't', openapi: `${up}/spec.json` } });
+  assert.equal(c.data.connection.kind, 'http');
+  assert.equal((await req('GET', `/api/connections/${c.data.connection.id}`)).data.kind, 'http');
   const d = (await req('GET', `/api/connections/${c.data.connection.id}/openapi`)).data;
   assert.equal(d.server, `${up}/api/v2`);
   assert.equal(d.operations[0].path, '/things/{id}');
@@ -725,7 +730,7 @@ test('satellites: outbound socket, catalogue, per-user connection, call and offl
     protocol: 1, type: 'catalog', version: 'test-1', catalog: { services: [{
       id: 'family-tree', name: 'Family Tree', description: 'Local genealogy', pluginId: 'family-tree', hasOpenapi: true,
       methods: [{ id: 'local', name: 'Local profile', fields: [{ key: 'tree', label: 'Tree', required: true }] }],
-    }] },
+    }, { id: 'old-mcp', name: 'Old MCP', kind: 'mcp', pluginId: 'old-mcp', methods: [{ id: 'none', name: 'None', fields: [] }] }] },
   }));
   assert.equal((await next()).type, 'catalog.accepted');
   await waitFor(async () => (await req('GET', '/api/services')).data.some((s: any) => s.id === `sat/${satellite.id}/family-tree`));
@@ -766,6 +771,14 @@ test('satellites: outbound socket, catalogue, per-user connection, call and offl
   assert.equal(deleteMessage.operation, 'connection.delete');
   ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: deleteMessage.requestId, result: { ok: true } }));
   assert.equal((await deleting).status, 200);
+
+  const oldConnect = req('POST', '/api/connections', { service: `sat/${satellite.id}/old-mcp`, method: 'none' });
+  const oldMessage = await next();
+  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: oldMessage.requestId, result: { status: 'connected', connection: { id: 'remote-old', name: 'old-mcp', kind: 'mcp', methodId: 'none', config: {} } } }));
+  const oldConnection = await oldConnect;
+  const unsupportedMcp = await req('POST', `/api/connections/${oldConnection.data.connection.id}/mcp/tools/list`, {});
+  assert.equal(unsupportedMcp.status, 501);
+  assert.match(unsupportedMcp.data.error, /update the satellite/);
 
   ws.close();
   await waitFor(async () => !(await req('GET', '/api/admin/satellites')).data.find((s: any) => s.id === satellite.id).online);
@@ -832,7 +845,7 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   assert.equal(note.status, 202);
 
   const list = await rpc({ id: 2, method: 'tools/list' }, { token: mcpToken, headers: { 'mcp-protocol-version': '2025-06-18' } });
-  assert.deepEqual(list.data.result.tools.map((t: any) => t.name), ['list_connections', 'search_operations', 'get_operation', 'call', 'call_operation', 'list_saved_calls', 'run_saved_call']);
+  assert.deepEqual(list.data.result.tools.slice(0, 7).map((t: any) => t.name), ['list_connections', 'search_operations', 'get_operation', 'call', 'call_operation', 'list_saved_calls', 'run_saved_call']);
 
   const conns = await rpc({ id: 3, method: 'tools/call', params: { name: 'list_connections', arguments: {} } }, { token: mcpToken });
   assert.ok(conns.data.result.structuredContent.items.some((x: any) => x.name === 'mcp-api' && x.hasApiReference && x.location.type === 'local'));
@@ -912,6 +925,26 @@ test('MCP: legacy initialize, tools and calls through a connection', async () =>
   assert.equal(audit.items[0].client.name, 'claude-desktop');
 });
 
+test('MCP: pinned SDK negotiates modern and legacy protocols', async () => {
+  for (const mode of ['auto', 'legacy'] as const) {
+    const client = new Client({ name: 'switchboard-sdk-test', version: '1' }, { versionNegotiation: { mode } });
+    const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+      authProvider: { token: async () => mcpToken }, requestInit: { redirect: 'error' },
+    });
+    try {
+      await client.connect(transport, { timeout: 5000 });
+      assert.equal(client.getProtocolEra(), mode === 'auto' ? 'modern' : 'legacy');
+      const result = await client.listTools();
+      assert.ok(result.tools.some(tool => tool.name === 'list_connections'));
+      const connections = await client.callTool({ name: 'list_connections', arguments: {} });
+      assert.equal(connections.isError, undefined);
+      assert.ok(connections.structuredContent);
+    } finally {
+      await client.close();
+    }
+  }
+});
+
 test('MCP: modern protocol, header validation and errors', async () => {
   const d = await rpc({ id: 1, method: 'server/discover' }, { token: mcpToken, modern: true });
   assert.equal(d.status, 200, JSON.stringify(d.data));
@@ -943,7 +976,7 @@ test('MCP: modern protocol, header validation and errors', async () => {
   assert.equal(unsupported.error.code, -32022);
   assert.ok(unsupported.error.data.supported.includes('2026-07-28'));
 
-  const unknown = await rpc({ id: 8, method: 'resources/list' }, { token: mcpToken, modern: true });
+  const unknown = await rpc({ id: 8, method: 'resources/subscribe' }, { token: mcpToken, modern: true });
   assert.equal(unknown.status, 404);
   assert.equal(unknown.data.error.code, -32601);
 

@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { mcpOAuth } from '../mcp-auth.ts';
+import { connectionChanged } from '../connection-events.ts';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { callbackUrl, config } from '../config.ts';
@@ -180,6 +182,7 @@ class PluginManager {
   private async unload(id: string) {
     const p = this.plugins.get(id);
     if (!p?.instance) return;
+    if (p.services.some(s => s.kind === 'mcp')) connectionChanged();
     for (const s of p.services) {
       if (this.services.get(s.id)?.pluginId === id) this.services.delete(s.id);
     }
@@ -282,6 +285,7 @@ class PluginManager {
       dir: p.dir,
       dataDir,
       satellite: !!(config.satelliteCentralUrl && config.satelliteToken),
+      mcp: { oauth: mcpOAuth },
     };
   }
 
@@ -482,6 +486,7 @@ function validateFields(fields: Field[], where: string) {
 
 function validateService(s: ServiceDefinition) {
   if (!s?.id || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(s.id)) throw new Error(`Invalid service id "${s?.id}"`);
+  if (s.kind !== undefined && s.kind !== 'http' && s.kind !== 'mcp') throw new Error(`Invalid connection kind for service ${s.id}`);
   if (!s.name) throw new Error(`Service "${s.id}" needs a name`);
   if (!Array.isArray(s.authMethods) || !s.authMethods.length) throw new Error(`Service "${s.id}" needs at least one auth method`);
   const ids = new Set<string>();

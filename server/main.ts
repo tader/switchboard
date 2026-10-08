@@ -20,6 +20,7 @@ import { prune } from './audit.ts';
 import type { Env } from './auth.ts';
 import { attachSatelliteWebSockets } from './satellites.ts';
 import { startSatelliteAgent } from './satellite-agent.ts';
+import { stopUpstreamMcp } from './upstream-mcp.ts';
 
 fs.mkdirSync(config.dataDir, { recursive: true });
 initKey();
@@ -92,6 +93,7 @@ const stopSatelliteWebSockets = attachSatelliteWebSockets(server as import('node
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
+    stopUpstreamMcp();
     stopSatelliteWebSockets();
     stopSatelliteAgent();
     server.close();

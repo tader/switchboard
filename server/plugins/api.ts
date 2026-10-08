@@ -54,6 +54,8 @@ export interface PluginContext {
   dataDir: string;
   /** True when this instance has an outbound satellite connection configured. */
   satellite: boolean;
+  /** Core MCP OAuth discovery and encrypted connect-flow integration. */
+  mcp: { oauth(): AuthMethod };
 }
 
 export interface PluginInstance {
@@ -74,7 +76,11 @@ export interface AccountInfo {
 }
 
 /** What Switchboard knows about one connected account. */
+export type ConnectionKind = 'http' | 'mcp';
+
 export interface Connection {
+  /** Omitted by older plugins; defaults to HTTP. */
+  kind?: ConnectionKind;
   id: string;
   name: string;
   serviceId: string;
@@ -156,14 +162,16 @@ export interface AuthMethod {
    * Adds credentials to an outgoing request. `force` is set when a previous attempt got a 401,
    * so cached tokens should be refreshed. Return new credentials to persist them.
    */
-  authorize(req: OutgoingRequest, conn: Connection, opts: { force?: boolean }): Promise<void | { credentials?: any }> | void | { credentials?: any };
+  authorize(req: OutgoingRequest, conn: Connection, opts: { force?: boolean; signal?: AbortSignal }): Promise<void | { credentials?: any }> | void | { credentials?: any };
   /** Hands out a usable bearer token, for scripts that use a provider SDK directly. */
-  token?(conn: Connection, opts: { force?: boolean }): Promise<TokenResult>;
+  token?(conn: Connection, opts: { force?: boolean; signal?: AbortSignal }): Promise<TokenResult>;
   /** Called when the connection is deleted. */
   revoke?(conn: Connection): Promise<void>;
 }
 
 export interface ServiceDefinition {
+  /** Omitted by existing plugins; defaults to HTTP. */
+  kind?: ConnectionKind;
   /** Globally unique, e.g. "gmail". */
   id: string;
   name: string;
