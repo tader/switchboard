@@ -17,7 +17,7 @@ completed. Do not mark verification or deployment complete without evidence.
 ## Current handoff
 
 - Phase: MCP implementation and compact connection/plugin tables delivered.
-- Deployment: application revision `50f516d`, healthy and publicly verified.
+- Deployment: application revision `10842db`, healthy and publicly verified.
 - Next action: no required work remains in this plan; follow-ups are below.
 - No additional user decisions are needed for the agreed scope.
 - Plan moved to the repository root, outside end-user documentation.
@@ -229,4 +229,11 @@ Streamable HTTP's SSE response bodies are in scope.
   errors, search, rename menu and persisted choices after reload.
   Light/dark/mobile screenshots inspected, including satellite rows. No browser
   errors or page overflow. Mobile search and view switch have separate rows.
-- [ ] Deploy the refinement and verify the healthy instance and public UI asset.
+- [x] Deploy the refinement and verify the healthy instance and public UI asset.
+
+- Connections refinement deployed and publicly verified 2026-10-08 from
+  `10842db`. Image SHA256:
+  `8430bf2726e88440be5e40b612546932c89d31d9be06802d0db8699b2a037000`.
+  Container became healthy, public `/healthz` returned `{"ok":true}`, and
+  public asset `index-YesGcWWv.js` includes the persisted Normal/Compact switch,
+  method icons and Location column. No database or server changes in this update.
