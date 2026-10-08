@@ -282,3 +282,7 @@ Streamable HTTP's SSE response bodies are in scope.
   successfully, and asset `index-8sTzU7RB.js` includes Version 0.1.0.
   Image SHA256:
   `040e5afa71188c5a6c8bd298d75b25f1b3d0cdf007984f0f91386fcc0a0dfdbc`.
+- [x] Move the version into a read-only footer inside the user menu, hidden
+  when closed. Web typecheck/build and light/dark/mobile browser checks and
+  screenshot inspection passed; menu actions remain available, with no errors
+  or horizontal overflow.
