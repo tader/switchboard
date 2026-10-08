@@ -17,7 +17,7 @@ completed. Do not mark verification or deployment complete without evidence.
 ## Current handoff
 
 - Phase: MCP implementation and compact connection/plugin tables delivered.
-- Deployment: application revision `10842db`, healthy and publicly verified.
+- Deployment: application revision `bddd3bf`, healthy and publicly verified.
 - Next action: no required work remains in this plan; follow-ups are below.
 - No additional user decisions are needed for the agreed scope.
 - Plan moved to the repository root, outside end-user documentation.
@@ -261,4 +261,11 @@ Streamable HTTP's SSE response bodies are in scope.
   stale ref and up-to-date plugin, success/failure/success, failed-only retry,
   one request at a time, unchanged refs, disabled controls, and reset to checking.
   Light/dark/mobile screenshots inspected; no page errors or horizontal overflow.
-- [ ] Deploy and verify healthy/public asset.
+- [x] Deploy and verify healthy/public asset.
+
+- Bulk-update UI deployed and publicly verified 2026-10-08 from `bddd3bf`.
+  Image SHA256:
+  `0c67fa0cf10aa0e969f0689d50a821dc940f4802b15f6eca577976324e25cfa5`.
+  Container became healthy, public `/healthz` passed, and public asset
+  `index-C3p3q8Ua.js` includes Update all/progress and the Local labels.
+  Plugin installations on the live instance were not updated during verification.
