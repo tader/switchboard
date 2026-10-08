@@ -16,9 +16,9 @@ completed. Do not mark verification or deployment complete without evidence.
 
 ## Current handoff
 
-- Phase: MCP implementation and compact connection/plugin tables complete;
-  delivery checks passed. Deployment is the next action.
-- Previous deployment: branch feature from `eefe061`; MCP not yet deployed.
+- Phase: MCP implementation and compact connection/plugin tables delivered.
+- Deployment: application revision `50f516d`, healthy and publicly verified.
+- Next action: no required work remains in this plan; follow-ups are below.
 - No additional user decisions are needed for the agreed scope.
 - Plan moved to the repository root, outside end-user documentation.
 
@@ -97,7 +97,7 @@ completed. Do not mark verification or deployment complete without evidence.
 - [x] Rehearse upgrade from the preceding deployed revision on scratch data.
 - [x] Pass full tests, server typecheck, web typecheck/build, UI visual checks.
 - [x] Update README, MCP/API guides, plugin contract docs, and self OpenAPI.
-- [ ] Deploy and verify healthy/public reachability; update this handoff.
+- [x] Deploy and verify healthy/public reachability; update this handoff.
 
 ## Deliberate follow-ups
 
@@ -202,3 +202,14 @@ Streamable HTTP's SSE response bodies are in scope.
 - [x] Add search/counts, preserve connection actions, plugin settings/toggles,
   source/ref/version/status and branch-update dialogs. Plugin names open details.
 - [x] Verify light/dark/mobile, long names and sources, existing menus, and search.
+
+- MCP/table deployment verified 2026-10-08 18:48 UTC: `just deploy`
+  succeeded from application commit `50f516d`. Image SHA256:
+  `8b4fb0445694ba6134943528a439e0583dec0339e5bbced309666c7956979b72`.
+  Container health passed before public verification; `/healthz` returned
+  `{"ok":true}`. Public page and production asset `index-PBvxyLGT.js` serve the
+  new compact tables and MCP console. OAuth client metadata matches the public
+  origin/callback; unauthenticated MCP requests remain protected (401).
+  A consistent live SQLite backup and encryption key copy were made in the
+  ignored data backups directory before deployment. Final scratch UI run also
+  passed after output-schema and partial resource-list handling refinements.
