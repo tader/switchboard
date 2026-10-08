@@ -63,3 +63,21 @@ Keep these working: `HUB_*` environment variables (read after `SWITCHBOARD_*`), 
 ## Git
 
 Commits are authored with the maintainer's GitHub noreply identity (set in this repository's git config) and end with a `Co-Authored-By` line for Claude. Before each commit, check the staged content for personal data and secrets: the maintainer's domain, names, email addresses and local paths; anything that looks like a token or key. `compose.yaml`, `docker-compose.dev.yml`, `.data/` and `CLAUDE.local.md` are git-ignored; only the `*.example.*` compose files are tracked.
+
+## Automatic versions
+
+`.github/workflows/bump-version.yml` checks pushes to `main` against GitHub's
+merged PR metadata (merge, squash, and rebase merges). Each merged PR gets one
+patch bump in the root `package.json` and `package-lock.json`, committed by
+`github-actions[bot]`. Direct pushes do not bump the version.
+
+The bump script records the PR number in the commit body so reruns skip it.
+If main advances during a push, it retries from the latest main; runs are not
+cancelled or grouped because that could drop merges. Run the script only in an
+isolated checkout: it resets tracked files to `origin/main` on each attempt.
+
+The workflow requests `contents: write` with the built-in `GITHUB_TOKEN`;
+branch protection must permit that push. Wait for the workflow to finish and
+fetch its version commit before deploying so the UI shows the new version.
+Bot pushes with `GITHUB_TOKEN` do not trigger other push workflows; any future
+automated deployment must account for that.
