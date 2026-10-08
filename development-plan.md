@@ -286,3 +286,7 @@ Streamable HTTP's SSE response bodies are in scope.
   when closed. Web typecheck/build and light/dark/mobile browser checks and
   screenshot inspection passed; menu actions remain available, with no errors
   or horizontal overflow.
+- [x] User-menu version deployed from `b1ed646` on 2026-10-08. Container
+  became healthy, public health/page passed, and `index-CXh4E6uv.js` matches
+  the visually verified build. Image SHA256:
+  `bae156f9f466bcb221232de415fb805c5669bde8ccc8c612480e68d862c17037`.
