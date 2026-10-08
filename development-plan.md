@@ -290,3 +290,18 @@ Streamable HTTP's SSE response bodies are in scope.
   became healthy, public health/page passed, and `index-CXh4E6uv.js` matches
   the visually verified build. Image SHA256:
   `bae156f9f466bcb221232de415fb805c5669bde8ccc8c612480e68d862c17037`.
+
+## Automatic version bumps
+
+- [x] Add an Actions workflow that identifies merged PRs on pushes to main and
+  commits one root package/lockfile patch bump per PR. Support reruns and
+  simultaneous merges without duplicate bumps or discarded pending runs.
+- [x] Check current GitHub merge metadata and token behavior. Main currently
+  permits direct pushes; the workflow explicitly requests contents write access.
+- [x] Actionlint and Bash syntax checks passed; server typecheck and all 53
+  tests passed. New tests verify manifest synchronization, disabled version
+  hooks, reruns, exact PR markers, competing pushes, and denied writes.
+  Workflow PR detection passed against real merged PR metadata and fixtures
+  for unmerged PRs, other branches/commits, and direct/bot pushes.
+- Activation: the workflow becomes active when merged into main. A live Actions
+  run remains to be verified after that merge; no application deployment needed.
