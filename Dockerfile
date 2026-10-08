@@ -3,6 +3,7 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web ./
+COPY package.json /package.json
 RUN npm run build
 
 FROM node:24-alpine AS deps

@@ -269,3 +269,11 @@ Streamable HTTP's SSE response bodies are in scope.
   Container became healthy, public `/healthz` passed, and public asset
   `index-C3p3q8Ua.js` includes Update all/progress and the Local labels.
   Plugin installations on the live instance were not updated during verification.
+
+## Application version in the UI
+
+- [x] Show the root package version below the sidebar account menu, including
+  the mobile menu. Vite reads it at build time; Docker supplies the same manifest.
+- [x] Web typecheck/production build and Docker web-stage build passed.
+  Scratch browser checks and screenshot inspection passed in light/dark/mobile
+  with the version visible and no browser errors or horizontal overflow.
