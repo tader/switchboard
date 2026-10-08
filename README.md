@@ -117,7 +117,7 @@ Credentials are only attached to the hosts a service allows (for Gmail `gmail.go
 
 ### MCP
 
-Connect upstream MCP servers from the Connections page using OAuth, bearer tokens, API-key headers or no authentication. The console provides Tools, Resources and Prompts with rich results and saved requests. Connection and plugin lists use compact, searchable tables.
+Connect upstream MCP servers from the Connections page using OAuth, bearer tokens, API-key headers or no authentication. The console provides Tools, Resources and Prompts with rich results and saved requests. Connections can switch between the original grouped cards (Normal) and a compact table, with the choice remembered in the browser. Both views are searchable; plugins use a compact searchable table.
 
 `https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), structured `call_operation`, lower-level `call`, `list_saved_calls`, and `run_saved_call`. MCP connections add `search_mcp_tools`, `get_mcp_tool`, `call_mcp_tool`, resource/prompt tools and native resources, templates, prompts and completions namespaced by immutable connection ID. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
 

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { BookOpen, Code2, ExternalLink, History, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, SquareTerminal, Trash2 } from 'lucide-react';
+import { BookOpen, Code2, ExternalLink, FileKey, History, KeyRound, Laptop, LayoutGrid, List, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal, Trash2, Unlock } from 'lucide-react';
 import { api, type Connection, type FlowResult, type Service } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
-  Alert, Badge, Button, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, Select, ServiceIcon, Spinner, Table, useConfirm, useToast,
+  Alert, Avatar, Badge, Button, Card, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, Select, ServiceIcon, Spinner, Table, useConfirm, useToast,
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
 
@@ -20,6 +20,14 @@ export function Connections() {
   const [rename, setRename] = useState<Connection | null>(null);
   const [scripts, setScripts] = useState<Connection | null>(null);
   const [filter, setFilter] = useState('');
+  const [view, setView] = useState<'normal' | 'compact'>(() => {
+    try { return localStorage.getItem('switchboard.connections.view') === 'compact' ? 'compact' : 'normal'; }
+    catch { return 'normal'; }
+  });
+  const changeView = (next: 'normal' | 'compact') => {
+    setView(next);
+    try { localStorage.setItem('switchboard.connections.view', next); } catch {}
+  };
   const [highlight, setHighlight] = useState<string | null>(null);
 
   // Coming back from an OAuth redirect.
@@ -45,6 +53,12 @@ export function Connections() {
     return (connections.data ?? []).filter(c => !q || `${c.name} ${c.serviceName} ${c.account?.label ?? ''} ${c.satellite?.name ?? ''}`.toLowerCase().includes(q));
   }, [connections.data, filter]);
 
+  const byService = useMemo(() => {
+    const groups = new Map<string, Connection[]>();
+    for (const c of visible) groups.set(c.serviceId, [...(groups.get(c.serviceId) ?? []), c]);
+    return [...groups];
+  }, [visible]);
+
   const serviceById = (id: string) => services.data?.find((s) => s.id === id);
 
   const remove = async (c: Connection) => {
@@ -64,6 +78,18 @@ export function Connections() {
     }
   };
 
+  const connectionMenu = (c: Connection, service?: Service) => <Menu trigger={p => <IconButton label={`Actions for ${c.name}`} {...p}><MoreHorizontal className="size-4" /></IconButton>} items={[
+    { label: 'Open in console', icon: <SquareTerminal />, onSelect: () => navigate(`/console?connection=${c.id}`), disabled: c.status === 'unavailable' },
+    { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
+    { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
+    { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c) },
+    { label: 'Add account', icon: <Plus />, onSelect: () => setConnect({ service }), hidden: !service },
+    { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service },
+    'separator',
+    { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true },
+  ]} />;
+
+  const hasSatellites = connections.data?.some(c => c.satellite) ?? false;
   const loading = connections.loading && !connections.data;
 
   return (
@@ -93,44 +119,75 @@ export function Connections() {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <Input aria-label="Search connections" placeholder="Search connections…" value={filter} onChange={e => setFilter(e.target.value)} className="max-w-sm" />
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 sm:flex">
+            <Input aria-label="Search connections" placeholder="Search connections…" value={filter} onChange={e => setFilter(e.target.value)} className="min-w-0 flex-1 sm:max-w-sm" />
             <span className="shrink-0 text-xs text-zinc-500">{visible.length} of {connections.data?.length}</span>
+            <div role="group" aria-label="Connection view" className="col-span-2 flex shrink-0 justify-self-end gap-0.5 rounded-lg bg-zinc-100 p-0.5 sm:ml-auto dark:bg-zinc-800">
+              {([{ value: 'normal', label: 'Normal', Icon: LayoutGrid }, { value: 'compact', label: 'Compact', Icon: List }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-pressed={view === value} onClick={() => changeView(value)} className={cx('inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition focus-visible:outline-2 focus-visible:outline-indigo-500', view === value ? 'bg-white text-zinc-900 shadow-xs dark:bg-zinc-700 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200')}><Icon className="size-3.5" aria-hidden="true" />{label}</button>)}
+            </div>
           </div>
-          <Table label="Connections">
+          {view === 'compact' ? <Table label="Connections">
             <thead><tr>
+              <th scope="col" className="w-14 sm:w-[22%]">Service</th>
               <th scope="col">Connection</th>
-              <th scope="col" className="hidden w-[24%] sm:table-cell">Service</th>
-              <th scope="col" className="hidden w-[17%] lg:table-cell">Sign-in</th>
-              <th scope="col" className="w-24">Status</th>
+              {hasSatellites && <th scope="col" className="hidden w-[18%] lg:table-cell">Location</th>}
+              <th scope="col" className="w-8 sm:w-28">Status</th>
               <th scope="col" className="hidden w-28 md:table-cell">Last used</th>
-              <th scope="col" className="w-12"><span className="sr-only">Actions</span></th>
+              <th scope="col" className="w-11"><span className="sr-only">Actions</span></th>
             </tr></thead>
             <tbody>{visible.map(c => {
               const service = serviceById(c.serviceId);
+              const status = c.status === 'ok' ? 'Connected' : c.status === 'error' ? 'Error' : 'Unavailable';
+              const location = c.satellite?.name ?? 'This Switchboard';
+              const LocationIcon = c.satellite ? Laptop : Server;
               return <tr key={c.id} className={cx(highlight === c.id && 'bg-indigo-50/70 dark:bg-indigo-500/10')}>
+                <td><div className="flex min-w-0 items-center gap-2.5" title={c.serviceName}>
+                  <ServiceIcon icon={service?.icon} name={c.serviceName} size="sm" />
+                  <span className="hidden truncate text-zinc-600 sm:block dark:text-zinc-300">{c.serviceName}</span>
+                  <span className="sr-only sm:hidden">{c.serviceName}</span>
+                </div></td>
                 <td>
-                  <Link to={`/console?connection=${c.id}`} className="block truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400" title={c.name}>{c.name}</Link>
-                  <div className="truncate text-xs text-zinc-500" title={c.account?.label}>{c.account?.label ?? c.methodName}<span className="sm:hidden"> · {c.serviceName}</span></div>
-                  {c.status !== 'ok' && <div className="truncate text-xs text-rose-600 dark:text-rose-400" title={c.statusMessage ?? undefined}>{c.statusMessage}</div>}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Link to={`/console?connection=${c.id}`} className="truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400" title={c.name}>{c.name}</Link>
+                    <AuthIndicator connection={c} service={service} />
+                  </div>
+                  {c.account?.label && c.account.label !== c.name && <div className="mt-0.5 truncate text-xs text-zinc-500" title={c.account.label}>{c.account.label}</div>}
+                  {c.satellite && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 lg:hidden" title={`Satellite: ${location}`}><Laptop className="size-3 shrink-0" aria-hidden="true" /><span className="truncate">{location}</span></div>}
+                  {c.status !== 'ok' && c.statusMessage && <div className="mt-0.5 truncate text-xs text-rose-600 dark:text-rose-400" title={c.statusMessage}>{c.statusMessage}</div>}
                 </td>
-                <td className="hidden sm:table-cell"><div className="flex min-w-0 items-center gap-2"><ServiceIcon icon={service?.icon} name={c.serviceName} size="sm" /><span className="truncate" title={c.serviceName}>{c.serviceName}</span></div>{c.satellite && <div className="truncate text-xs text-zinc-500">{c.satellite.name}</div>}</td>
-                <td className="hidden truncate text-zinc-500 lg:table-cell" title={c.methodName}>{c.methodName}</td>
-                <td><Badge tone={c.status === 'ok' ? 'green' : c.status === 'error' ? 'red' : 'amber'}>{c.status === 'ok' ? 'Connected' : c.status === 'error' ? 'Error' : 'Unavailable'}</Badge></td>
-                <td className="hidden text-xs text-zinc-500 md:table-cell">{c.lastUsedAt ? ago(c.lastUsedAt) : 'Never'}</td>
-                <td><Menu trigger={p => <IconButton label={`Actions for ${c.name}`} {...p}><MoreHorizontal className="size-4" /></IconButton>} items={[
-                  { label: 'Open in console', icon: <SquareTerminal />, onSelect: () => navigate(`/console?connection=${c.id}`), disabled: c.status === 'unavailable' },
-                  { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
-                  { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
-                  { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c) },
-                  { label: 'Add account', icon: <Plus />, onSelect: () => setConnect({ service }), hidden: !service },
-                  { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service },
-                  'separator',
-                  { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true },
-                ]} /></td>
+                {hasSatellites && <td className="hidden lg:table-cell"><div className="flex min-w-0 items-center gap-2 text-xs text-zinc-500" title={c.satellite ? `Satellite: ${location}${c.satellite.online ? '' : ' (offline)'}` : location}><LocationIcon className="size-3.5 shrink-0" aria-hidden="true" /><span className="truncate">{location}</span></div></td>}
+                <td><span className="inline-flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400" title={[status, c.statusMessage].filter(Boolean).join(' · ')}>
+                  <span className={cx('size-1.5 shrink-0 rounded-full', c.status === 'ok' ? 'bg-emerald-500' : c.status === 'error' ? 'bg-rose-500' : 'bg-amber-500')} aria-hidden="true" />
+                  <span className="sr-only sm:not-sr-only">{status}</span>
+                </span></td>
+                <td className="hidden whitespace-nowrap text-xs tabular-nums text-zinc-500 md:table-cell" title={c.lastUsedAt ? new Date(c.lastUsedAt).toLocaleString() : undefined}>{c.lastUsedAt ? ago(c.lastUsedAt) : 'Never'}</td>
+                <td>{connectionMenu(c, service)}</td>
               </tr>;
             })}</tbody>
-          </Table>
+          </Table> : <div className="space-y-5">{byService.map(([serviceId, list]) => {
+            const service = serviceById(serviceId);
+            return <Card key={serviceId} className="overflow-hidden">
+              <div className="flex items-center gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
+                <ServiceIcon icon={service?.icon} name={list[0].serviceName} size="sm" />
+                <h2 className="flex-1 text-[13px] font-semibold">{list[0].serviceName}</h2>
+                {service && <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => setConnect({ service })}>Add account</Button>}
+              </div>
+              <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">{list.map(c => <li key={c.id} className={cx('flex items-center gap-3 px-4 py-3 transition-colors', highlight === c.id && 'bg-indigo-50/70 dark:bg-indigo-500/10')}>
+                <Avatar src={c.account?.avatarUrl} label={c.account?.label ?? c.name} className="size-8" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <Link to={`/console?connection=${c.id}`} className="truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400">{c.account?.label ?? c.name}</Link>
+                    <code className="max-w-full truncate rounded bg-zinc-100 px-1.5 py-px font-mono text-[11.5px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.name}</code>
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">{c.status === 'ok' ? `${c.methodName} · ${c.lastUsedAt ? `Used ${ago(c.lastUsedAt).toLowerCase()}` : 'Not used yet'}` : <span className="text-rose-600 dark:text-rose-400" title={c.statusMessage ?? undefined}>{c.statusMessage}</span>}</div>
+                  {c.satellite && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500" title={`Satellite: ${c.satellite.name}`}><Laptop className="size-3 shrink-0" aria-hidden="true" /><span className="truncate">{c.satellite.name}</span></div>}
+                </div>
+                {c.status === 'error' && service && <Button size="sm" icon={<RefreshCw className="size-3.5" />} onClick={() => setConnect({ service, connection: c })}>Reconnect</Button>}
+                {c.status === 'unavailable' && <Badge tone="amber">Unavailable</Badge>}
+                {connectionMenu(c, service)}
+              </li>)}</ul>
+            </Card>;
+          })}</div>}
           {!visible.length && <p className="py-6 text-center text-zinc-500">No connections match your search.</p>}
         </div>
       )}
@@ -157,6 +214,18 @@ export function Connections() {
       <ScriptsDialog connection={scripts} onClose={() => setScripts(null)} />
     </>
   );
+}
+
+function AuthIndicator({ connection: c, service }: { connection: Connection; service?: Service }) {
+  const method = service?.methods.find(m => m.id === c.methodId);
+  const name = `${c.methodId} ${c.methodName}`.toLowerCase();
+  const Icon = method?.redirect || /oauth|device|client.credentials/.test(name) ? ShieldCheck
+    : /service.account/.test(name) ? FileKey
+    : /basic|password/.test(name) ? LockKeyhole
+    : /token|api.key|header|query|bearer/.test(name) ? KeyRound
+    : /none|no auth|unauthenticated/.test(name) ? Unlock
+    : /command|shell/.test(name) ? SquareTerminal : Plug;
+  return <span tabIndex={0} role="img" aria-label={`Sign-in: ${c.methodName}`} title={`Sign-in: ${c.methodName}`} className="shrink-0 rounded text-zinc-400 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-zinc-500"><Icon className="size-3.5" aria-hidden="true" /></span>;
 }
 
 function ServiceGrid({ services, onPick, filter = '' }: { services: Service[]; onPick: (s: Service) => void; filter?: string }) {

@@ -198,7 +198,8 @@ Streamable HTTP's SSE response bodies are in scope.
 
 ## Compact lists
 
-- [x] Replace connection and plugin cards with compact responsive tables.
+- [x] Provide compact responsive tables for connections and plugins; retain
+  the original grouped connection cards as the Normal view.
 - [x] Add search/counts, preserve connection actions, plugin settings/toggles,
   source/ref/version/status and branch-update dialogs. Plugin names open details.
 - [x] Verify light/dark/mobile, long names and sources, existing menus, and search.
@@ -213,3 +214,19 @@ Streamable HTTP's SSE response bodies are in scope.
   A consistent live SQLite backup and encryption key copy were made in the
   ignored data backups directory before deployment. Final scratch UI run also
   passed after output-schema and partial resource-list handling refinements.
+
+## Connections layout refinement
+
+- [x] Put Service first in Compact view and combine connection/authentication
+  with method icons and descriptive tooltips. Reduce status badge noise.
+- [x] Move satellite names to a dedicated Location column, shown when satellites
+  exist; on narrow screens show location under the connection, with an icon.
+- [x] Restore original grouped account cards as Normal view. Add Normal/Compact
+  switch with browser persistence; search and shared menus work in both views.
+- [x] Production web typecheck/build passed. Scratch browser verification at
+  `/tmp/connections-design-check.mjs` passed with 19 mixed connections, OAuth/
+  token/header/password/service-account/no-auth icons, local/satellite locations,
+  errors, search, rename menu and persisted choices after reload.
+  Light/dark/mobile screenshots inspected, including satellite rows. No browser
+  errors or page overflow. Mobile search and view switch have separate rows.
+- [ ] Deploy the refinement and verify the healthy instance and public UI asset.
