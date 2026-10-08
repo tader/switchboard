@@ -140,7 +140,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `GET/POST /api/calls`, `GET/PUT/DELETE /api/calls/:id`, `POST /api/calls/:id/run` | Saved calls |
 | `GET/POST /api/tokens`, `PATCH/DELETE /api/tokens/:id` | API tokens |
 | `GET /api/admin/plugins`, `GET /api/admin/plugins/:id` (with log) | Admin: plugins |
-| `POST /api/admin/plugins/install` `{repo, ref?, path?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` | Install/update from GitHub |
+| `POST /api/admin/plugins/install` `{repo, ref?, path?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` `{ref?}` | Install/update from GitHub; omit update ref to keep it, set a branch/tag/commit to switch, or `null` for the default branch |
 | `POST /api/admin/plugins/:id/reload`, `PATCH /api/admin/plugins/:id` `{enabled}`, `GET/PUT /api/admin/plugins/:id/settings`, `DELETE /api/admin/plugins/:id` | |
 | `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/:id`, `POST /api/admin/users/:id/invite` | Admin: users |
 | `GET/POST /api/admin/satellites`, `GET/PATCH/DELETE /api/admin/satellites/:id`, `POST /api/admin/satellites/:id/rotate-token` | Admin: outbound satellite enrolment, user access and credential rotation |
@@ -171,6 +171,8 @@ Mail and Calendar require macOS 14+, Node 24+, Xcode Command Line Tools and the 
 ## Plugins
 
 See [docs/plugins.md](docs/plugins.md). Built-in plugins live in `plugins/`; plugins installed from GitHub go to `<data>/plugins/` and take precedence over a built-in plugin with the same id.
+
+Use **Plugins → Actions → Update from…** to test an installed plugin from another branch, tag, or commit. Future updates follow that ref. Choose **Use default branch** to return to the repository default. The plugin card shows the tracked ref and installed commit. If the new version cannot activate, Switchboard restores the previous plugin files and source; plugin code's external side effects cannot be undone.
 
 ## Development
 

@@ -298,16 +298,23 @@ class PluginManager {
 
   /** Reloads plugins and everything that depends on them. */
   reload(ids: string[]) {
-    return this.serial(async () => {
-      const affected = new Set(ids);
-      for (const id of ids) for (const d of this.dependents(id)) affected.add(d);
-      await this.unloadMany(affected);
-      for (const id of this.discover(affected)) affected.add(id);
-      // Plugins that were waiting for a dependency get another chance.
-      for (const p of this.plugins.values()) if (p.status === 'blocked') affected.add(p.id);
-      for (const id of [...affected]) if (!this.plugins.has(id)) affected.delete(id);
-      await this.loadMany([...affected]);
-    });
+    return this.serial(() => this.reloadNow(ids));
+  }
+
+  /** Serializes disk changes with reloads. The callback's reload does not enqueue again. */
+  mutate<T>(fn: (reload: (ids: string[]) => Promise<void>) => Promise<T>): Promise<T> {
+    return this.serial(() => fn((ids) => this.reloadNow(ids)));
+  }
+
+  private async reloadNow(ids: string[]) {
+    const affected = new Set(ids);
+    for (const id of ids) for (const d of this.dependents(id)) affected.add(d);
+    await this.unloadMany(affected);
+    for (const id of this.discover(affected)) affected.add(id);
+    // Plugins that were waiting for a dependency get another chance.
+    for (const p of this.plugins.values()) if (p.status === 'blocked') affected.add(p.id);
+    for (const id of [...affected]) if (!this.plugins.has(id)) affected.delete(id);
+    await this.loadMany([...affected]);
   }
 
   async setEnabled(id: string, enabled: boolean) {

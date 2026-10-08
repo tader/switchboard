@@ -146,7 +146,12 @@ export function openapiDocument() {
         }),
       },
       '/api/admin/plugins/check-updates': { post: op('Admin', 'Check plugins for updates') },
-      '/api/admin/plugins/{id}/update': { post: op('Admin', 'Update a plugin', { parameters: [id('Plugin id')] }) },
+      '/api/admin/plugins/{id}/update': { post: op('Admin', 'Update a plugin', {
+        parameters: [id('Plugin id')],
+        requestBody: { ...json({ type: 'object', properties: {
+          ref: { type: 'string', nullable: true, minLength: 1, description: 'Branch, tag or commit. Omit to keep the tracked ref; null follows the repository default branch. Remembered for future updates.' },
+        } }), required: false },
+      }) },
       '/api/admin/plugins/{id}/reload': { post: op('Admin', 'Reload a plugin', { parameters: [id('Plugin id')] }) },
       '/api/admin/users': {
         get: op('Admin', 'List users'),

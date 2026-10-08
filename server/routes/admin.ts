@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { type Env, requireAdmin, requireUser } from '../auth.ts';
 import { badRequest } from '../http.ts';
-import { checkUpdates, install, parseRepo, uninstall, update } from '../plugins/github.ts';
+import { checkUpdates, install, parseRepo, uninstall, update, updateOptions } from '../plugins/github.ts';
 import { type PluginRecord, pluginIcon, plugins } from '../plugins/manager.ts';
 import { type Role, createInvite, createUser, deleteUser, getUser, listUsers, pendingInvites, updateUser } from '../users.ts';
 import { createSatellite, deleteSatellite, getSatellite, listSatellites, rotateSatelliteToken, updateSatellite } from '../satellites.ts';
@@ -46,7 +46,12 @@ admin.post('/plugins/install', async (c) => {
 admin.post('/plugins/check-updates', async (c) => c.json(await checkUpdates()));
 
 admin.post('/plugins/:id/update', async (c) => {
-  const r = await update(c.req.param('id'));
+  const raw = await c.req.text();
+  let body: unknown = {};
+  if (raw.trim()) {
+    try { body = JSON.parse(raw); } catch { throw badRequest('Invalid JSON'); }
+  }
+  const r = await update(c.req.param('id'), updateOptions(body));
   return c.json({ ...r, plugin: view(plugins.get(r.id)) });
 });
 

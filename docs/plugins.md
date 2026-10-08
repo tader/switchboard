@@ -130,4 +130,6 @@ Files are watched: editing a plugin (built in, or under `<data>/plugins/`) reloa
 
 To publish, push the directory to GitHub. Admins install with `owner/repo`, a URL to a folder (`https://github.com/owner/repo/tree/main/plugins/linear`), or `owner/repo@tag`. A repository may contain several plugins at the top level or under `plugins/`; all are installed. *Check for updates* compares the installed commit with the branch or tag it came from.
 
+Use **Update from…** on an installed plugin to change its branch, tag, or commit. The choice is remembered for subsequent updates, including when both refs point to the same commit. **Use default branch** returns to the repository's default branch. Only the selected plugin's files change; its dependents reload. Settings and connections remain in place. A failed activation restores the previous files and source, but cannot undo external side effects performed by plugin code.
+
 Plugins run in Switchboard process with full access. Only install plugins you trust.

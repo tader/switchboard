@@ -159,6 +159,24 @@ test('names from before the rename to Switchboard keep working', async () => {
   assert.equal(viaNewHeader.status, 200);
 });
 
+test('plugin update route validates optional ref without swallowing malformed JSON', async () => {
+  for (const body of [null, [], { ref: false }, { ref: '' }, { ref: 'bad ref' }]) {
+    const r = await req('POST', '/api/admin/plugins/api-key/update', body);
+    assert.equal(r.status, 400);
+    assert.match(r.data.error, /ref|object/);
+  }
+  const malformed = await fetch(`${base}/api/admin/plugins/api-key/update`, {
+    method: 'POST', headers: { cookie, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, body: '{',
+  });
+  assert.equal(malformed.status, 400);
+  assert.match((await malformed.json()).error, /JSON/);
+  for (const body of [undefined, {}, { ref: null }, { ref: 'feature/testing' }]) {
+    const r = await req('POST', '/api/admin/plugins/api-key/update', body);
+    assert.equal(r.status, 400);
+    assert.match(r.data.error, /Only plugins installed from GitHub/);
+  }
+});
+
 test('cross-site requests with the session cookie are rejected', async () => {
   const r = await req('POST', '/api/tokens', { name: 'x' }, { 'sec-fetch-site': 'cross-site' });
   assert.equal(r.status, 403);

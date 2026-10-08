@@ -8,7 +8,7 @@ import {
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
 
-type UpdateInfo = { id: string; current: string; latest?: string; updateAvailable: boolean; error?: string };
+type UpdateInfo = { id: string; ref: string | null; current: string; latest?: string; updateAvailable: boolean; error?: string };
 
 const STATUS: Record<PluginInfo['status'], { label: string; tone: 'green' | 'red' | 'amber' | 'neutral' }> = {
   active: { label: 'Active', tone: 'green' },
@@ -24,6 +24,7 @@ export function Plugins() {
   const [installOpen, setInstallOpen] = useState(false);
   const [settings, setSettings] = useState<PluginInfo | null>(null);
   const [logs, setLogs] = useState<PluginInfo | null>(null);
+  const [updateFrom, setUpdateFrom] = useState<PluginInfo | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateInfo>>({});
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -82,7 +83,8 @@ export function Plugins() {
         <div className="grid gap-3">
           {plugins.data.map((p) => {
             const st = STATUS[p.status];
-            const upd = updates[p.id];
+            const checked = updates[p.id];
+            const upd = checked?.current === p.source?.commit && checked?.ref === (p.source?.ref ?? null) ? checked : undefined;
             return (
               <Card key={p.id} className={cx('p-4', !p.enabled && 'opacity-70')}>
                 <div className="flex items-start gap-3.5">
@@ -97,11 +99,12 @@ export function Plugins() {
                     {p.description && <p className="mt-0.5 text-[13px] text-zinc-500 dark:text-zinc-400">{p.description}</p>}
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
                       {p.source ? (
-                        <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-zinc-800 dark:hover:text-zinc-200">
+                        <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="flex flex-wrap items-center gap-1 break-all hover:text-zinc-800 dark:hover:text-zinc-200">
                           <GitBranch className="size-3.5" />
                           {p.source.repo}
                           {p.source.path && `/${p.source.path}`}
-                          <span className="font-mono">@{p.source.ref ?? p.source.commit.slice(0, 7)}</span>
+                          <span className="break-all">{p.source.ref ?? 'Default branch'}</span>
+                          <span className="font-mono">@{p.source.commit.slice(0, 7)}</span>
                         </a>
                       ) : (
                         <span>Built in</span>
@@ -166,6 +169,7 @@ export function Plugins() {
                               toast(r.from === r.to ? `${p.name} is up to date` : `${p.name} updated to ${r.plugin.version}`);
                             }),
                         },
+                        { label: 'Update from…', icon: <GitBranch />, hidden: !p.source, onSelect: () => setUpdateFrom(p) },
                         { label: 'Reload', icon: <RefreshCw />, onSelect: () => run(p.id, () => api(`/admin/plugins/${p.id}/reload`, { method: 'POST' }), `${p.name} reloaded`) },
                         { label: 'Log', icon: <ScrollText />, onSelect: () => setLogs(p) },
                         ...(p.origin === 'installed'
@@ -208,8 +212,58 @@ export function Plugins() {
         }}
       />
       <SettingsDialog plugin={settings} onClose={() => setSettings(null)} onSaved={() => { setSettings(null); plugins.reload(); toast('Settings saved'); }} />
+      <UpdateDialog plugin={updateFrom} onClose={() => setUpdateFrom(null)} onUpdated={(r) => {
+        setUpdateFrom(null);
+        setUpdates((prev) => { const next = { ...prev }; delete next[r.id]; return next; });
+        plugins.reload();
+        toast(r.fromRef !== r.ref ? `${r.plugin.name} now tracks ${r.ref ?? 'the default branch'}` : r.from === r.to ? `${r.plugin.name} is up to date` : `${r.plugin.name} updated to ${r.plugin.version}`);
+      }} />
       <LogDialog plugin={logs} onClose={() => setLogs(null)} />
     </>
+  );
+}
+
+function UpdateDialog({ plugin, onClose, onUpdated }: { plugin: PluginInfo | null; onClose: () => void; onUpdated: (result: { id: string; from: string; to: string; fromRef: string | null; ref: string | null; plugin: PluginInfo }) => void }) {
+  const [ref, setRef] = useState('');
+  const [useDefault, setUseDefault] = useState(true);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!plugin) return;
+    setRef(plugin.source?.ref ?? '');
+    setUseDefault(!plugin.source?.ref);
+    setError('');
+  }, [plugin]);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      onUpdated(await api(`/admin/plugins/${plugin!.id}/update`, { body: { ref: useDefault ? null : ref.trim() } }));
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open={!!plugin} onClose={() => { if (!busy) onClose(); }} title={`Update ${plugin?.name ?? 'plugin'} from…`}>
+      <form onSubmit={submit} className="space-y-4">
+        <p className="break-all text-[13px] text-zinc-500">{plugin?.source?.repo}{plugin?.source?.path ? `/${plugin.source.path}` : ''}</p>
+        <div className="flex items-center gap-2 text-[13px]">
+          <Switch label="Use default branch" checked={useDefault} disabled={busy} onChange={setUseDefault} />
+          <span>Use default branch</span>
+        </div>
+        {!useDefault && <FormField label="Branch, tag or commit" htmlFor="update-ref" description="Future updates will use this ref.">
+          <Input id="update-ref" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="feature/my-change" spellCheck={false} required disabled={busy} autoFocus />
+        </FormField>}
+        {error && <Alert>{error}</Alert>}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={busy}>Update</Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
