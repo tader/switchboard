@@ -332,7 +332,7 @@ export interface MenuItem {
 }
 
 export function Menu({
-  trigger, items, align = 'end', width = 208, block,
+  trigger, items, align = 'end', width = 208, block, footer,
 }: {
   trigger: (props: { onClick: () => void; 'aria-expanded': boolean }) => ReactNode;
   items: (MenuItem | 'separator' | { heading: string })[];
@@ -340,6 +340,8 @@ export function Menu({
   width?: number;
   /** The trigger fills its container. */
   block?: boolean;
+  /** Read-only information below the menu actions. */
+  footer?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLSpanElement>(null);
@@ -420,6 +422,7 @@ export function Menu({
                 </button>
               ),
             )}
+            {footer && <div className="mt-1 border-t border-zinc-100 px-2.5 py-2 text-[11px] text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">{footer}</div>}
           </div>,
           document.body,
         )}

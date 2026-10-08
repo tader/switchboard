@@ -277,6 +277,19 @@ Streamable HTTP's SSE response bodies are in scope.
 - [x] Web typecheck/production build and Docker web-stage build passed.
   Scratch browser checks and screenshot inspection passed in light/dark/mobile
   with the version visible and no browser errors or horizontal overflow.
+- [x] Deployed application commit `eab4672` on 2026-10-08 with `just deploy`.
+  Container health passed before public checks; public health and page returned
+  successfully, and asset `index-8sTzU7RB.js` includes Version 0.1.0.
+  Image SHA256:
+  `040e5afa71188c5a6c8bd298d75b25f1b3d0cdf007984f0f91386fcc0a0dfdbc`.
+- [x] Move the version into a read-only footer inside the user menu, hidden
+  when closed. Web typecheck/build and light/dark/mobile browser checks and
+  screenshot inspection passed; menu actions remain available, with no errors
+  or horizontal overflow.
+- [x] User-menu version deployed from `b1ed646` on 2026-10-08. Container
+  became healthy, public health/page passed, and `index-CXh4E6uv.js` matches
+  the visually verified build. Image SHA256:
+  `bae156f9f466bcb221232de415fb805c5669bde8ccc8c612480e68d862c17037`.
 
 ## Automatic version bumps
 

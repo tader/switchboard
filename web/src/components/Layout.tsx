@@ -90,6 +90,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <div>
         <Menu
           align="start"
+          footer={<>Version {import.meta.env.VITE_APP_VERSION}</>}
           trigger={(p) => (
             <button {...p} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50">
               <Avatar label={user.username} />
@@ -114,7 +115,6 @@ export function Layout({ children }: { children: ReactNode }) {
             },
           ]}
         />
-        <div className="px-2 pt-2 text-[11px] text-zinc-500 dark:text-zinc-400">Version {import.meta.env.VITE_APP_VERSION}</div>
       </div>
     </div>
   );
