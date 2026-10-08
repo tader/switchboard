@@ -243,3 +243,22 @@ Streamable HTTP's SSE response bodies are in scope.
   sign-in metadata, removing the separate satellite line. Add account remains
   in service headers and is removed from row menus. Web build and scratch
   light/dark/mobile checks passed, including menu removal and normal labels.
+
+- Local-label/menu update deployed from `c98eba1`; container became healthy and
+  public `/healthz` passed. Browser verification covered labels in both views,
+  removed compact row action, and retained normal service-header Add account.
+
+## Plugin bulk updates
+
+- [x] Replace Check for updates with Update all (count) when current checks find
+  available updates, returning to Check for updates after completion.
+- [x] Update the complete available set regardless of table search, serially,
+  retaining each tracked ref. Show progress and disable competing controls.
+- [x] Continue on failures, report each error, retain failed candidates for
+  retry, and invalidate successful/stale update checks.
+- [x] Web typecheck/build and scratch browser checks passed:
+  `/tmp/plugins-update-all-check.mjs` verifies three candidates, exclusion of a
+  stale ref and up-to-date plugin, success/failure/success, failed-only retry,
+  one request at a time, unchanged refs, disabled controls, and reset to checking.
+  Light/dark/mobile screenshots inspected; no page errors or horizontal overflow.
+- [ ] Deploy and verify healthy/public asset.

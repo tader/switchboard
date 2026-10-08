@@ -29,6 +29,9 @@ export function Plugins() {
   const [updateFrom, setUpdateFrom] = useState<PluginInfo | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateInfo>>({});
   const [checking, setChecking] = useState(false);
+  const [updatingAll, setUpdatingAll] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState({ current: 0, total: 0 });
+  const [updateErrors, setUpdateErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
   const run = async (id: string, fn: () => Promise<unknown>, done?: string) => {
@@ -46,15 +49,51 @@ export function Plugins() {
 
   const checkUpdates = async () => {
     setChecking(true);
+    setUpdateErrors([]);
     try {
       const list = await api<UpdateInfo[]>('/admin/plugins/check-updates', { method: 'POST' });
       setUpdates(Object.fromEntries(list.map((u) => [u.id, u])));
-      const n = list.filter((u) => u.updateAvailable).length;
+      const n = list.filter(u => u.updateAvailable && plugins.data?.some(p => p.id === u.id && p.source?.commit === u.current && (p.source?.ref ?? null) === u.ref)).length;
       toast(list.length ? (n ? `${n} update${n > 1 ? 's' : ''} available` : 'Everything is up to date') : 'No plugins installed from GitHub', 'info');
     } catch (e: any) {
       toast(e.message, 'error');
     } finally {
       setChecking(false);
+    }
+  };
+
+  const updateFor = (plugin: PluginInfo) => {
+    const checked = updates[plugin.id];
+    return plugin.source && checked?.current === plugin.source.commit && checked.ref === (plugin.source.ref ?? null) ? checked : undefined;
+  };
+  const availableUpdates = (plugins.data ?? []).filter(p => updateFor(p)?.updateAvailable);
+  const updateAll = async () => {
+    if (updatingAll || busy || checking || !availableUpdates.length) return;
+    const queue = [...availableUpdates];
+    setUpdatingAll(true);
+    setUpdateErrors([]);
+    let succeeded = 0;
+    const errors: string[] = [];
+    try {
+      for (const [index, plugin] of queue.entries()) {
+        setUpdateProgress({ current: index + 1, total: queue.length });
+        setBusy(plugin.id);
+        try {
+          // Omit ref to retain each plugin's own tracked branch/tag/commit.
+          const result = await api<{ plugin: PluginInfo }>(`/admin/plugins/${plugin.id}/update`, { method: 'POST' });
+          plugins.setData(list => list?.map(p => p.id === plugin.id ? result.plugin : p));
+          setUpdates(prev => { const next = { ...prev }; delete next[plugin.id]; return next; });
+          succeeded++;
+        } catch (error: any) {
+          errors.push(`${plugin.name}: ${error.message}`);
+          setUpdateErrors([...errors]);
+        }
+      }
+      toast(`${succeeded} plugin${succeeded === 1 ? '' : 's'} updated${errors.length ? `; ${errors.length} failed` : ''}`, errors.length ? 'error' : 'success');
+    } finally {
+      setBusy(null);
+      setUpdatingAll(false);
+      plugins.reload();
     }
   };
 
@@ -66,15 +105,18 @@ export function Plugins() {
         title="Plugins"
         actions={
           <>
-            <Button icon={<RefreshCw className="size-4" />} loading={checking} onClick={checkUpdates}>
+            {availableUpdates.length || updatingAll ? <Button icon={<ArrowUpCircle className="size-4" />} loading={updatingAll} disabled={checking || !!busy || updatingAll} onClick={updateAll}>
+              {updatingAll ? `Updating ${updateProgress.current}/${updateProgress.total}…` : `Update all (${availableUpdates.length})`}
+            </Button> : <Button icon={<RefreshCw className="size-4" />} loading={checking} disabled={checking || !!busy || updatingAll} onClick={checkUpdates}>
               Check for updates
-            </Button>
-            <Button variant="primary" icon={<Download className="size-4" />} onClick={() => setInstallOpen(true)}>
+            </Button>}
+            <Button variant="primary" icon={<Download className="size-4" />} disabled={updatingAll} onClick={() => setInstallOpen(true)}>
               Install
             </Button>
           </>
         }
       />
+      {updateErrors.length > 0 && <Alert><ul className="space-y-1">{updateErrors.map((error, i) => <li key={i}>{error}</li>)}</ul></Alert>}
       {plugins.loading && !plugins.data ? (
         <div className="flex justify-center py-20">
           <Spinner className="size-5" />
@@ -93,8 +135,7 @@ export function Plugins() {
           </tr></thead><tbody>
           {plugins.data.filter(p => `${p.name} ${p.description ?? ''} ${p.id} ${p.services.map(s => s.name).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())).map((p) => {
             const st = STATUS[p.status];
-            const checked = updates[p.id];
-            const upd = checked?.current === p.source?.commit && checked?.ref === (p.source?.ref ?? null) ? checked : undefined;
+            const upd = updateFor(p);
             return (
               <tr key={p.id} className={cx(!p.enabled && 'opacity-70')}>
                 <td><div className="flex min-w-0 items-center gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0 flex-1">
@@ -109,12 +150,12 @@ export function Plugins() {
 
                     {busy === p.id && <Spinner className="mr-1" />}
                     {p.hasSettings && (
-                      <IconButton label={`Settings for ${p.name}`} onClick={() => setSettings(p)}><Settings2 className="size-3.5" /></IconButton>
+                      <IconButton label={`Settings for ${p.name}`} disabled={updatingAll} onClick={() => setSettings(p)}><Settings2 className="size-3.5" /></IconButton>
                     )}
                     <Switch
                       label={`${p.enabled ? 'Disable' : 'Enable'} ${p.name}`}
                       checked={p.enabled}
-                      disabled={busy === p.id}
+                      disabled={updatingAll || busy === p.id}
                       onChange={async (v) => {
                         if (!v && p.dependents.length) {
                           const ok = await confirm({
@@ -129,7 +170,7 @@ export function Plugins() {
                     />
                     <Menu
                       trigger={(t) => (
-                        <IconButton label={`Actions for ${p.name}`} {...t}>
+                        <IconButton label={`Actions for ${p.name}`} disabled={updatingAll || busy === p.id} {...t}>
                           <MoreHorizontal className="size-4" />
                         </IconButton>
                       )}
