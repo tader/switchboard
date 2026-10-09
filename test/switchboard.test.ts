@@ -189,6 +189,7 @@ test('plugins and services are listed', async () => {
   assert.equal(gmail.status, 'active');
   assert.deepEqual(gmail.dependencies, ['google']);
   assert.equal(plugins.find((p: any) => p.id === 'apple-reminders'), undefined, 'Apple Reminders is installed from its external repository');
+  assert.equal(plugins.find((p: any) => p.id === 'atlassian'), undefined, 'Atlassian is installed from its external repository');
   const services = (await req('GET', '/api/services')).data;
   assert.ok(services.filter((s: any) => s.id !== 'mcp').every((s: any) => s.kind === 'http'));
   assert.equal(services.find((s: any) => s.id === 'mcp').kind, 'mcp');
@@ -198,8 +199,8 @@ test('plugins and services are listed', async () => {
 
   const methods = (id: string) => services.find((s: any) => s.id === id)?.methods.map((m: any) => m.id);
   assert.deepEqual(methods('home-assistant'), ['oauth', 'token']);
-  assert.deepEqual(methods('jira'), ['oauth', 'api-token', 'pat']);
-  assert.deepEqual(methods('confluence'), ['oauth', 'api-token', 'pat']);
+  assert.equal(methods('jira'), undefined, 'Jira is installed from the external Atlassian repository');
+  assert.equal(methods('confluence'), undefined, 'Confluence is installed from the external Atlassian repository');
   assert.deepEqual(methods('todoist'), ['token', 'oauth']);
   assert.deepEqual(methods('spotify'), ['oauth', 'app']);
   assert.deepEqual(methods('plex'), ['plex', 'link', 'token']);
