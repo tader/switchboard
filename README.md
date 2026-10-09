@@ -79,7 +79,7 @@ The satellite needs only outbound HTTPS/WebSocket access to the central URL. No 
 
 - **Google** (Gmail, Calendar, Drive, Docs, Sheets, Google APIs): create a *Web application* OAuth client in the Google Cloud console, add the redirect URI shown in *Plugins → Google → Settings*, and enter the client id and secret there. Enable each API you use (Gmail, Calendar, Drive, Docs, Sheets) in the same Cloud project. While the consent screen is in testing, add each Google account as a test user. Users can also bring their own client under *Advanced* when connecting.
 - **Home Assistant**: no setup. Sign in through the browser (Switchboard's URL is the OAuth client id, as Home Assistant expects) or paste a long-lived token. The URL must be reachable from Switchboard container; `.local` names usually aren't, so use an IP or hostname.
-- **Jira / Confluence**: API tokens (cloud, with your email) and personal access tokens (Data Center) work without setup. For *Sign in with Atlassian*, create an OAuth 2.0 (3LO) app at developer.atlassian.com/console, add the redirect URI and the scopes (Jira and Confluence each request their own; see the method's *Advanced* section), and enter it under *Plugins → Atlassian → Settings*.
+- **Jira / Confluence / Bitbucket**: install [tader/switchboard-plugin-atlassian](https://github.com/tader/switchboard-plugin-atlassian) through *Plugins → Install from GitHub*. Cloud API tokens and Data Center personal access tokens work without administrator OAuth setup; the repository includes setup guides for cloud sign-in.
 - **Todoist**: API tokens work without setup; for browser sign-in create an app in the Todoist App Management Console.
 - **Spotify**: create an app at developer.spotify.com/dashboard (Web API), add the redirect URI, and add each user under *User Management* while the app is in development mode. The client secret is only needed for *App only* access.
 - **Plex**: no setup. Sign in through plex.tv, with a code at plex.tv/link, or with a token. Switchboard picks the first of your servers it can reach (local HTTPS first); set *Server URL* under *Advanced* to choose one.
@@ -162,6 +162,12 @@ Every request through Switchboard is logged per user, whether it goes through th
 ### Docs
 
 The web app has guides under *Docs*: using Switchboard from AI assistants (Claude, Codex, Copilot, OpenCode), the Switchboard API with a reference generated from its OpenAPI description, and setup guides that plugins ship in their `docs/` folder (for example Google sign-in and Google Keep). Switchboard's own guides live in `docs/guides/`.
+
+## Atlassian plugins
+
+Jira, Confluence and Bitbucket are maintained in [tader/switchboard-plugin-atlassian](https://github.com/tader/switchboard-plugin-atlassian). Install that repository through **Plugins → Install from GitHub**.
+
+**Install the external Atlassian plugin before upgrading a Switchboard that uses built-in Jira or Confluence.** It keeps the `atlassian` plugin ID, `jira`/`confluence` service IDs, authentication methods and saved OAuth settings. Installed plugins take precedence over built-ins during the transition. Existing connections and saved calls remain valid; do not delete or reconnect them solely for this move.
 
 ## macOS plugins
 
