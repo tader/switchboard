@@ -29,13 +29,12 @@ export function CommunityPlugins({ installed, onInstall }: { installed: PluginIn
     <p className="text-[13px] text-zinc-500">Browse plugins from the <a className="text-indigo-600 dark:text-indigo-400" href="https://github.com/tader/switchboard-plugins" target="_blank" rel="noreferrer">community catalog</a>. Listings are loaded when you open this browser.</p>
     {error && <Alert>{error} <Button size="sm" disabled={loading} onClick={() => void load()}>Retry</Button></Alert>}
     {loading && !catalog ? <div className="flex justify-center py-12"><Spinner /></div> : !visible.length && !error ? <Empty icon={<Puzzle className="size-5" />} title={filter ? 'No matching plugins' : 'No community plugins yet'} /> : catalog && <Table label="Community plugins">
-      <thead><tr><th scope="col">Plugin</th><th scope="col" className="hidden sm:table-cell">Repository</th><th scope="col"><span className="sr-only">Install</span></th></tr></thead>
+      <thead><tr><th scope="col" className="w-full">Plugin</th><th scope="col"><span className="sr-only">Install</span></th></tr></thead>
       <tbody>{visible.map((p) => {
         const present = installed.find((i) => i.id === p.id);
         return <tr key={p.id}>
-          <td><div className="flex min-w-0 items-start gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0"><div className="font-semibold">{p.name}</div><p className="mt-1 text-xs text-zinc-500">{p.description}</p></div></div></td>
-          <td className="hidden sm:table-cell"><a className="break-all text-xs text-indigo-600 dark:text-indigo-400" href={`https://github.com/${p.repo}`} target="_blank" rel="noreferrer">{p.repo}</a></td>
-          <td className="text-right">{present?.origin === 'installed' ? <Badge>Installed</Badge> : <Button size="sm" icon={<Download className="size-3.5" />} onClick={() => onInstall(p)}>{present ? 'Install external version' : 'Install'}</Button>}</td>
+          <td><div className="flex min-w-0 items-start gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0"><div className="font-semibold">{p.name}</div><p className="mt-1 text-xs text-zinc-500">{p.description}</p><a className="mt-1 block break-all text-xs text-indigo-600 dark:text-indigo-400" href={`https://github.com/${p.repo}`} target="_blank" rel="noreferrer">{p.repo}</a></div></div></td>
+          <td className="whitespace-nowrap text-right">{present?.origin === 'installed' ? <Badge>Installed</Badge> : <Button size="sm" icon={<Download className="size-3.5" />} onClick={() => onInstall(p)}>{present ? 'Install external version' : 'Install'}</Button>}</td>
         </tr>;
       })}</tbody>
     </Table>}
