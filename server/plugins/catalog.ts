@@ -34,7 +34,10 @@ export function validateCatalog(input: unknown): PluginCatalog {
 
 export async function communityCatalog(): Promise<PluginCatalog> {
   try {
-    const res = await fetch(CATALOG_URL, { headers: { 'cache-control': 'no-cache' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
+    // Raw GitHub's CDN may retain an older main-branch response despite no-cache.
+    const url = new URL(CATALOG_URL);
+    url.searchParams.set('t', String(Date.now()));
+    const res = await fetch(url.toString(), { headers: { 'cache-control': 'no-cache' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
     if (!res.ok) { await res.body?.cancel(); throw new Error(`HTTP ${res.status}`); }
     if (!res.body) throw new Error('Empty response');
     const reader = res.body.getReader();

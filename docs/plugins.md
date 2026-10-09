@@ -110,7 +110,7 @@ Switchboard bundles only `mcp`, `api-key`, and `oauth2`. Provider integrations a
 
 `api-key` exports `bearerToken`, `headerKey`, `queryKey`, `basicAuth`. Secret fields go into credentials; pass `identify` to validate the key and name the account.
 
-The external [`google`](https://github.com/tader/switchboard-plugin-google) plugin exports `googleService({ id, name, scopes, baseUrl, allowedHosts, openapi, fields })`, which builds a Google service using the admin-configured OAuth client. See the [Gmail plugin](https://github.com/tader/switchboard-plugin-gmail/blob/main/plugins/gmail/index.ts) for a short, complete example. The external [`microsoft`](https://github.com/tader/switchboard-plugin-microsoft) plugin similarly exports `microsoftService` and `spec` for Microsoft Graph apps. Declare these helpers in `dependencies` with compatible `dependencyVersions`; the live catalog resolves their separate repositories.
+The external [`google`](https://github.com/tader/switchboard-plugin-google) plugin exports `googleService({ id, name, scopes, baseUrl, allowedHosts, openapi, fields })`, which builds a Google service using the admin-configured OAuth client. See the [Gmail plugin](https://github.com/tader/switchboard-plugin-google/blob/main/plugins/gmail/index.ts) for a short, complete example. The external [`microsoft`](https://github.com/tader/switchboard-plugin-microsoft) plugin similarly exports `microsoftService` and `spec` for Microsoft Graph apps. Declare these helpers in `dependencies` with compatible `dependencyVersions`; the live catalog resolves each plugin's repository and folder. Google and Microsoft apps live alongside their helper in their respective family repository.
 
 ## Documentation
 
