@@ -95,6 +95,15 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.ok(invitation, central.output());
   assert.equal((await request('POST', '/api/auth/invite', { token: invitation, password: 'central password' })).status, 200);
   const me = (await request('GET', '/api/me')).data;
+  // Shell commands work locally before any peer is configured.
+  assert.deepEqual((await request('GET', '/api/admin/peers')).data, []);
+  const standaloneShell = (await request('GET', '/api/services')).data.find((s: any) => s.id === 'shell-command');
+  assert.ok(standaloneShell); assert.ok(standaloneShell.methods[0].unavailable);
+  assert.equal((await request('PUT', '/api/admin/plugins/shell-command/settings', { enabled: true })).status, 200);
+  const standalone = await request('POST', '/api/connections', { service: 'shell-command', method: 'command', name: 'standalone-command', config: { command: 'printf "standalone output"' } });
+  assert.equal(standalone.status, 200, JSON.stringify(standalone.data));
+  assert.equal((await request('POST', '/api/call', { connection: standalone.data.connection.id, url: '/' })).data.body, 'standalone output');
+  assert.equal((await request('DELETE', `/api/connections/${standalone.data.connection.id}`)).status, 200);
   const enrolled = await request('POST', '/api/admin/peers', { name: 'Test laptop', ownerUserId: me.id });
   assert.equal(enrolled.status, 201, JSON.stringify(enrolled.data));
 

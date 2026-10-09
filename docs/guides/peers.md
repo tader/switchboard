@@ -41,7 +41,7 @@ Rotate credentials on the accepting instance, then update the token on the conne
 
 ## Upgrading
 
-Both instances require peer protocol 3. Update the Shell command plugin alongside Switchboard because its context flag is now `ctx.peer`. Previous satellite protocol versions are rejected with an upgrade response. Existing devices, outgoing links, access lists, imported handles and sharing grants migrate to peers. Existing IDs, saved calls and encrypted credentials are retained. No new grants are created by migration. Review new receiving-side user permissions before sharing in the reverse direction.
+Both instances require peer protocol 3. Update older Shell command installations: the current plugin works on any instance without requiring peers. Previous satellite protocol versions are rejected with an upgrade response. Existing devices, outgoing links, access lists, imported handles and sharing grants migrate to peers. Existing IDs, saved calls and encrypted credentials are retained. No new grants are created by migration. Review new receiving-side user permissions before sharing in the reverse direction.
 
 `SWITCHBOARD_PEER_URL` and `SWITCHBOARD_PEER_TOKEN` bootstrap one outgoing peer once; later changes belong in the UI. Historical satellite environment variables are accepted only as upgrade aliases. Legacy shadow-owned connections are assigned to the oldest active local administrator and remain unshared until explicitly selected.
 

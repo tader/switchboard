@@ -11,10 +11,10 @@ process.on('exit', () => fs.rmSync(fixturePluginsDir, { recursive: true, force: 
 export function installFixturePlugins(dataDir: string, ids = fs.readdirSync(fixturePluginsDir)) {
   for (const id of ids) {
     fs.cpSync(path.join(fixturePluginsDir, id), path.join(dataDir, 'plugins', id), { recursive: true });
-    // Adapt the frozen pre-peer API baseline without modifying its historical archive.
+    // Remove the historical role gate without modifying the frozen migration archive.
     if (id === 'shell-command') {
       const entry = path.join(dataDir, 'plugins', id, 'index.ts');
-      fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replaceAll('ctx.satellite', 'ctx.peer'));
+      fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replace('  if (!ctx.satellite) return {};\n', ''));
     }
   }
 }
