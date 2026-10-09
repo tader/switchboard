@@ -18,8 +18,8 @@ export interface Caller {
   ip: string | null;
   userAgent: string | null;
   savedCall?: string;
-  upstreamId?: string;
-  upstreamUserId?: string;
+  peerId?: string;
+  peerUserId?: string;
 }
 
 export function callerFrom(c: Context<Env>, source: AuditSource, savedCall?: string): Caller {
@@ -121,13 +121,13 @@ export function record(e: AuditEntry): number {
   } catch {}
   const r = run(
     `INSERT INTO audit_log (user_id, created_at, source, connection_id, connection_name, service_id, token_id, token_name, saved_call,
-       method, url, host, status, duration_ms, request_size, response_size, response_type, retried, error, ip, user_agent, request_headers, request_body, mcp_operation, mcp_target, mcp_outcome, upstream_id, upstream_user_id)
+       method, url, host, status, duration_ms, request_size, response_size, response_type, retried, error, ip, user_agent, request_headers, request_body, mcp_operation, mcp_target, mcp_outcome, peer_id, peer_user_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     e.userId, now(), e.caller.source, e.connection?.id ?? null, e.connection?.name ?? null, e.connection?.serviceId ?? null,
     e.caller.tokenId, e.caller.tokenName, e.caller.savedCall ?? null, e.method ?? null, url, host, e.status ?? null, e.durationMs ?? null,
     e.requestSize ?? null, e.responseSize ?? null, e.responseType ?? null, e.retried ? 1 : 0, e.error?.slice(0, 1000) ?? null,
     e.caller.ip, e.caller.userAgent, e.requestHeaders ? JSON.stringify(redactHeaders(e.requestHeaders)) : null, e.requestBody ?? null,
-    e.mcpOperation ?? null, e.mcpTarget ? redactUrl(e.mcpTarget) : null, e.mcpOutcome ?? null, e.caller.upstreamId ?? null, e.caller.upstreamUserId ?? null,
+    e.mcpOperation ?? null, e.mcpTarget ? redactUrl(e.mcpTarget) : null, e.mcpOutcome ?? null, e.caller.peerId ?? null, e.caller.peerUserId ?? null,
   );
   return Number(r.lastInsertRowid);
 }
@@ -170,8 +170,8 @@ export interface AuditQuery {
   offset?: number;
 }
 
-function where(userId: string, q: AuditQuery, includeSatelliteUsers = false) {
-  const clauses = [includeSatelliteUsers ? '(user_id = ? OR upstream_id IS NOT NULL OR user_id IN (SELECT id FROM users WHERE satellite_shadow = 1))' : 'user_id = ?'];
+function where(userId: string, q: AuditQuery, includePeerUsers = false) {
+  const clauses = [includePeerUsers ? '(user_id = ? OR peer_id IS NOT NULL OR user_id IN (SELECT id FROM users WHERE peer_shadow = 1))' : 'user_id = ?'];
   const params: any[] = [userId];
   if (q.connection) {
     clauses.push('(connection_id = ? OR connection_name = ?)');
@@ -221,7 +221,7 @@ const toEntry = (r: any, full = false) => ({
   id: r.id,
   at: r.created_at,
   source: r.source,
-  upstream: r.upstream_id ? { id: r.upstream_id, name: one('SELECT name FROM upstreams WHERE id = ?', r.upstream_id)?.name ?? r.upstream_id, userId: r.upstream_user_id } : null,
+  peer: r.peer_id ? { id: r.peer_id, name: one('SELECT name FROM peers WHERE id = ?', r.peer_id)?.name ?? r.peer_id, userId: r.peer_user_id } : null,
   connection: r.connection_id ? { id: r.connection_id, name: r.connection_name, serviceId: r.service_id } : null,
   client: r.token_id ? { tokenId: r.token_id, name: r.token_name } : null,
   savedCall: r.saved_call,
@@ -243,8 +243,8 @@ const toEntry = (r: any, full = false) => ({
     : {}),
 });
 
-export function queryAudit(userId: string, q: AuditQuery, includeSatelliteUsers = false) {
-  const w = where(userId, q, includeSatelliteUsers);
+export function queryAudit(userId: string, q: AuditQuery, includePeerUsers = false) {
+  const w = where(userId, q, includePeerUsers);
   const col = SORTS[q.sort ?? 'time'];
   if (!col) throw badRequest('sort must be time, duration, status or size');
   const dir = q.order === 'asc' ? 'ASC' : 'DESC';
@@ -256,16 +256,16 @@ export function queryAudit(userId: string, q: AuditQuery, includeSatelliteUsers 
   return { items: rows.map((r) => toEntry(r)), total, limit, offset };
 }
 
-export function getAudit(userId: string, id: number, includeSatelliteUsers = false) {
-  const owner = includeSatelliteUsers ? '(user_id = ? OR upstream_id IS NOT NULL OR user_id IN (SELECT id FROM users WHERE satellite_shadow = 1))' : 'user_id = ?';
+export function getAudit(userId: string, id: number, includePeerUsers = false) {
+  const owner = includePeerUsers ? '(user_id = ? OR peer_id IS NOT NULL OR user_id IN (SELECT id FROM users WHERE peer_shadow = 1))' : 'user_id = ?';
   const r = one(`SELECT * FROM audit_log WHERE id = ? AND ${owner}`, id, userId);
   if (!r) throw notFound('Entry not found');
   return toEntry(r, true);
 }
 
 /** Values to offer in filters, including tokens and connections that no longer exist. */
-export function auditFacets(userId: string, includeSatelliteUsers = false) {
-  const owner = includeSatelliteUsers ? '(user_id = ? OR upstream_id IS NOT NULL OR user_id IN (SELECT id FROM users WHERE satellite_shadow = 1))' : 'user_id = ?';
+export function auditFacets(userId: string, includePeerUsers = false) {
+  const owner = includePeerUsers ? '(user_id = ? OR peer_id IS NOT NULL OR user_id IN (SELECT id FROM users WHERE peer_shadow = 1))' : 'user_id = ?';
   return {
     connections: all(
       `SELECT connection_id AS id, connection_name AS name, service_id AS serviceId, COUNT(*) AS count FROM audit_log
@@ -326,10 +326,10 @@ const KEY: Record<Exclude<Breakdown, 'url'>, { key: string; label: string }> = {
   },
 };
 
-export function auditHistogram(userId: string, q: AuditQuery & { by?: string; tz?: number; buckets?: number }, includeSatelliteUsers = false) {
+export function auditHistogram(userId: string, q: AuditQuery & { by?: string; tz?: number; buckets?: number }, includePeerUsers = false) {
   const by = (q.by ?? 'connection') as Breakdown;
   if (!['connection', 'client', 'method', 'status', 'url'].includes(by)) throw badRequest('by must be connection, client, method, status or url');
-  const w = where(userId, { ...q, sort: undefined, order: undefined }, includeSatelliteUsers);
+  const w = where(userId, { ...q, sort: undefined, order: undefined }, includePeerUsers);
   const to = q.to ?? now();
   let from = q.from;
   if (!from) {

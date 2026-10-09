@@ -7,8 +7,8 @@ import { connectionOption } from '../plugins/github-access.ts';
 import { callerFrom } from '../audit.ts';
 import { type PluginRecord, pluginIcon, plugins } from '../plugins/manager.ts';
 import { type Role, createInvite, createUser, deleteUser, getUser, listUsers, pendingInvites, updateUser } from '../users.ts';
-import { createSatellite, deleteSatellite, getSatellite, listSatellites, rotateSatelliteToken, updateSatellite } from '../satellites.ts';
-import { listUpstreams, createUpstream, updateUpstream, deleteUpstream, hasConfiguredUpstreams } from '../upstreams.ts';
+import { createPeer, deletePeer, getPeer, listPeers, rotatePeerToken, updatePeer } from '../peers.ts';
+import { createPeerLink, hasConfiguredPeers } from '../peer-settings.ts';
 
 export const admin = new Hono<Env>();
 admin.use('*', requireUser, requireAdmin);
@@ -114,37 +114,26 @@ admin.delete('/plugins/:id', async (c) => {
   return c.json({ ok: true });
 });
 
-// --- satellites ---
-
-admin.get('/satellites', (c) => c.json(listSatellites()));
-admin.get('/upstreams', (c) => c.json(listUpstreams()));
-async function upstreamMutation<T>(operation: () => T): Promise<T> {
-  const before = hasConfiguredUpstreams(); const result = operation();
-  if (before !== hasConfiguredUpstreams()) await plugins.reload([...plugins.plugins.keys()]);
+// --- peers ---
+async function peerMutation<T>(operation: () => T): Promise<T> {
+  const before = hasConfiguredPeers(); const result = operation();
+  if (before !== hasConfiguredPeers()) await plugins.reload([...plugins.plugins.keys()]);
   return result;
 }
-admin.post('/upstreams', async (c) => { const body = await c.req.json(); return c.json(await upstreamMutation(() => createUpstream(body)), 201); });
-admin.patch('/upstreams/:id', async (c) => { const body = await c.req.json(); return c.json(await upstreamMutation(() => updateUpstream(c.req.param('id'), body))); });
-admin.delete('/upstreams/:id', async (c) => { await upstreamMutation(() => deleteUpstream(c.req.param('id'))); return c.json({ ok: true }); });
-
-admin.get('/satellites/:id', (c) => c.json(getSatellite(c.req.param('id'))));
-
-admin.post('/satellites', async (c) => {
-  const b = await c.req.json<{ name: string; ownerUserId?: string }>();
-  return c.json(createSatellite(b.name, b.ownerUserId ?? c.get('user').id), 201);
+admin.get('/peers', c => c.json(listPeers()));
+admin.get('/peers/:id', c => c.json(getPeer(c.req.param('id'))));
+admin.post('/peers', async c => {
+  const body = await c.req.json();
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw badRequest('Expected a peer object');
+  const owner = body.ownerUserId ?? c.get('user').id;
+  if (body.direction !== undefined && !['incoming', 'outgoing'].includes(body.direction)) throw badRequest('Unknown peer direction');
+  return c.json(await peerMutation(() => body.direction === 'outgoing'
+    ? { peer: getPeer(createPeerLink(body, owner)) }
+    : createPeer(body.name, owner)), 201);
 });
-
-admin.patch('/satellites/:id', async (c) => {
-  const b = await c.req.json<{ name?: string; disabled?: boolean; userIds?: string[] }>();
-  return c.json(updateSatellite(c.req.param('id'), b));
-});
-
-admin.post('/satellites/:id/rotate-token', (c) => c.json(rotateSatelliteToken(c.req.param('id'))));
-
-admin.delete('/satellites/:id', (c) => {
-  deleteSatellite(c.req.param('id'));
-  return c.json({ ok: true });
-});
+admin.patch('/peers/:id', async c => { const body = await c.req.json(); return c.json(await peerMutation(() => updatePeer(c.req.param('id'), body))); });
+admin.post('/peers/:id/rotate-token', c => c.json(rotatePeerToken(c.req.param('id'))));
+admin.delete('/peers/:id', async c => { await peerMutation(() => deletePeer(c.req.param('id'))); return c.json({ ok: true }); });
 
 // --- users ---
 

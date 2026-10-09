@@ -9,5 +9,12 @@ tar.x({ sync: true, file: path.join(import.meta.dirname, 'fixtures/extracted-plu
 process.on('exit', () => fs.rmSync(fixturePluginsDir, { recursive: true, force: true }));
 
 export function installFixturePlugins(dataDir: string, ids = fs.readdirSync(fixturePluginsDir)) {
-  for (const id of ids) fs.cpSync(path.join(fixturePluginsDir, id), path.join(dataDir, 'plugins', id), { recursive: true });
+  for (const id of ids) {
+    fs.cpSync(path.join(fixturePluginsDir, id), path.join(dataDir, 'plugins', id), { recursive: true });
+    // Adapt the frozen pre-peer API baseline without modifying its historical archive.
+    if (id === 'shell-command') {
+      const entry = path.join(dataDir, 'plugins', id, 'index.ts');
+      fs.writeFileSync(entry, fs.readFileSync(entry, 'utf8').replaceAll('ctx.satellite', 'ctx.peer'));
+    }
+  }
 }

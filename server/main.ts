@@ -18,10 +18,9 @@ import { openapiDocument } from './self-openapi.ts';
 import { ensureAdmin } from './users.ts';
 import { prune } from './audit.ts';
 import type { Env } from './auth.ts';
-import { attachSatelliteWebSockets } from './satellites.ts';
-import { startSatelliteAgent } from './satellite-agent.ts';
-import { initializeUpstreams } from './upstreams.ts';
-import { stopUpstreamMcp } from './upstream-mcp.ts';
+import { attachPeerWebSockets, startPeerAgent } from './peers.ts';
+import { initializePeers } from './peer-settings.ts';
+import { stopProviderMcp } from './provider-mcp.ts';
 
 fs.mkdirSync(config.dataDir, { recursive: true });
 initKey();
@@ -78,9 +77,9 @@ app.get('*', (c) => {
 });
 
 const setupUrl = ensureAdmin();
-initializeUpstreams();
+initializePeers();
 await plugins.start();
-const stopSatelliteAgent = startSatelliteAgent();
+const stopPeerAgent = startPeerAgent();
 prune();
 setInterval(prune, 6 * 3600_000).unref();
 
@@ -91,13 +90,13 @@ if (setupUrl) {
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () => {
   console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);
 });
-const stopSatelliteWebSockets = attachSatelliteWebSockets(server as import('node:http').Server);
+const stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Server);
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
-    stopUpstreamMcp();
-    stopSatelliteWebSockets();
-    stopSatelliteAgent();
+    stopProviderMcp();
+    stopPeerWebSockets();
+    stopPeerAgent();
     server.close();
     await plugins.stop().catch(() => {});
     process.exit(0);

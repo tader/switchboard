@@ -1,6 +1,6 @@
 import { listConnections, getConnectionRow } from './connections.ts';
 import { badRequest, forbidden } from './http.ts';
-import { executeMcp, type McpInput } from './upstream-mcp.ts';
+import { executeMcp, type McpInput } from './provider-mcp.ts';
 import type { User, ApiToken } from './users.ts';
 import type { Caller } from './audit.ts';
 

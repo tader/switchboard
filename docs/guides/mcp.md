@@ -40,7 +40,7 @@ Explicitly configured endpoints may be on a private network. Separate OAuth disc
 
 The [console](/console) provides Tools, Resources and Prompts, with schemas, editable arguments, rich results and saved requests. A tool result marked `isError` is shown as a tool error and recorded as failure in Activity.
 
-Assistants use `search_mcp_tools` → `get_mcp_tool` → `call_mcp_tool`. Native MCP resources, templates and prompts are also available to clients that expose them. Resource URIs begin with `switchboard-mcp:<connection-id>:`; prompt names begin with `<connection-id>:`. Pass those values back unchanged. The namespace uses immutable IDs, so renaming a connection does not break it. Each token sees only its shared connections, including satellite connections; upstream credentials stay on their owning instance.
+Assistants use `search_mcp_tools` → `get_mcp_tool` → `call_mcp_tool`. Native MCP resources, templates and prompts are also available to clients that expose them. Resource URIs begin with `switchboard-mcp:<connection-id>:`; prompt names begin with `<connection-id>:`. Pass those values back unchanged. The namespace uses immutable IDs, so renaming a connection does not break it. Each token sees only its shared connections, including peer connections; upstream credentials stay on their owning instance.
 
 Upstream connections support Streamable HTTP JSON and SSE responses, MCP 2026-07-28 and negotiated 2025 versions. Lists collect at most 16 pages; results are limited to 2 MiB and operations to two minutes. Cancelled or failed mutating calls can have an unknown outcome; inspect upstream state before repeating them. Stdio, deprecated standalone SSE endpoints, subscriptions, sampling, elicitation and task extensions are not supported.
 

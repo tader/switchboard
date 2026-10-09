@@ -60,7 +60,7 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
     setPlan(null); setError(''); setConnectionError(''); setConnections([]);
     const controller = new AbortController();
     api<Connection[]>('/connections', { signal: controller.signal }).then((list) => {
-      setConnections(list.filter((c) => c.serviceId === 'github' && c.kind === 'http' && !c.satellite && c.status !== 'unavailable'));
+      setConnections(list.filter((c) => c.serviceId === 'github' && c.kind === 'http' && !c.peer && c.status !== 'unavailable'));
     }, (e) => { if (!controller.signal.aborted) setConnectionError(e.message); });
     return () => controller.abort();
   }, [request]);

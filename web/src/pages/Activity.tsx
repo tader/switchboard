@@ -10,7 +10,7 @@ import { METHOD_COLORS, ago, bytes, cx, useResource } from '../lib';
 interface Entry {
   id: number;
   at: number;
-  upstream: { id: string; name: string; userId: string } | null;
+  peer: { id: string; name: string; userId: string } | null;
   source: 'proxy' | 'call' | 'saved-call' | 'console' | 'token' | 'mcp' | 'plugin';
   connection: { id: string; name: string; serviceId: string } | null;
   client: { tokenId: string; name: string } | null;
@@ -464,7 +464,7 @@ function EntryDialog({ id, onClose, onFilter }: { id: number | null; onClose: ()
               {e.status ?? '—'}
               {e.retried && <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">retried after 401 with refreshed credentials</span>}
             </Row>
-            {e.upstream && <Row label="Upstream">{e.upstream.name} · user {e.upstream.userId}</Row>}
+            {e.peer && <Row label="Peer">{e.peer.name} · user {e.peer.userId}</Row>}
             <Row label="Client">{e.client ? link(e.client.name, { client: e.client.tokenId }) : link('Web console', { client: 'web' })}</Row>
             <Row label="Connection">{e.connection ? link(e.connection.name, { connection: e.connection.id }) : '—'}</Row>
             <Row label="Through">{SOURCES[e.source]}{e.savedCall && <> · {link(e.savedCall, { q: e.savedCall })}</>}</Row>

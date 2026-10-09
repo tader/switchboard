@@ -6,10 +6,11 @@ import { HttpError, badRequest, notFound } from './http.ts';
 import type { AuthMethod, ConnectArgs, ConnectStep, Connected, Connection, Field, ServiceDefinition } from './plugins/api.ts';
 import { plugins } from './plugins/manager.ts';
 import type { User } from './users.ts';
-import { getSatellite, parseRemoteServiceId, satelliteConnection, syncSatelliteConnections } from './satellites.ts';
+import { getPeer, parseRemoteServiceId, peerConnection, syncPeerConnections } from './peers.ts';
 
 export interface ConnectionView {
   kind: 'http' | 'mcp';
+  icon?: string;
   readOnly: boolean;
   id: string;
   name: string;
@@ -30,7 +31,7 @@ export interface ConnectionView {
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
-  satellite: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
+  peer: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9._@+-]{0,99}$/;
@@ -65,16 +66,16 @@ export function resolveBaseUrl(service: ServiceDefinition, conn: Connection): st
 
 export function toView(r: any): ConnectionView {
   const conn = rowToConnection(r);
-  if (r.satellite_id) {
-    let sat: any; let remote: any;
-    try { sat = getSatellite(r.satellite_id); remote = satelliteConnection(r.user_id, r.satellite_id, r.remote_connection_id); } catch {}
-    const unavailable = !sat?.online || !remote || remote.status !== 'ok';
+  if (r.peer_id) {
+    let peer: any; let remote: any;
+    try { peer = getPeer(r.peer_id); remote = peerConnection(r.user_id, r.peer_id, r.remote_connection_id); } catch {}
+    const unavailable = !peer?.online || !remote || remote.status !== 'ok';
     return { kind: r.kind ?? 'http', readOnly: true, id: conn.id, name: conn.name, serviceId: conn.serviceId,
-      serviceName: remote?.serviceName ?? conn.serviceId, methodId: 'shared', methodName: 'Shared connection', account: null, config: {},
-      status: unavailable ? 'unavailable' : 'ok', statusMessage: !remote ? 'This connection is no longer shared with you' : !sat?.online ? `${sat.name} is offline` : remote.status !== 'ok' ? 'The connection is unavailable on its satellite' : null,
+      icon: remote?.icon, serviceName: remote?.serviceName ?? conn.serviceId, methodId: 'shared', methodName: 'Shared connection', account: null, config: {},
+      status: unavailable ? 'unavailable' : 'ok', statusMessage: !remote ? 'This connection is no longer shared with you' : !peer?.online ? `${peer.name} is offline` : remote.status !== 'ok' ? 'The connection is unavailable on its peer' : null,
       baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, canIssueToken: false, redirectUri: null,
       createdAt: r.created_at, updatedAt: r.updated_at, lastUsedAt: r.last_used_at,
-      satellite: { id: r.satellite_id, name: sat?.name ?? r.satellite_id, online: !!sat?.online, lastSeenAt: sat?.lastSeenAt ?? null } };
+      peer: { id: r.peer_id, name: peer?.name ?? r.peer_id, online: !!peer?.online, lastSeenAt: peer?.lastSeenAt ?? null } };
   }
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
@@ -89,6 +90,7 @@ export function toView(r: any): ConnectionView {
     kind: r.kind ?? 'http',
     name: conn.name,
     serviceId: conn.serviceId,
+    icon: service?.icon,
     serviceName: service?.name ?? conn.serviceId,
     methodId: conn.methodId,
     methodName: method?.name ?? conn.methodId,
@@ -103,12 +105,12 @@ export function toView(r: any): ConnectionView {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     lastUsedAt: r.last_used_at,
-    satellite: null,
+    peer: null,
   };
 }
 
 export function listConnections(userId: string, only?: string[] | null): ConnectionView[] {
-  syncSatelliteConnections(userId);
+  syncPeerConnections(userId);
   return all('SELECT * FROM connections WHERE user_id = ? ORDER BY service_id, name COLLATE NOCASE', userId)
     .filter((r) => !only || only.includes(r.id))
     .map(toView);
@@ -116,7 +118,7 @@ export function listConnections(userId: string, only?: string[] | null): Connect
 
 /** Looks a connection up by id or name. */
 export function getConnectionRow(userId: string, ref: string): any {
-  syncSatelliteConnections(userId);
+  syncPeerConnections(userId);
   const r = one('SELECT * FROM connections WHERE user_id = ? AND (id = ? OR name = ?)', userId, ref, ref);
   if (!r) throw notFound(`Connection "${ref}" not found`);
   return r;
@@ -124,7 +126,7 @@ export function getConnectionRow(userId: string, ref: string): any {
 
 export function loadConnection(userId: string, ref: string) {
   const row = getConnectionRow(userId, ref);
-  if (row.satellite_id) throw new HttpError(500, 'Satellite connections must be executed through the satellite transport');
+  if (row.peer_id) throw new HttpError(500, 'Peer connections must be executed through the peer transport');
   const conn = rowToConnection(row);
   const service = plugins.service(conn.serviceId);
   if (!service) throw new HttpError(503, `Service "${conn.serviceId}" is not available (its plugin is not active)`);
@@ -135,7 +137,7 @@ export function loadConnection(userId: string, ref: string) {
 
 export function renameConnection(userId: string, ref: string, name: string) {
   const row = getConnectionRow(userId, ref);
-  if (row.satellite_id) throw new HttpError(403, 'Shared satellite connections are managed on their satellite');
+  if (row.peer_id) throw new HttpError(403, 'Shared peer connections are managed on their peer');
   name = name.trim();
   if (!NAME.test(name)) throw badRequest('Names may contain letters, digits, ".", "_", "@", "+" and "-"');
   if (one('SELECT 1 FROM connections WHERE user_id = ? AND name = ? AND id != ?', userId, name, row.id)) throw badRequest('You already have a connection with that name');
@@ -146,7 +148,7 @@ export function renameConnection(userId: string, ref: string, name: string) {
 export async function deleteConnection(userId: string, ref: string) {
   const row = getConnectionRow(userId, ref);
   connectionChanged(row.id);
-  if (row.satellite_id) throw new HttpError(403, 'Shared satellite connections are managed on their satellite');
+  if (row.peer_id) throw new HttpError(403, 'Shared peer connections are managed on their peer');
   const conn = rowToConnection(row);
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
@@ -195,7 +197,7 @@ export interface ServiceView {
   docsUrl?: string;
   pluginId: string;
   methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string; redirect: boolean }[];
-  satellite?: { id: string; name: string; online: boolean };
+  peer?: { id: string; name: string; online: boolean };
 }
 
 export function listServices(userId?: string): ServiceView[] {
@@ -248,10 +250,10 @@ export async function startConnect(
 ): Promise<FlowResult> {
   const existingRow = input.connection ? getConnectionRow(user.id, input.connection) : undefined;
   if (existingRow) connectionChanged(existingRow.id);
-  const remoteParsed = existingRow?.satellite_id
+  const remoteParsed = existingRow?.peer_id
     ? parseRemoteServiceId(existingRow.service_id)
     : parseRemoteServiceId(existingRow?.service_id ?? input.service ?? '');
-  if (existingRow?.satellite_id || remoteParsed) throw new HttpError(403, 'Create and manage satellite connections on the satellite, then explicitly share them');
+  if (existingRow?.peer_id || remoteParsed) throw new HttpError(403, 'Create and manage peer connections on the peer, then explicitly share them');
   let existing: Connection | undefined;
   if (input.connection) existing = rowToConnection(getConnectionRow(user.id, input.connection));
   const serviceId = existing?.serviceId ?? input.service;
@@ -345,7 +347,7 @@ function existingConn(userId: string, connectionId: string | null) {
 
 /** Completes a redirect flow. Returns the flow's user id so the caller can verify the session. */
 export async function completeRedirect(flowId: string, params: Record<string, string>, user: User): Promise<ConnectionView> {
-  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId)) throw badRequest('Legacy satellite sign-in is no longer supported; sign in on the satellite');
+  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND peer_id IS NOT NULL', flowId)) throw badRequest('Legacy peer sign-in is no longer supported; sign in on the peer');
   const { r, service, method, cfg, pending } = loadFlow(flowId, 'redirect');
   if (r.user_id !== user.id) throw badRequest('This sign-in was started by another user');
   run('DELETE FROM connect_flows WHERE id = ?', flowId);
@@ -364,7 +366,7 @@ export async function completeRedirect(flowId: string, params: Record<string, st
  * just the code. A pasted address must belong to this flow (its state is the flow id).
  */
 export async function completeFromPaste(flowId: string, pasted: string, user: User): Promise<ConnectionView> {
-  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId)) throw badRequest('Legacy satellite sign-in is no longer supported; sign in on the satellite');
+  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND peer_id IS NOT NULL', flowId)) throw badRequest('Legacy peer sign-in is no longer supported; sign in on the peer');
   const text = String(pasted ?? '').trim();
   if (!text) throw badRequest('Paste the address you were sent to after signing in');
   let params: Record<string, string>;
@@ -386,7 +388,7 @@ export async function completeFromPaste(flowId: string, pasted: string, user: Us
 }
 
 export async function pollDevice(flowId: string, user: User): Promise<FlowResult | { status: 'pending'; interval?: number }> {
-  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId)) throw badRequest('Legacy satellite sign-in is no longer supported; sign in on the satellite');
+  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND peer_id IS NOT NULL', flowId)) throw badRequest('Legacy peer sign-in is no longer supported; sign in on the peer');
   const { r, service, method, cfg, pending } = loadFlow(flowId, 'device');
   if (r.user_id !== user.id) throw notFound();
   if (!method.poll) throw badRequest('This method does not support polling');

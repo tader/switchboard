@@ -5,7 +5,7 @@ import { connectionChanged } from '../connection-events.ts';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { callbackUrl, config } from '../config.ts';
-import { hasConfiguredUpstreams } from '../upstreams.ts';
+import { hasConfiguredPeers } from '../peer-settings.ts';
 import { decrypt, encrypt } from '../crypto.ts';
 import { all, now, one, run } from '../db.ts';
 import { badRequest, notFound } from '../http.ts';
@@ -209,6 +209,10 @@ class PluginManager {
     const p = this.plugins.get(id);
     if (!p) return;
     p.error = undefined;
+    if (id === 'switchboard') {
+      p.enabled = false; p.status = 'disabled'; p.error = 'Replaced by built-in Peers. Configure sharing in Connections → Sharing.';
+      upsertRow(id); run('UPDATE plugins SET enabled = 0 WHERE id = ?', id); return;
+    }
     if (p.manifestError) {
       p.status = 'error';
       p.error = p.manifestError;
@@ -297,7 +301,7 @@ class PluginManager {
       callbackUrl,
       dir: p.dir,
       dataDir,
-      satellite: hasConfiguredUpstreams(),
+      peer: hasConfiguredPeers(),
       mcp: { oauth: mcpOAuth },
     };
   }
@@ -336,6 +340,7 @@ class PluginManager {
 
   async setEnabled(id: string, enabled: boolean) {
     const p = this.get(id);
+    if (id === 'switchboard' && enabled) throw badRequest('The Switchboard plugin has been replaced by Peers');
     upsertRow(id);
     run('UPDATE plugins SET enabled = ? WHERE id = ?', enabled ? 1 : 0, id);
     p.enabled = enabled;

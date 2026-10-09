@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { BookOpen, Code2, ExternalLink, FileKey, History, KeyRound, Laptop, LayoutGrid, List, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal, Trash2, Unlock } from 'lucide-react';
+import { SharingMatrix } from '../components/SharingMatrix';
 import { ConnectionSharing } from '../components/ConnectionSharing';
 import { api, type Connection, type FlowResult, type Service } from '../api';
 import { useSession } from '../auth';
@@ -22,11 +23,11 @@ export function Connections() {
   const [rename, setRename] = useState<Connection | null>(null);
   const [scripts, setScripts] = useState<Connection | null>(null);
   const [filter, setFilter] = useState('');
-  const [view, setView] = useState<'normal' | 'compact'>(() => {
-    try { return localStorage.getItem('switchboard.connections.view') === 'compact' ? 'compact' : 'normal'; }
+  const [view, setView] = useState<'normal' | 'compact' | 'sharing'>(() => {
+    try { const saved = localStorage.getItem('switchboard.connections.view'); return saved === 'compact' || saved === 'sharing' ? saved : 'normal'; }
     catch { return 'normal'; }
   });
-  const changeView = (next: 'normal' | 'compact') => {
+  const changeView = (next: 'normal' | 'compact' | 'sharing') => {
     setView(next);
     try { localStorage.setItem('switchboard.connections.view', next); } catch {}
   };
@@ -52,7 +53,7 @@ export function Connections() {
 
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return (connections.data ?? []).filter(c => !q || `${c.name} ${c.serviceName} ${c.account?.label ?? ''} ${c.satellite?.name ?? ''}`.toLowerCase().includes(q));
+    return (connections.data ?? []).filter(c => !q || `${c.name} ${c.serviceName} ${c.account?.label ?? ''} ${c.peer?.name ?? ''}`.toLowerCase().includes(q));
   }, [connections.data, filter]);
 
   const byService = useMemo(() => {
@@ -86,14 +87,14 @@ export function Connections() {
     { label: 'Open in console', icon: <SquareTerminal />, onSelect: () => navigate(`/console?connection=${c.id}`), disabled: c.status === 'unavailable' },
     { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
     { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
-    { label: 'Share with upstreams', icon: <Server />, onSelect: () => setSharing(c) },
+    { label: 'Share with peers', icon: <Server />, onSelect: () => setSharing(c) },
     { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c), hidden: c.readOnly },
     { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service || c.readOnly },
     'separator',
     { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true, hidden: c.readOnly },
   ]} />;
 
-  const hasSatellites = connections.data?.some(c => c.satellite) ?? false;
+  const hasPeers = connections.data?.some(c => c.peer) ?? false;
   const loading = connections.loading && !connections.data;
 
   return (
@@ -128,14 +129,14 @@ export function Connections() {
             <Input aria-label="Search connections" placeholder="Search connections…" value={filter} onChange={e => setFilter(e.target.value)} className="min-w-0 flex-1 sm:max-w-sm" />
             <span className="shrink-0 text-xs text-zinc-500">{visible.length} of {connections.data?.length}</span>
             <div role="group" aria-label="Connection view" className="col-span-2 flex shrink-0 justify-self-end gap-0.5 rounded-lg bg-zinc-100 p-0.5 sm:ml-auto dark:bg-zinc-800">
-              {([{ value: 'normal', label: 'Normal', Icon: LayoutGrid }, { value: 'compact', label: 'Compact', Icon: List }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-pressed={view === value} onClick={() => changeView(value)} className={cx('inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition focus-visible:outline-2 focus-visible:outline-indigo-500', view === value ? 'bg-white text-zinc-900 shadow-xs dark:bg-zinc-700 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200')}><Icon className="size-3.5" aria-hidden="true" />{label}</button>)}
+              {([{ value: 'normal', label: 'Normal', Icon: LayoutGrid }, { value: 'compact', label: 'Compact', Icon: List }, { value: 'sharing', label: 'Sharing', Icon: Server }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-pressed={view === value} onClick={() => changeView(value)} className={cx('inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition focus-visible:outline-2 focus-visible:outline-indigo-500', view === value ? 'bg-white text-zinc-900 shadow-xs dark:bg-zinc-700 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200')}><Icon className="size-3.5" aria-hidden="true" />{label}</button>)}
             </div>
           </div>
-          {view === 'compact' ? <Table label="Connections">
+          {view === 'sharing' ? <SharingMatrix connections={visible} services={services.data ?? []} /> : view === 'compact' ? <Table label="Connections">
             <thead><tr>
               <th scope="col" className="w-14 sm:w-[22%]">Service</th>
               <th scope="col">Connection</th>
-              {hasSatellites && <th scope="col" className="hidden w-[18%] lg:table-cell">Location</th>}
+              {hasPeers && <th scope="col" className="hidden w-[18%] lg:table-cell">Location</th>}
               <th scope="col" className="w-8 sm:w-28">Status</th>
               <th scope="col" className="hidden w-28 md:table-cell">Last used</th>
               <th scope="col" className="w-11"><span className="sr-only">Actions</span></th>
@@ -143,8 +144,8 @@ export function Connections() {
             <tbody>{visible.map(c => {
               const service = serviceById(c.serviceId);
               const status = c.status === 'ok' ? 'Connected' : c.status === 'error' ? 'Error' : 'Unavailable';
-              const location = c.satellite?.name ?? 'Local';
-              const LocationIcon = c.satellite ? Laptop : Server;
+              const location = c.peer?.name ?? 'Local';
+              const LocationIcon = c.peer ? Laptop : Server;
               return <tr key={c.id} className={cx(highlight === c.id && 'bg-indigo-50/70 dark:bg-indigo-500/10')}>
                 <td><div className="flex min-w-0 items-center gap-2.5" title={c.serviceName}>
                   <ServiceIcon icon={service?.icon} name={c.serviceName} size="sm" />
@@ -157,10 +158,10 @@ export function Connections() {
                     <AuthIndicator connection={c} service={service} />
                   </div>
                   {c.account?.label && c.account.label !== c.name && <div className="mt-0.5 truncate text-xs text-zinc-500" title={c.account.label}>{c.account.label}</div>}
-                  {c.satellite && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 lg:hidden" title={`Satellite: ${location}`}><Laptop className="size-3 shrink-0" aria-hidden="true" /><span className="truncate">{location}</span></div>}
+                  {c.peer && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 lg:hidden" title={`Peer: ${location}`}><Laptop className="size-3 shrink-0" aria-hidden="true" /><span className="truncate">{location}</span></div>}
                   {c.status !== 'ok' && c.statusMessage && <div className="mt-0.5 truncate text-xs text-rose-600 dark:text-rose-400" title={c.statusMessage}>{c.statusMessage}</div>}
                 </td>
-                {hasSatellites && <td className="hidden lg:table-cell"><div className="flex min-w-0 items-center gap-2 text-xs text-zinc-500" title={c.satellite ? `Satellite: ${location}${c.satellite.online ? '' : ' (offline)'}` : location}><LocationIcon className="size-3.5 shrink-0" aria-hidden="true" /><span className="truncate">{location}</span></div></td>}
+                {hasPeers && <td className="hidden lg:table-cell"><div className="flex min-w-0 items-center gap-2 text-xs text-zinc-500" title={c.peer ? `Peer: ${location}${c.peer.online ? '' : ' (offline)'}` : location}><LocationIcon className="size-3.5 shrink-0" aria-hidden="true" /><span className="truncate">{location}</span></div></td>}
                 <td><span className="inline-flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400" title={[status, c.statusMessage].filter(Boolean).join(' · ')}>
                   <span className={cx('size-1.5 shrink-0 rounded-full', c.status === 'ok' ? 'bg-emerald-500' : c.status === 'error' ? 'bg-rose-500' : 'bg-amber-500')} aria-hidden="true" />
                   <span className="sr-only sm:not-sr-only">{status}</span>
@@ -185,9 +186,9 @@ export function Connections() {
                     <code className="max-w-full truncate rounded bg-zinc-100 px-1.5 py-px font-mono text-[11.5px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.name}</code>
                   </div>
                   <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                    <span className="inline-flex min-w-0 max-w-[45%] items-center gap-1 shrink-0" title={c.satellite ? `Satellite: ${c.satellite.name}${c.satellite.online ? '' : ' (offline)'}` : 'Local'}>
-                      {c.satellite ? <Laptop className="size-3 shrink-0" aria-hidden="true" /> : <Server className="size-3 shrink-0" aria-hidden="true" />}
-                      <span className="truncate">{c.satellite?.name ?? 'Local'}</span>
+                    <span className="inline-flex min-w-0 max-w-[45%] items-center gap-1 shrink-0" title={c.peer ? `Peer: ${c.peer.name}${c.peer.online ? '' : ' (offline)'}` : 'Local'}>
+                      {c.peer ? <Laptop className="size-3 shrink-0" aria-hidden="true" /> : <Server className="size-3 shrink-0" aria-hidden="true" />}
+                      <span className="truncate">{c.peer?.name ?? 'Local'}</span>
                     </span>
                     <span aria-hidden="true">·</span>
                     <span className="truncate" title={c.status === 'ok' ? `${c.methodName} · ${c.lastUsedAt ? `Used ${ago(c.lastUsedAt).toLowerCase()}` : 'Not used yet'}` : c.statusMessage ?? undefined}>{c.status === 'ok' ? `${c.methodName} · ${c.lastUsedAt ? `Used ${ago(c.lastUsedAt).toLowerCase()}` : 'Not used yet'}` : <span className="text-rose-600 dark:text-rose-400">{c.statusMessage}</span>}</span>
@@ -283,11 +284,11 @@ export function ConnectDialog({
   const [busy, setBusy] = useState(false);
   const reconnecting = initial.connection;
   const targets = useMemo(() => {
-    const satellites = new Map<string, { id: string; name: string; online: boolean }>();
-    for (const s of services) if (s.satellite) satellites.set(s.satellite.id, s.satellite);
-    return [{ id: 'local', name: 'Local', online: true }, ...[...satellites.values()].sort((a, b) => a.name.localeCompare(b.name))];
+    const peers = new Map<string, { id: string; name: string; online: boolean }>();
+    for (const s of services) if (s.peer) peers.set(s.peer.id, s.peer);
+    return [{ id: 'local', name: 'Local', online: true }, ...[...peers.values()].sort((a, b) => a.name.localeCompare(b.name))];
   }, [services]);
-  const targetServices = services.filter((s) => target === 'local' ? !s.satellite : s.satellite?.id === target);
+  const targetServices = services.filter((s) => target === 'local' ? !s.peer : s.peer?.id === target);
 
   const choose = (s: Service, preferMethod?: string, config?: Record<string, any>) => {
     setService(s);
@@ -301,7 +302,7 @@ export function ConnectDialog({
   useEffect(() => {
     if (!open) return;
     setSearch('');
-    setTarget(initial.service?.satellite?.id ?? initial.connection?.satellite?.id ?? 'local');
+    setTarget(initial.service?.peer?.id ?? initial.connection?.peer?.id ?? 'local');
     setError('');
     setBusy(false);
     if (initial.service) choose(initial.service, initial.connection?.methodId, initial.connection?.config);

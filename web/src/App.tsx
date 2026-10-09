@@ -16,7 +16,7 @@ import { Plugins } from './pages/Plugins';
 import { Users } from './pages/Users';
 import { Authorize } from './pages/Authorize';
 import { Activity } from './pages/Activity';
-import { Satellites } from './pages/Satellites';
+import { Peers } from './pages/Peers';
 
 
 export function App() {
@@ -69,7 +69,7 @@ export function App() {
           <Route path="/tokens" element={<Tokens />} />
           {admin && <Route path="/admin/plugins" element={<Plugins />} />}
           {admin && <Route path="/admin/users" element={<Users />} />}
-          {admin && <Route path="/admin/satellites" element={<Satellites />} />}
+          {admin && <Route path="/admin/peers" element={<Peers />} />}
           <Route path="*" element={<Navigate to="/connections" replace />} />
         </Routes>
       </Layout>

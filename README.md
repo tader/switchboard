@@ -9,7 +9,7 @@ One place that signs in to services (Gmail, Outlook, Google Calendar, GitHub, an
 - A service can offer several sign-in methods: personal access token, API key, basic auth, OAuth authorization code (with PKCE), OAuth device code, client credentials.
 - Web console to build calls (method, URL, query, headers, body), browse the service's OpenAPI description, and save calls for reuse.
 - Admins install and update plugins from GitHub and manage users.
-- Satellites expose plugins on intermittently connected private machines through an outbound WebSocket; connections remain per-user and credentials remain on that machine.
+- Peers expose plugins on intermittently connected private machines through an outbound WebSocket; connections remain per-user and credentials remain on that machine.
 
 ## Run
 
@@ -34,22 +34,24 @@ On first start, and whenever no administrator can sign in, the log contains a se
 | `SWITCHBOARD_SESSION_TTL_SECS` | 14 days | |
 | `SWITCHBOARD_WATCH_PLUGINS` | `true` | Reload plugins when their files change. |
 | `SWITCHBOARD_AUDIT_RETENTION_DAYS` | `90` | How long the activity log is kept; `0` keeps it forever. |
-| `SWITCHBOARD_SATELLITE_CENTRAL_URL` | | First-start bootstrap for one upstream URL; later changes are managed in the UI. |
-| `SWITCHBOARD_SATELLITE_TOKEN` | | First-start bootstrap token created on the upstream's Satellites page; grants are selected locally. |
+| `SWITCHBOARD_PEER_URL` | | First-start bootstrap for one outgoing peer URL; later changes are managed in the UI. |
+| `SWITCHBOARD_PEER_TOKEN` | | First-start bootstrap token created on the accepting peer; grants are selected locally. |
 
 Switchboard was called Hub before: `HUB_*` variables, `hub_` tokens, the `X-Hub-Token` header and an existing `hub.db` keep working.
 
 Back up the data dir. Without `secret.key` (or `SWITCHBOARD_SECRET_KEY`) stored credentials cannot be decrypted.
 
-### Satellites
+### Peers
 
-A satellite owns its connections and explicitly shares selected connections with each upstream. On the upstream, add the machine under **Satellites** and copy its device token. On the private instance, use **Satellites → Upstreams → Add upstream**, enter the upstream URL and token, then create connections locally and choose **Share with upstreams** from each connection's menu. Multiple upstreams can receive different selections.
+Connect two Switchboard instances under **Peers**. On a reachable instance, add an incoming peer and copy its device token. On the other, add an outgoing peer using that URL and token. One WebSocket supports sharing and execution in both directions, including machines behind a firewall.
 
-Allowed users on an upstream receive read-only handles automatically. They can execute shared HTTP and MCP connections and browse their OpenAPI descriptions, but cannot create, rename, reconnect or delete connections on the satellite. Credentials and configuration remain local. Activity records identify the local owner, upstream and requesting upstream user. Revocation cancels active requests. Offline calls fail immediately with `503` and `satellite_offline`.
+On each instance, connection owners select what to share in the **Connections → Sharing** matrix. Connections are rows; all peers, incoming and outgoing, are columns. Each peer receives an independent selection. Nothing is shared by default. Local administrators choose which local users can use received connections.
 
-A received connection may be explicitly shared onward. Each hop enforces its own grants; instance routes prevent cycles and limit a request to eight hops. All connected instances must support satellite protocol 2. The old environment variables bootstrap one upstream on first startup only; they do not grant any connections. During upgrade, legacy satellite shadow-owned connections are assigned to the oldest active local administrator and remain unshared until that owner selects upstreams.
+Received connections are read-only handles: peers can execute shared HTTP and MCP connections and inspect OpenAPI descriptions, but cannot create, rename, reconnect or delete connections on another instance. Credentials remain on the origin. Audit records identify the local owner, authenticated peer and claimed requesting user. Revocation cancels active requests. Offline calls fail immediately with `503` and `peer_offline`.
 
-#### Run a satellite without Docker
+Explicit onward sharing enforces permissions at each hop, prevents cycles and limits routes to eight hops. Both sides require peer protocol 3. Existing devices, links, access and grants migrate without adding reverse shares. Historical environment variables remain upgrade aliases. The former `switchboard-plugin-switchboard` is retired; its existing records remain stored but unavailable. Configure Peers and review sharing locally instead. See [the peer guide](docs/guides/peers.md).
+
+#### Run a peer without Docker
 
 Install Node.js 24, then build Switchboard from a checkout:
 
@@ -59,23 +61,23 @@ npm --prefix web ci
 npm --prefix web run build
 ```
 
-Create the machine under **Satellites** on the central Switchboard and copy the token it shows. Start the local instance with a separate persistent data directory and bind it to loopback:
+Create the machine under **Peers** on the central Switchboard and copy the token it shows. Start the local instance with a separate persistent data directory and bind it to loopback:
 
 ```bash
 export SWITCHBOARD_HOST=127.0.0.1
 export SWITCHBOARD_PORT=8770
 export SWITCHBOARD_PUBLIC_URL=http://127.0.0.1:8770
-export SWITCHBOARD_DATA_DIR="$HOME/.local/share/switchboard-satellite"
+export SWITCHBOARD_DATA_DIR="$HOME/.local/share/switchboard-peer"
 
-export SWITCHBOARD_SATELLITE_CENTRAL_URL=https://switchboard.example.com
-export SWITCHBOARD_SATELLITE_TOKEN='sws_…'
+export SWITCHBOARD_PEER_URL=https://switchboard.example.com
+export SWITCHBOARD_PEER_TOKEN='sws_…'
 
 npm start
 ```
 
-The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Machine-specific plugins are configured in this local UI; for example, install **Shell command** from **Plugins → Community**, then enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service is advertised upstream.
+The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Machine-specific plugins are configured in this local UI; for example, install **Shell command** from **Plugins → Community**, then enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service can be shared with peers.
 
-The satellite needs only outbound HTTPS/WebSocket access to the central URL. No inbound firewall or router port is required. For unattended use, put the variables in a permission-restricted service configuration and run Switchboard as a dedicated low-privilege OS user. Shell commands execute with that user's filesystem permissions.
+The peer needs only outbound HTTPS/WebSocket access to the accepting peer. No inbound firewall or router port is required. For unattended use, put the variables in a permission-restricted service configuration and run Switchboard as a dedicated low-privilege OS user. Shell commands execute with that user's filesystem permissions.
 
 ### Installing and setting up services
 
@@ -121,7 +123,7 @@ Credentials are only attached to the hosts a service allows (for Gmail `gmail.go
 
 ### MCP
 
-Connect upstream MCP servers from the Connections page using OAuth, bearer tokens, API-key headers or no authentication. The console provides Tools, Resources and Prompts with rich results and saved requests. Connections can switch between the original grouped cards (Normal) and a compact table, with the choice remembered in the browser. Both views are searchable; plugins use a compact searchable table.
+Connect upstream MCP servers from the Connections page using OAuth, bearer tokens, API-key headers or no authentication. The console provides Tools, Resources and Prompts with rich results and saved requests. Connections can switch between the original grouped cards (Normal) and a compact table or a peer sharing matrix, with the choice remembered in the browser. Both views are searchable; plugins use a compact searchable table.
 
 `https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), structured `call_operation`, lower-level `call`, `list_saved_calls`, and `run_saved_call`. MCP connections add `search_mcp_tools`, `get_mcp_tool`, `call_mcp_tool`, resource/prompt tools and native resources, templates, prompts and completions namespaced by immutable connection ID. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
 
@@ -152,7 +154,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `POST /api/admin/plugins/install/plan`, `POST /api/admin/plugins/update/plan`, `POST /api/admin/plugins/apply` `{planId}` | Preview and apply plugin/dependency changes; [request formats](docs/plugins.md#installation-api) |
 | `POST /api/admin/plugins/:id/reload`, `PATCH /api/admin/plugins/:id` `{enabled}`, `GET/PUT /api/admin/plugins/:id/settings`, `DELETE /api/admin/plugins/:id` | |
 | `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/:id`, `POST /api/admin/users/:id/invite` | Admin: users |
-| `GET/POST /api/admin/satellites`, `GET/PATCH/DELETE /api/admin/satellites/:id`, `POST /api/admin/satellites/:id/rotate-token` | Admin: outbound satellite enrolment, user access and credential rotation |
+| `GET/POST /api/admin/peers`, `GET/PATCH/DELETE /api/admin/peers/:id`, `POST /api/admin/peers/:id/rotate-token` | Admin: incoming/outgoing peer pairing, local user access and credential rotation |
 | `GET /api/audit`, `GET /api/audit/:id`, `GET /api/audit/facets`, `GET /api/audit/histogram?by=…` | Activity log. Filters: `connection`, `client` (token id or `web`), `status` (`2xx`…`5xx`, `error` or a code), `method`, `source`, `q`, `from`/`to` (ms); `sort` (`time`, `duration`, `status`, `size`), `order`, `limit`, `offset`. Not readable with tokens limited to connections. |
 | `DELETE /api/me/token` | Revoke the token making the request |
 | `GET /api/openapi.json` | OpenAPI description of this API |
@@ -173,7 +175,7 @@ The web app has guides under *Docs*: using Switchboard from AI assistants (Claud
 
 The 19 provider and machine-specific plugins previously bundled here now each have a repository named `tader/switchboard-plugin-<id>`. Find them in the live [community catalog](https://github.com/tader/switchboard-plugins). This includes GitHub, Google and its apps, Microsoft and its apps, Home Assistant, Plex, Spotify, Todoist, Shell command, and Switchboard-to-Switchboard connections.
 
-**Before upgrading an existing instance, install its used plugins from Community, including plugins used on satellites.** **Install the shared Google or Microsoft plugin explicitly as well when using their apps.** An older Switchboard may reuse its bundled helper when installing an app; that helper also needs an installed copy before upgrading. Installed copies take precedence over built-ins. Their plugin IDs, service IDs, authentication methods, settings, credentials and persistent data directories are preserved; keep the instance data directory and encryption key. Missing plugins leave connections unavailable until the plugin is installed again. Do not delete or reconnect them solely for this move.
+**Before upgrading an existing instance, install its used plugins from Community, including plugins used on peers.** **Install the shared Google or Microsoft plugin explicitly as well when using their apps.** An older Switchboard may reuse its bundled helper when installing an app; that helper also needs an installed copy before upgrading. Installed copies take precedence over built-ins. Their plugin IDs, service IDs, authentication methods, settings, credentials and persistent data directories are preserved; keep the instance data directory and encryption key. Missing plugins leave connections unavailable until the plugin is installed again. Do not delete or reconnect them solely for this move.
 
 Install **GitHub** first if you use saved GitHub connections to access private plugin repositories. Public installation also works without a GitHub connection; `SWITCHBOARD_GITHUB_TOKEN` remains available for bootstrap access.
 
@@ -185,7 +187,7 @@ Jira, Confluence and Bitbucket are maintained in [tader/switchboard-plugin-atlas
 
 ## macOS plugins
 
-Apple Reminders, Apple Mail and Apple Calendar are maintained in [tader/switchboard-plugin-macos](https://github.com/tader/switchboard-plugin-macos). Install that repository through **Plugins → Install from GitHub** on the Mac running the services, including a Mac satellite when the main instance runs elsewhere.
+Apple Reminders, Apple Mail and Apple Calendar are maintained in [tader/switchboard-plugin-macos](https://github.com/tader/switchboard-plugin-macos). Install that repository through **Plugins → Install from GitHub** on the Mac running the services, including a Mac peer when the main instance runs elsewhere.
 
 **Before upgrading an existing Apple Reminders installation, install the external repository on every Mac providing Reminders.** It replaces the built-in plugin using the same `apple-reminders` service ID, `eventkit` authentication method and persistent data directory. Existing connections and credentials remain valid; do not delete or reconnect them. The external installed plugin takes precedence over the built-in one during the transition.
 

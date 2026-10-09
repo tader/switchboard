@@ -18,7 +18,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-test-'));
 let hub: ChildProcess;
 let base = '';
-let upstream: http.Server;
+let peer: http.Server;
 let up = '';
 let cookie = '';
 let output = '';
@@ -28,8 +28,8 @@ let lastRedirectUri: string | null = null;
 let devicePolls = 0;
 
 /** Fake API + OAuth provider. */
-function startUpstream() {
-  upstream = http.createServer(async (req, res) => {
+function startPeer() {
+  peer = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
     const url = new URL(req.url!, 'http://x');
@@ -84,8 +84,8 @@ function startUpstream() {
     if (req.headers.authorization === 'Bearer expired') return json(401, { error: 'nope' });
     json(200, { ok: true, method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), auth: req.headers.authorization ?? null });
   });
-  return new Promise<void>((r) => upstream.listen(0, '127.0.0.1', () => {
-    up = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  return new Promise<void>((r) => peer.listen(0, '127.0.0.1', () => {
+    up = `http://127.0.0.1:${(peer.address() as AddressInfo).port}`;
     r();
   }));
 }
@@ -118,7 +118,7 @@ const waitFor = async (fn: () => boolean | Promise<boolean>, ms = 8000) => {
 
 before(async () => {
   installFixturePlugins(dataDir);
-  await startUpstream();
+  await startPeer();
   const port = 20000 + Math.floor(Math.random() * 20000);
   base = `http://127.0.0.1:${port}`;
   hub = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], {
@@ -132,7 +132,7 @@ before(async () => {
 
 after(() => {
   hub?.kill();
-  upstream?.close();
+  peer?.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -208,10 +208,11 @@ test('plugins and services are listed', async () => {
   assert.deepEqual(methods('todoist'), ['token', 'oauth']);
   assert.deepEqual(methods('spotify'), ['oauth', 'app']);
   assert.deepEqual(methods('plex'), ['plex', 'link', 'token']);
-  assert.deepEqual(methods('switchboard'), ['oauth', 'token']);
+  assert.equal(services.some((s: any) => s.id === 'switchboard'), false);
+  assert.equal((await req('PATCH', '/api/admin/plugins/switchboard', { enabled: true })).status, 400);
   assert.equal(methods('apple-reminders'), undefined, 'Apple Reminders is no longer a built-in service');
   assert.ok(methods('google-docs') && methods('google-sheets'));
-  for (const p of plugins) assert.equal(p.status, 'active', `${p.id}: ${p.error}`);
+  for (const p of plugins.filter((p: any) => p.id !== 'switchboard')) assert.equal(p.status, 'active', `${p.id}: ${p.error}`);
 });
 
 test('API descriptions with a placeholder server use the connection base URL', async () => {
@@ -273,13 +274,13 @@ test('JSON call API with path params, query and body', async () => {
   assert.equal(sent.body, '{"hello":1}');
   assert.deepEqual(sent.headers.find((h: any) => h.name === 'authorization'), { name: 'authorization', value: 'Bearer ••••••••', byHub: true });
   assert.deepEqual(sent.headers.find((h: any) => h.name === 'content-type'), { name: 'content-type', value: 'application/json', byHub: false });
-  assert.ok(!JSON.stringify({ ...r.data, body: '' }).includes('secret-1'), 'the credential appears nowhere but in what upstream echoed');
+  assert.ok(!JSON.stringify({ ...r.data, body: '' }).includes('secret-1'), 'the credential appears nowhere but in what peer echoed');
 });
 
 test('API keys in the query string are masked in the console envelope', async () => {
   const c = await req('POST', '/api/connections', { service: 'http', method: 'query', config: { baseUrl: up, key: 'qkey-secret', param: 'api_key' } });
   const r = await req('POST', '/api/call', { connection: c.data.connection.id, url: '/q', query: { page: '2' } });
-  assert.equal(JSON.parse(r.data.body).query.api_key, 'qkey-secret', 'sent upstream');
+  assert.equal(JSON.parse(r.data.body).query.api_key, 'qkey-secret', 'sent peer');
   assert.equal(r.data.request.url, `${up}/q?page=2&api_key=%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2%E2%80%A2`);
   assert.equal(r.data.url, r.data.request.url);
   assert.ok(!JSON.stringify({ ...r.data, body: '' }).includes('qkey-secret'));
@@ -446,57 +447,26 @@ test('same account: reconnecting updates, another method or a name adds a connec
   fs.rmSync(dir, { recursive: true });
 });
 
-test('Switchboard to Switchboard: OAuth consent, chained calls, revoke on disconnect', async () => {
-  const r = await req('POST', '/api/connections', { service: 'switchboard', method: 'oauth', config: { url: base } });
-  assert.equal(r.data.status, 'redirect', JSON.stringify(r.data));
-  const authorize = new URL(r.data.url);
-  assert.equal(authorize.pathname, '/oauth/authorize');
-  const q = Object.fromEntries(authorize.searchParams);
-  assert.equal(q.client_id, `${base}/`);
-
-  const page = await fetch(r.data.url);
-  assert.equal(page.headers.get('x-frame-options'), 'DENY', 'consent page cannot be framed');
-
-  const info = await req('GET', `/api/oauth/authorize${authorize.search}`);
-  assert.equal(info.data.client, new URL(base).host);
+test('OAuth consent, PKCE, scoped calls and revocation remain available to clients', async () => {
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const q = { client_id: `${base}/`, redirect_uri: `${base}/oauth/callback`, response_type: 'code', state: 'oauth-client-test',
+    code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' };
+  const query = new URLSearchParams(q);
+  const page = await fetch(`${base}/oauth/authorize?${query}`);
+  assert.equal(page.headers.get('x-frame-options'), 'DENY');
   assert.equal((await req('GET', `/api/oauth/authorize?${new URLSearchParams({ ...q, redirect_uri: 'https://evil.example/cb' })}`)).status, 400);
-  assert.equal((await req('GET', `/api/oauth/authorize?${new URLSearchParams({ ...q, code_challenge: '' })}`)).status, 400);
-
-  const approved = await req('POST', '/api/oauth/authorize', { ...q, approve: true, connectionIds: [connId] });
-  const back = new URL(approved.data.redirect);
-  assert.equal(back.searchParams.get('state'), q.state);
-  const code = back.searchParams.get('code')!;
-
-  // A wrong verifier burns the code, so test it on a second approval.
-  const other = new URL((await req('POST', '/api/oauth/authorize', { ...q, approve: true })).data.redirect).searchParams.get('code')!;
-  const bad = await fetch(`${base}/oauth/token`, { method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code', code: other, client_id: q.client_id, redirect_uri: q.redirect_uri, code_verifier: 'wrong' }) });
-  assert.equal((await bad.json()).error, 'invalid_grant');
-
-  const cb = await req('GET', `/oauth/callback?${back.searchParams}`);
-  const hubConn = new URL(cb.headers.get('location')!).searchParams.get('connected');
-  assert.ok(hubConn, cb.headers.get('location')!);
-  const reused = await fetch(`${base}/oauth/token`, { method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code', code, client_id: q.client_id, redirect_uri: q.redirect_uri, code_verifier: 'x' }) });
-  assert.equal((await reused.json()).error, 'invalid_grant', 'codes are single use');
-
-  const conn = (await req('GET', `/api/connections/${hubConn}`)).data;
-  assert.equal(conn.account.label, `admin @ ${new URL(base).host}`);
-  assert.equal(conn.hasOpenapi, true);
-
-  // The remote side only sees the connection that was granted.
-  const listed = await req('POST', '/api/call', { connection: hubConn, url: '/api/connections' });
-  assert.deepEqual(JSON.parse(listed.data.body).map((c: any) => c.id), [connId]);
-  // Hub -> hub -> upstream
-  const chained = await req('POST', '/api/call', { connection: hubConn, url: `/proxy/${connId}/chained` });
-  assert.equal(JSON.parse(chained.data.body).auth, 'Bearer secret-1');
-
-  const ops = (await req('GET', `/api/connections/${hubConn}/openapi`)).data;
-  assert.ok(ops.operations.some((o: any) => o.path === '/api/call'));
-  assert.equal(ops.server, base);
-
-  const before = (await req('GET', '/api/tokens')).data.filter((t: any) => t.name === new URL(base).host).length;
-  await req('DELETE', `/api/connections/${hubConn}`);
-  const afterCount = (await req('GET', '/api/tokens')).data.filter((t: any) => t.name === new URL(base).host).length;
-  assert.equal(afterCount, before - 1, 'disconnecting revokes the issued token');
+  const approve = async () => new URL((await req('POST', '/api/oauth/authorize', { ...q, approve: true, connectionIds: [connId] })).data.redirect).searchParams.get('code')!;
+  const redeem = async (code: string, codeVerifier: string) => fetch(`${base}/oauth/token`, { method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code', code, client_id: q.client_id, redirect_uri: q.redirect_uri, code_verifier: codeVerifier }) }).then(r => r.json());
+  assert.equal((await redeem(await approve(), 'wrong')).error, 'invalid_grant');
+  const code = await approve(); const issued = await redeem(code, verifier); assert.ok(issued.access_token);
+  assert.equal((await redeem(code, verifier)).error, 'invalid_grant');
+  const headers = { authorization: `Bearer ${issued.access_token}` };
+  const listed = await fetch(`${base}/api/connections`, { headers }).then(r => r.json());
+  assert.deepEqual(listed.map((c: any) => c.id), [connId]);
+  const call = await fetch(`${base}/proxy/${connId}/chained`, { headers }).then(r => r.json());
+  assert.equal(call.auth, 'Bearer secret-1');
+  assert.equal((await fetch(`${base}/api/me/token`, { method: 'DELETE', headers })).status, 200);
+  assert.equal((await fetch(`${base}/api/connections`, { headers })).status, 401);
 });
 
 test('Google service account with domain-wide delegation', async () => {
@@ -712,38 +682,45 @@ test('users: invite, sign in, admin-only areas', async () => {
   cookie = adminCookie;
 });
 
-test('satellites expose read-only shared connections, never connection-management services', async () => {
+test('peers expose read-only shared connections, never connection-management services', async () => {
   const admin = (await req('GET', '/api/me')).data;
-  const made = await req('POST', '/api/admin/satellites', { name: 'Home PC', ownerUserId: admin.id });
-  assert.equal(made.status, 201); const satellite = made.data.satellite;
+  const made = await req('POST', '/api/admin/peers', { name: 'Home PC', ownerUserId: admin.id });
+  assert.equal(made.status, 201); const peer = made.data.peer;
   const messages: any[] = []; const waiters: ((m: any) => void)[] = [];
-  const ws = new WebSocket(base.replace(/^http/, 'ws') + '/api/satellites/connect', { headers: { authorization: `Bearer ${made.data.token}`, 'x-switchboard-satellite-protocol': '2' } });
+  const ws = new WebSocket(base.replace(/^http/, 'ws') + '/api/peers/connect', { headers: { authorization: `Bearer ${made.data.token}`, 'x-switchboard-peer-protocol': '3' } });
   ws.on('message', raw => { const message = JSON.parse(String(raw)); const waiter = waiters.shift(); if (waiter) waiter(message); else messages.push(message); });
   const next = () => messages.length ? Promise.resolve(messages.shift()) : new Promise<any>(resolve => waiters.push(resolve));
   await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  const welcome = await next(); assert.equal(welcome.protocol, 2);
-  ws.send(JSON.stringify({ protocol: 2, type: 'catalog', version: 'test-1', catalog: { instanceId: 'private-machine', connections: [{
+  const welcome = await next(); assert.equal(welcome.protocol, 3);
+  ws.send(JSON.stringify({ protocol: 3, type: 'catalog', version: 'test-1', catalog: { instanceId: 'private-machine', connections: [{
     id: 'remote-c1', name: 'family-tree', serviceId: 'family-tree', serviceName: 'Family Tree', kind: 'http', hasOpenapi: true, status: 'ok', route: ['private-machine'], credentials: { secret: 'must-not-copy' }, config: { secret: 'must-not-copy' },
   }] } }));
   assert.equal((await next()).type, 'catalog.accepted');
-  const connection = (await req('GET', '/api/connections')).data.find((c: any) => c.satellite?.id === satellite.id);
+  const connection = (await req('GET', '/api/connections')).data.find((c: any) => c.peer?.id === peer.id);
   assert.ok(connection); assert.equal(connection.readOnly, true); assert.deepEqual(connection.config, {});
-  assert.ok(!(await req('GET', '/api/services')).data.some((s: any) => s.satellite));
+  assert.ok(!(await req('GET', '/api/services')).data.some((s: any) => s.peer));
   const adminCookie = cookie; cookie = aliceCookie;
-  assert.ok(!(await req('GET', '/api/connections')).data.some((c: any) => c.satellite?.id === satellite.id)); cookie = adminCookie;
+  assert.ok(!(await req('GET', '/api/connections')).data.some((c: any) => c.peer?.id === peer.id)); cookie = adminCookie;
   for (const [method, p, body] of [
-    ['POST', '/api/connections', { service: `sat/${satellite.id}/family-tree` }],
+    ['POST', '/api/connections', { service: `peer/${peer.id}/family-tree` }],
     ['POST', `/api/connections/${connection.id}/reconnect`, {}], ['PATCH', `/api/connections/${connection.id}`, { name: 'injected' }], ['DELETE', `/api/connections/${connection.id}`, undefined],
   ] as const) assert.equal((await req(method, p, body)).status, 403);
+  const published = await next(); assert.equal(published.type, 'catalog'); assert.deepEqual(published.catalog.connections, []);
+  for (const [operation, remoteConnection] of [['call', connId], ['connection.create', connId], ['token', connId]]) {
+    ws.send(JSON.stringify({ protocol: 3, type: 'request', requestId: `denied-${operation}`, route: ['private-machine'], deadline: Date.now() + 5000, userId: admin.id, operation, payload: { connection: remoteConnection } }));
+    const denial = await next(); assert.equal(denial.type, 'error'); assert.equal(denial.status, 403);
+  }
   const calling = req('POST', '/api/call', { connection: connection.id, method: 'GET', url: '/people' });
   const callMessage = await next(); assert.equal(callMessage.operation, 'call'); assert.equal(callMessage.payload.connection, 'remote-c1');
   assert.deepEqual(callMessage.route, [welcome.instanceId]);
-  ws.send(JSON.stringify({ protocol: 2, type: 'result', requestId: callMessage.requestId, result: { status: 200, statusText: 'OK', headers: [['content-type', 'application/json']], body: Buffer.from('{"people":2}').toString('base64'), url: 'http://127.0.0.1:9999/people', durationMs: 4, sent: { method: 'GET', url: 'http://127.0.0.1:9999/people', headers: [], authQuery: [], retried: false } } }));
+  ws.send(JSON.stringify({ protocol: 3, type: 'result', requestId: callMessage.requestId, result: { status: 200, statusText: 'OK', headers: [['content-type', 'application/json']], body: Buffer.from('{"people":2}').toString('base64'), url: 'http://127.0.0.1:9999/people', durationMs: 4, sent: { method: 'GET', url: 'http://127.0.0.1:9999/people', headers: [], authQuery: [], retried: false } } }));
   const called = await calling; assert.equal(called.status, 200, JSON.stringify(called.data)); assert.equal(JSON.parse(called.data.body).people, 2);
-  ws.close(); await waitFor(async () => !(await req('GET', '/api/admin/satellites')).data.find((s: any) => s.id === satellite.id).online);
+  ws.send(JSON.stringify({ protocol: 3, type: 'catalog', catalog: { instanceId: 'different-machine', connections: [] } }));
+  assert.equal((await next()).type, 'catalog.rejected');
+  await waitFor(async () => !(await req('GET', '/api/admin/peers')).data.find((s: any) => s.id === peer.id).online);
   const offline = await req('POST', '/api/call', { connection: connection.id, method: 'GET', url: '/' });
-  assert.equal(offline.status, 503); assert.equal(offline.data.code, 'satellite_offline');
-  await req('DELETE', `/api/admin/satellites/${satellite.id}`);
+  assert.equal(offline.status, 503); assert.equal(offline.data.code, 'peer_offline');
+  await req('DELETE', `/api/admin/peers/${peer.id}`);
 });
 
 // --- MCP ---

@@ -77,8 +77,8 @@ export function Layout({ children }: { children: ReactNode }) {
           <NavItem to="/admin/users" icon={<Users />}>
             Users
           </NavItem>
-          <NavItem to="/admin/satellites" icon={<MonitorUp />}>
-            Satellites
+          <NavItem to="/admin/peers" icon={<MonitorUp />}>
+            Peers
           </NavItem>
         </nav>
       )}

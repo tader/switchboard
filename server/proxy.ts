@@ -4,7 +4,7 @@ import { loadConnection, markError, resolveBaseUrl, saveCredentials, touch, with
 import type { User } from './users.ts';
 import { type Caller, countingStream, record, redactBody, setResponseSize } from './audit.ts';
 import { getConnectionRow } from './connections.ts';
-import { requestSatellite } from './satellites.ts';
+import { requestPeer } from './peers.ts';
 
 export interface CallInput {
   method: string;
@@ -118,7 +118,7 @@ export async function execute(user: User, connectionRef: string, input: CallInpu
   if (!/^[A-Z]+$/.test(method)) throw badRequest('Invalid HTTP method');
   const remoteRow = getConnectionRow(user.id, connectionRef);
   if (remoteRow.kind === 'mcp') throw badRequest('This connection is an MCP server; use an MCP operation');
-  if (remoteRow.satellite_id) return executeRemote(user, remoteRow, input, method, signal, caller);
+  if (remoteRow.peer_id) return executeRemote(user, remoteRow, input, method, signal, caller);
   const loaded = loadConnection(user.id, connectionRef);
   const { conn } = loaded;
   const started = Date.now();
@@ -178,7 +178,7 @@ async function executeRemote(user: User, row: any, input: CallInput, method: str
   signal?.addEventListener('abort', abort, { once: true });
   try {
     if (signal?.aborted) throw new HttpError(499, 'Request cancelled');
-    const r = await requestSatellite<any>(row.satellite_id, user.id, 'call', { connection: row.remote_connection_id, input: encoded, caller }, 120_000, signal);
+    const r = await requestPeer<any>(row.peer_id, user.id, 'call', { connection: row.remote_connection_id, input: encoded, caller }, 120_000, signal);
     if (aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
     const sent: SentRequest = {
       ...r.sent,
@@ -284,7 +284,7 @@ export function responseHeaders(res: Response): Headers {
 /** Hands out the raw access token. Recorded, since calls made with it no longer pass through Switchboard. */
 export async function issueToken(user: User, connectionRef: string, force = false, caller?: Caller) {
   const row = getConnectionRow(user.id, connectionRef);
-  if (row.satellite_id) throw badRequest('Satellite connections do not hand out raw access tokens; use the proxy instead');
+  if (row.peer_id) throw badRequest('Peer connections do not hand out raw access tokens; use the proxy instead');
   const { conn, service, method } = loadConnection(user.id, connectionRef);
   const started = Date.now();
   const audit = (status: number, error?: string) =>

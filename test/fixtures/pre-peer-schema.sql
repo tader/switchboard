@@ -1,12 +1,5 @@
-import { DatabaseSync } from 'node:sqlite';
-import fs from 'node:fs';
-import path from 'node:path';
-import { config } from './config.ts';
+-- Frozen schema before peer protocol 3.
 
-export let db: DatabaseSync;
-
-const migrations: string[] = [
-  `
   CREATE TABLE users (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -91,8 +84,8 @@ const migrations: string[] = [
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
-  `,
-  `
+  
+
   CREATE TABLE oauth_codes (
     code_hash TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -103,8 +96,8 @@ const migrations: string[] = [
     connection_ids TEXT,
     expires_at INTEGER NOT NULL
   );
-  `,
-  `
+  
+
   CREATE TABLE audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -134,8 +127,8 @@ const migrations: string[] = [
   CREATE INDEX audit_user_time ON audit_log (user_id, created_at DESC);
   CREATE INDEX audit_user_connection ON audit_log (user_id, connection_id, created_at DESC);
   CREATE INDEX audit_user_token ON audit_log (user_id, token_id, created_at DESC);
-  `,
-  `
+  
+
   CREATE TABLE oauth_clients (
     client_id TEXT PRIMARY KEY,
     client_name TEXT NOT NULL,
@@ -147,21 +140,18 @@ const migrations: string[] = [
   ALTER TABLE api_tokens ADD COLUMN client_name TEXT;
   ALTER TABLE oauth_codes ADD COLUMN resource TEXT;
   ALTER TABLE oauth_codes ADD COLUMN client_name TEXT;
-  `,
-  // The hub-to-hub plugin and service were renamed with the app, from "hub" to "switchboard".
-  `
+  
+
   UPDATE connections SET service_id = 'switchboard' WHERE service_id = 'hub';
   UPDATE connect_flows SET service_id = 'switchboard' WHERE service_id = 'hub';
   UPDATE audit_log SET service_id = 'switchboard' WHERE service_id = 'hub';
   UPDATE plugins SET id = 'switchboard' WHERE id = 'hub' AND NOT EXISTS (SELECT 1 FROM plugins WHERE id = 'switchboard');
-  `,
-  // A redirect URI other than Switchboard's own, for providers where only e.g. localhost is registered.
-  `
+  
+
   ALTER TABLE connect_flows ADD COLUMN redirect_uri TEXT;
   ALTER TABLE connections ADD COLUMN redirect_uri TEXT;
-  `,
-  // Intermittently connected machines establish an outbound WebSocket to this instance.
-  `
+  
+
   CREATE TABLE satellites (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -180,30 +170,28 @@ const migrations: string[] = [
     created_at INTEGER NOT NULL,
     PRIMARY KEY (satellite_id, user_id)
   );
-  `,
-  `
+  
+
   ALTER TABLE users ADD COLUMN satellite_shadow INTEGER NOT NULL DEFAULT 0;
-  `,
-  `
+  
+
   ALTER TABLE connections ADD COLUMN satellite_id TEXT REFERENCES satellites(id) ON DELETE RESTRICT;
   ALTER TABLE connections ADD COLUMN remote_connection_id TEXT;
   ALTER TABLE connect_flows ADD COLUMN satellite_id TEXT REFERENCES satellites(id) ON DELETE CASCADE;
   ALTER TABLE connect_flows ADD COLUMN remote_flow_id TEXT;
   CREATE INDEX connections_satellite ON connections (satellite_id);
-  `,
-  // Preserve the transport even while the providing plugin is disabled.
-  `ALTER TABLE connections ADD COLUMN kind TEXT NOT NULL DEFAULT 'http' CHECK (kind IN ('http', 'mcp'));`,
-  `
+  
+ALTER TABLE connections ADD COLUMN kind TEXT NOT NULL DEFAULT 'http' CHECK (kind IN ('http', 'mcp'));
+
   ALTER TABLE audit_log ADD COLUMN mcp_operation TEXT;
   ALTER TABLE audit_log ADD COLUMN mcp_target TEXT;
   ALTER TABLE audit_log ADD COLUMN mcp_outcome TEXT;
-  `,
-  `
+  
+
   ALTER TABLE saved_calls ADD COLUMN kind TEXT NOT NULL DEFAULT 'http' CHECK (kind IN ('http', 'mcp'));
   ALTER TABLE saved_calls ADD COLUMN mcp_request TEXT;
-  `,
-  // Explicit outbound upstreams and owner-selected connection grants.
-  `
+  
+
   CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE upstreams (
     id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, url TEXT NOT NULL,
@@ -217,77 +205,6 @@ const migrations: string[] = [
   );
   ALTER TABLE audit_log ADD COLUMN upstream_id TEXT;
   ALTER TABLE audit_log ADD COLUMN upstream_user_id TEXT;
-  `,
-  `ALTER TABLE satellites ADD COLUMN removed INTEGER NOT NULL DEFAULT 0;`,
-  // Peer protocol 3 unifies both ends; historical migrations above remain immutable.
-  `
-  ALTER TABLE satellites RENAME TO peers;
-  ALTER TABLE satellite_users RENAME TO peer_users;
-  ALTER TABLE peer_users RENAME COLUMN satellite_id TO peer_id;
-  ALTER TABLE users RENAME COLUMN satellite_shadow TO peer_shadow;
-  ALTER TABLE connections RENAME COLUMN satellite_id TO peer_id;
-  ALTER TABLE connect_flows RENAME COLUMN satellite_id TO peer_id;
-  DROP INDEX connections_satellite;
-  CREATE INDEX connections_peer ON connections(peer_id);
-  ALTER TABLE peers ADD COLUMN direction TEXT NOT NULL DEFAULT 'incoming' CHECK(direction IN ('incoming', 'outgoing'));
-  ALTER TABLE peers ADD COLUMN url TEXT;
-  ALTER TABLE peers ADD COLUMN token_enc TEXT;
-  ALTER TABLE peers ADD COLUMN remote_instance_id TEXT;
-  INSERT INTO peers(id, name, owner_user_id, token_hash, disabled, direction, url, token_enc, created_at, updated_at)
-    SELECT id, CASE WHEN EXISTS(SELECT 1 FROM peers p WHERE p.name = upstreams.name) THEN name || '-' || id ELSE name END,
-      (SELECT id FROM users WHERE role = 'admin' AND disabled = 0 ORDER BY created_at, id LIMIT 1),
-      'migrated-outgoing-' || id, 1 - enabled, 'outgoing', url, token_enc, created_at, updated_at FROM upstreams;
-  INSERT INTO peer_users(peer_id, user_id, created_at)
-    SELECT id, owner_user_id, created_at FROM peers WHERE direction = 'outgoing';
-  CREATE TABLE connection_peer_shares (
-    peer_id TEXT NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
-    connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
-    PRIMARY KEY(peer_id, connection_id)
-  );
-  INSERT INTO connection_peer_shares SELECT upstream_id, connection_id FROM connection_upstream_shares;
-  DROP TABLE connection_upstream_shares;
-  DROP TABLE upstreams;
-  ALTER TABLE audit_log RENAME COLUMN upstream_id TO peer_id;
-  ALTER TABLE audit_log RENAME COLUMN upstream_user_id TO peer_user_id;
-  UPDATE connections SET service_id = 'peer/' || substr(service_id, 5) WHERE service_id LIKE 'sat/%';
-  UPDATE audit_log SET service_id = 'peer/' || substr(service_id, 5) WHERE service_id LIKE 'sat/%';
-  UPDATE instance_settings SET key = 'peer-bootstrap' WHERE key = 'upstream-bootstrap';
-  UPDATE plugins SET enabled = 0 WHERE id = 'switchboard';
-  `,
-
-];
-
-export function initDb() {
-  // Data from before the rename to Switchboard is moved over once.
-  const file = path.join(config.dataDir, 'switchboard.db');
-  const legacy = path.join(config.dataDir, 'hub.db');
-  if (!fs.existsSync(file) && fs.existsSync(legacy)) {
-    for (const ext of ['', '-wal', '-shm']) if (fs.existsSync(legacy + ext)) fs.renameSync(legacy + ext, file + ext);
-  }
-  db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
-  const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-  for (let i = version; i < migrations.length; i++) {
-    db.exec('BEGIN');
-    try {
-      db.exec(migrations[i]);
-      db.exec(`PRAGMA user_version = ${i + 1}`);
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
-  }
-}
-
-export const now = () => Date.now();
-
-export function one<T = any>(sql: string, ...params: any[]): T | undefined {
-  return db.prepare(sql).get(...params) as T | undefined;
-}
-export function all<T = any>(sql: string, ...params: any[]): T[] {
-  return db.prepare(sql).all(...params) as T[];
-}
-export function run(sql: string, ...params: any[]) {
-  return db.prepare(sql).run(...params);
-}
+  
+ALTER TABLE satellites ADD COLUMN removed INTEGER NOT NULL DEFAULT 0;
+PRAGMA user_version = 14;

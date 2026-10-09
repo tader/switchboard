@@ -64,23 +64,27 @@ export function openapiDocument() {
       '/api/me': { get: op('Account', 'Who the token belongs to') },
       '/api/me/token': { delete: op('Account', 'Revoke the token making this request') },
       '/api/services': { get: op('Connections', 'Services and their sign-in methods') },
-      '/api/upstreams': { get: op('Connections', 'List upstreams available for owner-selected sharing') },
+      '/api/peers': { get: op('Connections', 'List peers available for owner-selected sharing') },
+      '/api/connection-shares': { get: op('Connections', 'Read your sharing matrix and blocked peer cycles') },
+      '/api/connections/{ref}/shares/{peerId}': { put: op('Connections', 'Set one sharing matrix cell for a connection you own', { parameters: [ref, { name: 'peerId', in: 'path', required: true, schema: { type: 'string' } }], requestBody: json({ type: 'object', required: ['shared'], properties: { shared: { type: 'boolean' } } }) }) },
       '/api/connections/{ref}/shares': {
         get: op('Connections', 'Read sharing grants for a connection you own', { parameters: [ref] }),
         put: op('Connections', 'Replace sharing grants for a connection you own', { parameters: [ref],
-          requestBody: json({ type: 'object', required: ['upstreamIds'], properties: { upstreamIds: { type: 'array', items: { type: 'string' }, description: 'An empty list revokes all sharing' } } }),
+          requestBody: json({ type: 'object', required: ['peerIds'], properties: { peerIds: { type: 'array', items: { type: 'string' }, description: 'An empty list revokes all sharing' } } }),
         }),
       },
-      '/api/admin/upstreams': {
-        get: op('Admin', 'List configured upstreams and live status without device tokens'),
-        post: op('Admin', 'Configure an outbound upstream', { requestBody: json({ type: 'object', required: ['name', 'url', 'token'], properties: { name: { type: 'string' }, url: { type: 'string' }, token: { type: 'string' }, enabled: { type: 'boolean', default: true } } }) }),
+      '/api/admin/peers': {
+        get: op('Admin', 'List configured peers and live status without device tokens'),
+        post: op('Admin', 'Configure an incoming or outgoing peer', { requestBody: json({ type: 'object', required: ['name'], properties: { name: { type: 'string' }, url: { type: 'string' }, token: { type: 'string' }, direction: { type: 'string', enum: ['incoming', 'outgoing'], default: 'incoming' }, ownerUserId: { type: 'string' } } }) }),
       },
-      '/api/admin/upstreams/{id}': {
-        patch: op('Admin', 'Change an upstream without changing local connections', { parameters: [id('Upstream id')], requestBody: json({ type: 'object', properties: { name: { type: 'string' }, url: { type: 'string' }, token: { type: 'string', description: 'Omit or leave blank to preserve the token' }, enabled: { type: 'boolean' } } }) }),
-        delete: op('Admin', 'Remove an upstream and its sharing grants', { parameters: [id('Upstream id')] }),
+      '/api/admin/peers/{id}/rotate-token': { post: op('Admin', 'Rotate the accepting peer credential', { parameters: [id('Peer id')] }) },
+      '/api/admin/peers/{id}': {
+        get: op('Admin', 'Read a peer and its received connections', { parameters: [id('Peer id')] }),
+        patch: op('Admin', 'Change a peer without changing local connections', { parameters: [id('Peer id')], requestBody: json({ type: 'object', properties: { name: { type: 'string' }, url: { type: 'string' }, token: { type: 'string', description: 'Omit or leave blank to preserve the token' }, disabled: { type: 'boolean' }, userIds: { type: 'array', items: { type: 'string' } } } }) }),
+        delete: op('Admin', 'Remove a peer and its sharing grants', { parameters: [id('Peer id')] }),
       },
       '/api/connections': {
-        get: op('Connections', 'List local connections and read-only shared handles', { description: 'readOnly=true identifies imported satellite connections. Only execution, OpenAPI discovery and explicit onward sharing are supported for imported handles.' }),
+        get: op('Connections', 'List local connections and read-only shared handles', { description: 'readOnly=true identifies imported peer connections. Only execution, OpenAPI discovery and explicit onward sharing are supported for imported handles.' }),
         post: op('Connections', 'Connect an account', {
           description: 'Returns status "connected", "redirect" (open url in a browser) or "device" (show the code, then poll).',
           requestBody: json(
@@ -140,7 +144,7 @@ export function openapiDocument() {
       },
       '/api/calls/{id}/run': {
         post: op('Saved calls', 'Run a saved call', {
-          description: 'HTTP calls pass the upstream response through and accept connection, pathParams, query, headers and body overrides. MCP requests return an MCP result and accept connection, arguments (merged) and uri overrides.',
+          description: 'HTTP calls pass the provider response through and accept connection, pathParams, query, headers and body overrides. MCP requests return an MCP result and accept connection, arguments (merged) and uri overrides.',
           parameters: [id('Saved call id or name')],
           requestBody: { content: { 'application/json': { schema: { type: 'object' }, example: {} } } },
         }),

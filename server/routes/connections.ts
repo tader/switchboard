@@ -11,10 +11,10 @@ import { describe } from '../openapi.ts';
 import { type CallInput, envelope, execute, issueToken, passThrough } from '../proxy.ts';
 import { auditFacets, auditHistogram, callerFrom, getAudit, queryAudit } from '../audit.ts';
 import { getDoc, guidesByService, listDocs } from '../docs.ts';
-import { requestSatellite } from '../satellites.ts';
-import { listUpstreams, connectionShares, setConnectionShares } from '../upstreams.ts';
+import { listPeers, requestPeer } from '../peers.ts';
+import { connectionShares, setConnectionShares, setConnectionPeerShare, sharingMatrix } from '../peer-settings.ts';
 import { mcpClientMetadata } from '../mcp-auth.ts';
-import { executeMcp, validateMcpInput, type McpInput, type McpOperation } from '../upstream-mcp.ts';
+import { executeMcp, validateMcpInput, type McpInput, type McpOperation } from '../provider-mcp.ts';
 
 export const api = new Hono<Env>();
 api.use('*', requireUser);
@@ -27,7 +27,9 @@ api.get('/services', (c) => {
 api.get('/docs', (c) => c.json(listDocs(c.get('user').role === 'admin')));
 api.get('/docs/*', (c) => c.json(getDoc(decodeURIComponent(c.req.path.replace(/^\/api\/docs\//, '')), c.get('user').role === 'admin')));
 
-api.get('/upstreams', requireFullAccess, (c) => c.json(listUpstreams().map(({ id, name, url, enabled, state }) => ({ id, name, url, enabled, state }))));
+api.get('/peers', requireFullAccess, (c) => c.json(listPeers().map(({ id, name, url, disabled, state, direction, remoteInstanceId }) => ({ id, name, url, disabled, state, direction, remoteInstanceId }))));
+api.get('/connection-shares', requireFullAccess, c => c.json(sharingMatrix(c.get('user').id)));
+api.put('/connections/:ref/shares/:peerId', requireFullAccess, async c => c.json(setConnectionPeerShare(c.get('user').id, c.req.param('ref'), c.req.param('peerId'), (await c.req.json()).shared)));
 api.get('/connections/:ref/shares', requireFullAccess, (c) => c.json(connectionShares(c.get('user').id, c.req.param('ref'))));
 api.put('/connections/:ref/shares', requireFullAccess, async (c) => c.json(setConnectionShares(c.get('user').id, c.req.param('ref'), await c.req.json())));
 
@@ -91,8 +93,8 @@ api.post('/connections/:ref/token', tokenHandler);
 api.get('/connections/:ref/openapi', async (c) => {
   const row = getConnectionRow(c.get('user').id, c.req.param('ref'));
   assertConnectionAccess(c, row.id);
-  if (row.satellite_id) {
-    const d = await requestSatellite(row.satellite_id, c.get('user').id, 'openapi', { connection: row.remote_connection_id, refresh: c.req.query('refresh') === '1' });
+  if (row.peer_id) {
+    const d = await requestPeer(row.peer_id, c.get('user').id, 'openapi', { connection: row.remote_connection_id, refresh: c.req.query('refresh') === '1' });
     if (!d) throw notFound('This service has no API description');
     return c.json(d);
   }
@@ -166,19 +168,19 @@ api.post('/call', async (c) => {
 // --- audit trail ---
 
 // Limited tokens (agents) cannot read the trail: it covers all of the user's connections.
-const includeUpstreamActivity = (c: Context<Env>) => c.get('user').role === 'admin';
+const includePeerActivity = (c: Context<Env>) => c.get('user').role === 'admin';
 api.get('/audit', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);
-  return c.json(queryAudit(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), limit: num(q.limit), offset: num(q.offset) }, includeUpstreamActivity(c)));
+  return c.json(queryAudit(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), limit: num(q.limit), offset: num(q.offset) }, includePeerActivity(c)));
 });
 api.get('/audit/histogram', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);
-  return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }, includeUpstreamActivity(c)));
+  return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }, includePeerActivity(c)));
 });
-api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id, includeUpstreamActivity(c))));
-api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')), includeUpstreamActivity(c))));
+api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id, includePeerActivity(c))));
+api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')), includePeerActivity(c))));
 
 // --- saved calls ---
 
@@ -274,7 +276,7 @@ api.delete('/calls/:id', requireFullAccess, (c) => {
 });
 
 /**
- * Runs a saved call and passes the upstream response through as-is.
+ * Runs a saved call and passes the peer response through as-is.
  * The JSON body may override connection, pathParams, query (merged), headers (merged) and body.
  */
 api.post('/calls/:id/run', async (c) => {

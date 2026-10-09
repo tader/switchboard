@@ -6,7 +6,7 @@ import { badRequest, HttpError } from './http.ts';
 import { limitResponse, mcpEndpoint, MCP_RESPONSE_LIMIT, MCP_TIMEOUT } from './mcp-network.ts';
 import { record, redactBody, type Caller } from './audit.ts';
 import type { User } from './users.ts';
-import { satelliteConnection, requestSatellite } from './satellites.ts';
+import { peerConnection, requestPeer } from './peers.ts';
 
 export type McpOperation = 'tools/list' | 'tools/call' | 'resources/list' | 'resources/templates/list' | 'resources/read' | 'prompts/list' | 'prompts/get' | 'completion/complete';
 export interface McpInput {
@@ -24,7 +24,7 @@ export interface McpInput {
 const OPERATIONS = new Set<McpOperation>(['tools/list', 'tools/call', 'resources/list', 'resources/templates/list', 'resources/read', 'prompts/list', 'prompts/get', 'completion/complete']);
 const active = new Map<AbortController, string>();
 onConnectionChange(id => { for (const [controller, connectionId] of active) if (!id || connectionId === id) controller.abort(); });
-export function stopUpstreamMcp() { for (const controller of active.keys()) controller.abort(); }
+export function stopProviderMcp() { for (const controller of active.keys()) controller.abort(); }
 
 export function validateMcpInput(input: McpInput) {
   if (!input || !OPERATIONS.has(input.operation)) throw badRequest('Unknown MCP operation');
@@ -41,19 +41,19 @@ export function validateMcpInput(input: McpInput) {
 }
 
 async function executeRemoteMcp(user: User, row: any, input: McpInput, signal?: AbortSignal, caller?: Caller) {
-  if (satelliteConnection(user.id, row.satellite_id, row.remote_connection_id).kind !== 'mcp') throw badRequest('This shared connection is not MCP');
+  if (peerConnection(user.id, row.peer_id, row.remote_connection_id).kind !== 'mcp') throw badRequest('This shared connection is not MCP');
   const controller = new AbortController();
   active.set(controller, row.id);
   const started = Date.now();
   const audit = (status: number, outcome: 'success' | 'tool-error' | 'protocol-error' | 'cancelled') => caller && record({
     userId: user.id, caller, connection: { id: row.id, name: row.name, serviceId: row.service_id }, method: 'MCP',
     status, durationMs: Date.now() - started, mcpOperation: input.operation, mcpTarget: input.name ?? input.uri, mcpOutcome: outcome,
-    requestBody: redactBody(JSON.stringify(input), 'application/json'), ...(status >= 400 ? { error: `Satellite MCP ${outcome}` } : {}),
+    requestBody: redactBody(JSON.stringify(input), 'application/json'), ...(status >= 400 ? { error: `Peer MCP ${outcome}` } : {}),
   });
   try {
-    const result: any = await requestSatellite(row.satellite_id, user.id, 'mcp', { connection: row.remote_connection_id, input, caller }, MCP_TIMEOUT,
+    const result: any = await requestPeer(row.peer_id, user.id, 'mcp', { connection: row.remote_connection_id, input, caller }, MCP_TIMEOUT,
       AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]));
-    if (Buffer.byteLength(JSON.stringify(result)) > MCP_RESPONSE_LIMIT) throw new HttpError(502, 'Satellite MCP result exceeded the size limit');
+    if (Buffer.byteLength(JSON.stringify(result)) > MCP_RESPONSE_LIMIT) throw new HttpError(502, 'Peer MCP result exceeded the size limit');
     touch(row.id);
     audit(result?.isError ? 502 : 200, result?.isError ? 'tool-error' : 'success');
     return result;
@@ -68,7 +68,7 @@ export async function executeMcp(user: User, ref: string, input: McpInput, signa
   validateMcpInput(input);
   const row = getConnectionRow(user.id, ref);
   if (row.kind !== 'mcp') throw badRequest('This connection is an HTTP API; use an HTTP request');
-  if (row.satellite_id) return executeRemoteMcp(user, row, input, signal, caller);
+  if (row.peer_id) return executeRemoteMcp(user, row, input, signal, caller);
   const { conn, service } = loadConnection(user.id, row.id);
   const endpoint = mcpEndpoint(resolveBaseUrl(service, conn));
   const controller = new AbortController();

@@ -139,7 +139,7 @@ To publish, push the directory to GitHub. Admins install with `owner/repo`, a UR
 
 **Plugins → Community** loads the current [community catalog](https://github.com/tader/switchboard-plugins) when opened and when **Refresh** is clicked. Its listings are not bundled with Switchboard releases. Each listing installs one plugin folder. Contribute a listing through a pull request in the catalog repository; its README describes the format and validation command.
 
-For private repositories, choose **GitHub access → Automatic** or one of your local GitHub connections. Automatic access tries public access, `SWITCHBOARD_GITHUB_TOKEN`, the remembered connection when it belongs to you, then your other eligible GitHub connections. Explicit selection uses only the chosen connection. A personal access token needs repository Contents read access; OAuth access may need the `repo` scope and organization authorization. Another administrator's connections and satellite connections are not used. Successful saved connections are remembered by id for later checks and updates; credentials remain encrypted in the connection store. **Automatic** ignores the previous preference for that operation and remembers any saved connection that succeeds.
+For private repositories, choose **GitHub access → Automatic** or one of your local GitHub connections. Automatic access tries public access, `SWITCHBOARD_GITHUB_TOKEN`, the remembered connection when it belongs to you, then your other eligible GitHub connections. Explicit selection uses only the chosen connection. A personal access token needs repository Contents read access; OAuth access may need the `repo` scope and organization authorization. Another administrator's connections and peer connections are not used. Successful saved connections are remembered by id for later checks and updates; credentials remain encrypted in the connection store. **Automatic** ignores the previous preference for that operation and remembers any saved connection that succeeds.
 
 Missing dependencies are installed recursively from matching folders in the requested repository, then from the live catalog. A compatible installed dependency is reused. When a version requirement needs an existing dependency upgraded, Switchboard considers its tracked ref and checks the requirements of the enabled plugins that use it. The preview shows shared dependency upgrades and affected dependents. It does not search old release tags, switch dependency refs or automatically downgrade dependencies. Enable disabled dependencies explicitly first; incompatible built-in helpers require a Switchboard upgrade.
 
@@ -158,3 +158,10 @@ For `githubConnectionId`, a string explicitly selects your local GitHub connecti
 The direct install/update endpoints retain their response shapes. If a direct operation requires a shared dependency upgrade, they return HTTP 409 with `code: "plugin_review_required"` and the concrete `plan`; review it before sending its `planId` to the apply endpoint.
 
 Plugins run in Switchboard process with full access. Only install plugins you trust.
+
+
+## Peers
+
+`ctx.peer` is true when this instance has at least one configured peer, incoming or outgoing. It replaces the former satellite flag. A peer describes a relationship between two Switchboard instances; both can explicitly share local connections through **Connections → Sharing**. Plugins configure connections only on their local instance.
+
+The former `switchboard` plugin is retired and cannot be enabled. Its existing connection records and credentials remain stored, but unavailable. Configure Peers and choose sharing grants explicitly instead.

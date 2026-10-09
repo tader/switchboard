@@ -12,8 +12,8 @@ import { HttpError } from './http.ts';
 import { describe } from './openapi.ts';
 import { execute } from './proxy.ts';
 import { isApiToken, tokenUser } from './users.ts';
-import { requestSatellite } from './satellites.ts';
-import { executeMcp, type McpInput } from './upstream-mcp.ts';
+import { requestPeer } from './peers.ts';
+import { executeMcp, type McpInput } from './provider-mcp.ts';
 import { federatedList, federatedRequest, namespaceResult } from './mcp-federation.ts';
 
 const MODERN = ['2026-07-28'];
@@ -215,8 +215,8 @@ function operationMetadata(operation: { params: any[]; body?: any }) {
 }
 
 async function apiDescription(ctx: Ctx, row: any) {
-  if (row.satellite_id) {
-    const description = await requestSatellite<Awaited<ReturnType<typeof describe>>>(row.satellite_id, ctx.user.id, 'openapi', { connection: row.remote_connection_id });
+  if (row.peer_id) {
+    const description = await requestPeer<Awaited<ReturnType<typeof describe>>>(row.peer_id, ctx.user.id, 'openapi', { connection: row.remote_connection_id });
     return { description, serviceName: toView(row).serviceName, pathFor: (path: string) => path };
   }
   const { conn, service } = loadConnection(ctx.user.id, row.id);
@@ -341,7 +341,7 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
         baseUrl: c.baseUrl,
         hasApiReference: c.hasOpenapi,
         status: c.status,
-        location: c.satellite ? { type: 'satellite', name: c.satellite.name, online: c.satellite.online } : { type: 'local' },
+        location: c.peer ? { type: 'peer', name: c.peer.name, online: c.peer.online } : { type: 'local' },
         ...(c.statusMessage ? { problem: c.statusMessage } : {}),
       }));
       return json(list);

@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { MCP_RESPONSE_LIMIT } from '../server/mcp-network.ts';
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-upstream-mcp-'));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-provider-mcp-'));
 process.env.SWITCHBOARD_DATA_DIR = dir;
 process.env.SWITCHBOARD_WATCH_PLUGINS = 'false';
 process.env.SWITCHBOARD_PUBLIC_URL = 'https://switchboard.example';
@@ -19,7 +19,7 @@ const { initKey, decrypt } = await import('../server/crypto.ts');
 const { plugins } = await import('../server/plugins/manager.ts');
 const { startConnect, completeRedirect, getConnectionRow, deleteConnection } = await import('../server/connections.ts');
 const { createUser, createToken } = await import('../server/users.ts');
-const { executeMcp } = await import('../server/upstream-mcp.ts');
+const { executeMcp } = await import('../server/provider-mcp.ts');
 const { api } = await import('../server/routes/connections.ts');
 const { HttpError } = await import('../server/http.ts');
 const { connectionChanged } = await import('../server/connection-events.ts');

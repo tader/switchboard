@@ -76,10 +76,11 @@ export interface Service {
   methods: AuthMethod[];
   /** Setup guides for this service. */
   guides: { id: string; title: string }[];
-  satellite?: { id: string; name: string; online: boolean };
+  peer?: { id: string; name: string; online: boolean };
 }
 
 export interface Connection {
+  icon?: string;
   readOnly: boolean;
   kind: 'http' | 'mcp';
   id: string;
@@ -99,7 +100,7 @@ export interface Connection {
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
-  satellite: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
+  peer: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
 export type FlowResult =
@@ -138,7 +139,7 @@ export interface CallResult {
   size: number;
   bodyEncoding: 'utf8' | 'base64';
   body: string;
-  /** What Switchboard sent upstream; credentials it added are masked. */
+  /** What Switchboard sent to the provider; credentials it added are masked. */
   request: {
     method: string;
     url: string;
@@ -218,10 +219,17 @@ export interface AdminUser extends User {
   inviteExpiresAt: number | null;
 }
 
-export interface Satellite {
+export interface Peer {
   id: string;
   name: string;
   ownerUserId: string;
+  direction: 'incoming' | 'outgoing';
+  url: string | null;
+  remoteInstanceId: string | null;
+  sharedConnections: number;
+  state: 'disabled' | 'connecting' | 'online' | 'offline';
+  lastError: string | null;
+  nextRetryAt: number | null;
   disabled: boolean;
   online: boolean;
   connectedAt: number | null;
@@ -231,15 +239,6 @@ export interface Satellite {
   userIds: string[];
   createdAt: number;
   updatedAt: number;
-}
-
-export interface SatelliteUpstream {
-  id: string; name: string; url: string; enabled: boolean; hasToken: boolean; sharedConnections: number;
-  state: 'disabled' | 'connecting' | 'online' | 'offline';
-  connectedAt: number | null;
-  lastSeenAt: number | null;
-  lastError: string | null;
-  nextRetryAt: number | null;
 }
 
 export interface Info {

@@ -51,10 +51,10 @@ function credentials(ctx: GithubContext): Credential[] {
   if (requested) {
     if (!ctx.user) throw badRequest('A signed-in administrator is required to select a GitHub connection');
     const { row, conn } = loadConnection(ctx.user.id, requested);
-    if (row.satellite_id || conn.kind !== 'http' || conn.serviceId !== 'github') throw badRequest('Select a local GitHub connection');
+    if (row.peer_id || conn.kind !== 'http' || conn.serviceId !== 'github') throw badRequest('Select a local GitHub connection');
     return [{ connectionId: conn.id }];
   }
-  const connections = ctx.user ? listConnections(ctx.user.id).filter((c) => c.serviceId === 'github' && c.kind === 'http' && !c.satellite && c.status !== 'unavailable') : [];
+  const connections = ctx.user ? listConnections(ctx.user.id).filter((c) => c.serviceId === 'github' && c.kind === 'http' && !c.peer && c.status !== 'unavailable') : [];
   const preferred = requested === null ? undefined : ctx.preferredConnectionId;
   connections.sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   return [{}, ...(config.githubToken ? [{ configured: true }] : []), ...connections.map((c) => ({ connectionId: c.id }))];

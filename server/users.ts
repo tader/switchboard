@@ -47,18 +47,10 @@ const USERNAME = /^[a-zA-Z0-9][a-zA-Z0-9._@-]{0,63}$/;
 export function listUsers(): (User & { connections: number })[] {
   return all(
     `SELECT u.*, (SELECT COUNT(*) FROM connections c WHERE c.user_id = u.id) AS connections
-     FROM users u WHERE COALESCE(u.satellite_shadow, 0) = 0 ORDER BY u.username COLLATE NOCASE`,
+     FROM users u WHERE COALESCE(u.peer_shadow, 0) = 0 ORDER BY u.username COLLATE NOCASE`,
   ).map((r) => ({ ...toUser(r), connections: r.connections }));
 }
 
-/** Creates the local, non-login principal used to enforce ownership on a satellite. */
-export function ensureSatelliteUser(id: string): User {
-  const found = getUser(id);
-  if (found) return found;
-  const suffix = id.replace(/[^a-zA-Z0-9_-]/g, '').slice(-24) || randomToken(8);
-  run('INSERT INTO users (id, username, role, disabled, created_at, satellite_shadow) VALUES (?, ?, ?, 0, ?, 1)', id, `remote-${suffix}`, 'user', now());
-  return getUser(id)!;
-}
 
 export function getUser(id: string): User | undefined {
   const r = one('SELECT * FROM users WHERE id = ?', id);
@@ -87,7 +79,7 @@ export function updateUser(id: string, patch: { role?: Role; disabled?: boolean;
   if (patch.role) run('UPDATE users SET role = ? WHERE id = ?', patch.role, id);
   if (patch.disabled !== undefined) {
     run('UPDATE users SET disabled = ? WHERE id = ?', patch.disabled ? 1 : 0, id);
-    if (patch.disabled) run('DELETE FROM sessions WHERE user_id = ?', id);
+    if (patch.disabled) { run('DELETE FROM sessions WHERE user_id = ?', id); connectionChanged(); }
   }
   return getUser(id)!;
 }
