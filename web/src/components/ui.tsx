@@ -6,9 +6,9 @@ import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Copy, Eye, EyeOff, Loader2, X } from 'lucide-react';
 import { copy, cx } from '../lib';
 
-export function Table({ children, label }: { children: ReactNode; label: string }) {
+export function Table({ children, label, layout = 'fixed' }: { children: ReactNode; label: string; layout?: 'fixed' | 'auto' }) {
   return <div className="overflow-x-auto rounded-xl bg-white ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800">
-    <table aria-label={label} className="w-full table-fixed text-left text-[13px] [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-zinc-500 [&_td]:px-3 [&_td]:py-2 [&_tbody_tr]:border-t [&_tbody_tr]:border-zinc-100 dark:[&_tbody_tr]:border-zinc-800 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-zinc-50 dark:[&_tbody_tr:hover]:bg-zinc-800/40">
+    <table aria-label={label} className={cx(layout === 'auto' ? 'table-auto' : 'table-fixed', 'w-full text-left text-[13px] [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-zinc-500 [&_td]:px-3 [&_td]:py-2 [&_tbody_tr]:border-t [&_tbody_tr]:border-zinc-100 dark:[&_tbody_tr]:border-zinc-800 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-zinc-50 dark:[&_tbody_tr:hover]:bg-zinc-800/40')}>
       {children}
     </table>
   </div>;

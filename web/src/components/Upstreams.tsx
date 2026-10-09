@@ -22,7 +22,6 @@ export function Upstreams() {
   };
   return <section className="mb-6 space-y-3">
     <div className="flex items-center justify-between"><h2 className="font-semibold">Upstreams</h2><Button icon={<Plus className="size-4" />} onClick={() => open('new')}>Add upstream</Button></div>
-    <p className="text-[13px] text-zinc-500">Connect this machine to other Switchboards. Connection owners choose what to share from the Connections page.</p>
     {upstreams.error && <Alert>{upstreams.error.message}</Alert>}
     {upstreams.loading && !upstreams.data && <Spinner />}
     <Card><ul className="divide-y divide-zinc-100 dark:divide-zinc-800">

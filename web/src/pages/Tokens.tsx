@@ -29,7 +29,6 @@ export function Tokens() {
     <>
       <PageHeader
         title="API tokens"
-        description="Scripts and agents use these to call your connections through Switchboard."
         actions={
           (tokens.data?.length ?? 0) > 0 && (
             <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>
@@ -234,25 +233,12 @@ function McpBox() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-[13px] font-semibold">MCP server</h2>
-          <p className="mt-0.5 text-[13px] text-zinc-500 dark:text-zinc-400">
-            Claude and other AI assistants can use your connections through this URL. They sign in here and you choose which connections to share.
-          </p>
         </div>
       </div>
       <div className="mt-3 space-y-2">
         <CopyField value={url} />
-        <details className="text-[13px]">
-          <summary className="cursor-pointer select-none text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Setup commands</summary>
-          <div className="mt-2 space-y-2">
-            <p className="text-xs text-zinc-500">Claude Code, signing in through the browser:</p>
-            <CopyField value={`claude mcp add --transport http switchboard ${url}`} />
-            <p className="text-xs text-zinc-500">With a token instead (create one below, limited to the connections it needs):</p>
-            <CopyField value={`claude mcp add --transport http switchboard ${url} --header "Authorization: Bearer $SWITCHBOARD_TOKEN"`} />
-            <p className="text-xs text-zinc-500">Claude Desktop and claude.ai: add a custom connector with the URL above.</p>
-          </div>
-        </details>
         <Link to="/docs/guides/mcp" className="inline-block text-[13px] font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-          Setup for Claude, Codex, Copilot, OpenCode and others
+          MCP documentation
         </Link>
       </div>
     </Card>

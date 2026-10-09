@@ -228,7 +228,6 @@ export function Activity() {
     <>
       <PageHeader
         title="Activity"
-        description="Every request made with your connections, by you and your tokens."
         actions={
           <>
             <label className={cx('flex items-center gap-2 text-[13px]', !liveOk && 'opacity-50')} title={liveOk ? undefined : f.range === 'custom' ? 'Live shows the newest entries; zoom out first' : 'Live shows the newest entries; sort by newest first'}>
