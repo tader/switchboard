@@ -13,7 +13,7 @@ process.env.SWITCHBOARD_DATA_DIR = path.join(tmp, 'data');
 process.env.SWITCHBOARD_WATCH_PLUGINS = 'false';
 fs.mkdirSync(process.env.SWITCHBOARD_DATA_DIR, { recursive: true });
 const realFetch = globalThis.fetch;
-const catalogUrl = 'https://raw.githubusercontent.com/tader/switchboard-plugins/main/plugins.json';
+const catalogUrl = 'https://api.github.com/repos/tader/switchboard-plugins/contents/plugins.json?ref=main';
 interface Fixture { id: string; version?: string; dependencies?: string[]; dependencyVersions?: Record<string, string>; broken?: boolean; atRoot?: boolean }
 interface Repo { refs: Map<string, string>; files: Map<string, Buffer>; allowed?: string[]; redirect?: string }
 const repos = new Map<string, Repo>();
@@ -50,7 +50,7 @@ before(async () => {
     const url = String(input);
     const authorization = new Headers(init?.headers).get('authorization');
     seen.push({ url, authorization });
-    if (url.split('?')[0] === catalogUrl) return Response.json(catalogStatus === 200 ? catalog : { error: 'offline' }, { status: catalogStatus });
+    if (url === catalogUrl) return Response.json(catalogStatus === 200 ? catalog : { error: 'offline' }, { status: catalogStatus });
     if (url === 'https://api.github.com/user') return Response.json({ id: authorization, login: authorization?.slice(7), avatar_url: '' });
     const m = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/(commits|tarball)\/(.+)$/);
     if (m) {

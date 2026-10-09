@@ -1,7 +1,7 @@
 import { HttpError } from '../http.ts';
 import { parseRepo } from './github-access.ts';
 
-export const CATALOG_URL = 'https://raw.githubusercontent.com/tader/switchboard-plugins/main/plugins.json';
+export const CATALOG_URL = 'https://api.github.com/repos/tader/switchboard-plugins/contents/plugins.json?ref=main';
 export interface CommunityPlugin {
   id: string;
   name: string;
@@ -34,10 +34,9 @@ export function validateCatalog(input: unknown): PluginCatalog {
 
 export async function communityCatalog(): Promise<PluginCatalog> {
   try {
-    // Raw GitHub's CDN may retain an older main-branch response despite no-cache.
-    const url = new URL(CATALOG_URL);
-    url.searchParams.set('t', String(Date.now()));
-    const res = await fetch(url.toString(), { headers: { 'cache-control': 'no-cache' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
+    // The Contents API reads main directly; raw.githubusercontent.com's CDN can
+    // retain an older branch response even with cache-busting query parameters.
+    const res = await fetch(CATALOG_URL, { headers: { accept: 'application/vnd.github.raw+json', 'user-agent': 'Switchboard', 'cache-control': 'no-cache' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
     if (!res.ok) { await res.body?.cancel(); throw new Error(`HTTP ${res.status}`); }
     if (!res.body) throw new Error('Empty response');
     const reader = res.body.getReader();
