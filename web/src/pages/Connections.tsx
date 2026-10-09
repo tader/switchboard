@@ -148,7 +148,7 @@ export function Connections() {
               const LocationIcon = c.peer ? Laptop : Server;
               return <tr key={c.id} className={cx(highlight === c.id && 'bg-indigo-50/70 dark:bg-indigo-500/10')}>
                 <td><div className="flex min-w-0 items-center gap-2.5" title={c.serviceName}>
-                  <ServiceIcon icon={service?.icon} name={c.serviceName} size="sm" />
+                  <ServiceIcon icon={c.icon ?? service?.icon} name={c.serviceName} size="sm" />
                   <span className="hidden truncate text-zinc-600 sm:block dark:text-zinc-300">{c.serviceName}</span>
                   <span className="sr-only sm:hidden">{c.serviceName}</span>
                 </div></td>
@@ -174,7 +174,7 @@ export function Connections() {
             const service = serviceById(serviceId);
             return <Card key={serviceId} className="overflow-hidden">
               <div className="flex items-center gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800">
-                <ServiceIcon icon={service?.icon} name={list[0].serviceName} size="sm" />
+                <ServiceIcon icon={list[0].icon ?? service?.icon} name={list[0].serviceName} size="sm" />
                 <h2 className="flex-1 text-[13px] font-semibold">{list[0].serviceName}</h2>
                 {service && <Button size="sm" variant="ghost" icon={<Plus className="size-3.5" />} onClick={() => setConnect({ service })}>Add account</Button>}
               </div>

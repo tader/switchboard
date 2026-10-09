@@ -223,7 +223,7 @@ export function Console() {
               {...p}
               className="flex w-full items-center gap-2.5 rounded-lg bg-white px-2.5 py-2 text-left ring-1 ring-zinc-200 hover:ring-zinc-300 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:ring-zinc-700"
             >
-              <ServiceIcon icon={service?.icon} name={connection?.serviceName ?? '?'} size="sm" />
+              <ServiceIcon icon={connection?.icon ?? service?.icon} name={connection?.serviceName ?? '?'} size="sm" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium">{connection?.account?.label ?? connection?.name}</span>
                 <span className="block truncate font-mono text-[11px] text-zinc-500">{connection?.name}</span>
@@ -240,7 +240,7 @@ export function Console() {
                   <span className="truncate font-mono text-[11px] text-zinc-500">{c.name}</span>
                 </span>
               ),
-              icon: <ServiceIcon icon={services.data?.find((s) => s.id === c.serviceId)?.icon} name={c.serviceName} size="sm" />,
+              icon: <ServiceIcon icon={c.icon ?? services.data?.find((s) => s.id === c.serviceId)?.icon} name={c.serviceName} size="sm" />,
               onSelect: () => {
                 setConnection(c.id);
                 setOperation(null);
