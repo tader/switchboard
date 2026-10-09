@@ -1,9 +1,11 @@
 import fs from 'node:fs';
+import { satisfies, valid, validRange } from 'semver';
 import { mcpOAuth } from '../mcp-auth.ts';
 import { connectionChanged } from '../connection-events.ts';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { callbackUrl, config } from '../config.ts';
+import { hasConfiguredUpstreams } from '../upstreams.ts';
 import { decrypt, encrypt } from '../crypto.ts';
 import { all, now, one, run } from '../db.ts';
 import { badRequest, notFound } from '../http.ts';
@@ -17,6 +19,8 @@ export interface GithubSource {
   ref?: string;
   path: string;
   commit: string;
+  /** A preference only: the acting administrator must own this connection. */
+  githubConnectionId?: string;
 }
 
 export interface PluginRecord {
@@ -55,6 +59,11 @@ class PluginManager {
 
   async start() {
     fs.mkdirSync(installedDir(), { recursive: true });
+    // Reviewed previews are in-memory; their downloaded archives cannot survive a restart.
+    const tmp = path.join(config.dataDir, 'tmp');
+    if (fs.existsSync(tmp)) for (const entry of fs.readdirSync(tmp)) {
+      if (entry.startsWith('plugin-download-')) fs.rmSync(path.join(tmp, entry), { recursive: true, force: true });
+    }
     fs.rmSync(runtimeDir(), { recursive: true, force: true });
     fs.mkdirSync(runtimeDir(), { recursive: true });
     await this.serial(async () => {
@@ -213,6 +222,10 @@ class PluginManager {
       const d = this.plugins.get(dep);
       if (!d) return this.block(p, `Requires plugin "${dep}", which is not installed`);
       if (d.status !== 'active') return this.block(p, `Requires plugin "${dep}", which is not active`);
+      const range = p.manifest.dependencyVersions?.[dep];
+      if (range && (!valid(d.manifest.version) || !satisfies(d.manifest.version, range))) {
+        return this.block(p, `Requires ${dep} ${range}; installed version is ${d.manifest.version}`);
+      }
     }
 
     try {
@@ -284,7 +297,7 @@ class PluginManager {
       callbackUrl,
       dir: p.dir,
       dataDir,
-      satellite: !!(config.satelliteCentralUrl && config.satelliteToken),
+      satellite: hasConfiguredUpstreams(),
       mcp: { oauth: mcpOAuth },
     };
   }
@@ -475,7 +488,13 @@ export function validateManifest(m: PluginManifest) {
   if (!ID.test(m.id ?? '')) throw new Error('"id" must be lowercase letters, digits and dashes');
   if (!m.name) throw new Error('"name" is required');
   if (!m.version) throw new Error('"version" is required');
-  if (m.dependencies && !Array.isArray(m.dependencies)) throw new Error('"dependencies" must be an array');
+  if (m.dependencies !== undefined && (!Array.isArray(m.dependencies) || m.dependencies.some((id) => typeof id !== 'string' || !ID.test(id)) || new Set(m.dependencies).size !== m.dependencies.length)) throw new Error('"dependencies" must be an array of unique plugin ids');
+  if (m.dependencyVersions !== undefined) {
+    if (!m.dependencyVersions || typeof m.dependencyVersions !== 'object' || Array.isArray(m.dependencyVersions)) throw new Error('"dependencyVersions" must be an object');
+    for (const [id, range] of Object.entries(m.dependencyVersions)) {
+      if (!m.dependencies?.includes(id) || typeof range !== 'string' || !range.trim() || !validRange(range)) throw new Error(`Invalid dependency version requirement for "${id}"`);
+    }
+  }
   if (m.settings) validateFields(m.settings, 'settings');
 }
 

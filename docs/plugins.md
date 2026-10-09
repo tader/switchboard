@@ -31,6 +31,7 @@ my-plugin/
 
 - `id`: lowercase letters, digits and dashes.
 - `dependencies`: plugins whose exports you use. They load first; when one reloads, so does yours. If one is missing or disabled your plugin waits.
+- `dependencyVersions`: optional npm semver ranges keyed by ids in `dependencies`, for example `{"oauth2": "^1.0.0", "api-key": ">=1.0.0 <2.0.0"}`. Existing dependency arrays remain valid without ranges. A constrained dependency must have a valid semantic version. Version mismatches also block loading after local edits or a restart.
 - `settings`: instance-wide values an administrator sets on the Plugins page, passed as `ctx.settings`. Saving them reloads the plugin.
 - `main`: entry module if not `index.ts`/`index.js`.
 
@@ -101,13 +102,15 @@ Credentials and config are stored encrypted. Secrets the user typed are only ret
 
 Credentials are only sent to `allowedHosts` (default: the host of `baseUrl`). Entries may be `*.example.com`. `baseUrl`, `allowedHosts` and `openapi` may be functions of the connection, for services where the user enters the URL.
 
-## Building blocks from built-in plugins
+## Shared building blocks
+
+Switchboard bundles only `mcp`, `api-key`, and `oauth2`. Provider integrations are installed from Community.
 
 `oauth2` exports `authorizationCode`, `deviceCode`, `clientCredentials` (each returns an auth method, options may be functions of the user's config), and `tokenRequest`, `freshCredentials`, `OAuthError`.
 
 `api-key` exports `bearerToken`, `headerKey`, `queryKey`, `basicAuth`. Secret fields go into credentials; pass `identify` to validate the key and name the account.
 
-`google` exports `googleService({ id, name, scopes, baseUrl, allowedHosts, openapi, fields })`, which builds a Google service using the admin-configured OAuth client. See `plugins/gmail` for a short, complete example.
+The external [`google`](https://github.com/tader/switchboard-plugin-google) plugin exports `googleService({ id, name, scopes, baseUrl, allowedHosts, openapi, fields })`, which builds a Google service using the admin-configured OAuth client. See the [Gmail plugin](https://github.com/tader/switchboard-plugin-gmail/blob/main/plugins/gmail/index.ts) for a short, complete example. The external [`microsoft`](https://github.com/tader/switchboard-plugin-microsoft) plugin similarly exports `microsoftService` and `spec` for Microsoft Graph apps. Declare these helpers in `dependencies` with compatible `dependencyVersions`; the live catalog resolves their separate repositories.
 
 ## Documentation
 
@@ -132,8 +135,26 @@ Guides can use GitHub-style callouts: a blockquote starting with `[!NOTE]`, `[!T
 
 Files are watched: editing a plugin (built in, or under `<data>/plugins/`) reloads it and its dependents within a second. Each load imports a fresh copy of the plugin directory, so relative imports are reloaded too. Plugins cannot have their own `node_modules`; bundle third-party code or use Node built-ins and `fetch`.
 
-To publish, push the directory to GitHub. Admins install with `owner/repo`, a URL to a folder (`https://github.com/owner/repo/tree/main/plugins/linear`), or `owner/repo@tag`. A repository may contain several plugins at the top level or under `plugins/`; all are installed. *Check for updates* compares the installed commit with the branch or tag it came from. When updates are available, it becomes *Update all*, showing the count. This updates every available plugin on its own tracked ref, regardless of the search filter. Updates run one at a time; failures are reported separately and can be retried.
+To publish, push the directory to GitHub. Admins install with `owner/repo`, a URL to a folder (`https://github.com/owner/repo/tree/main/plugins/linear`), or `owner/repo@tag`. A repository may contain several plugins at the top level or under `plugins/`; omitting the folder selects all of them. The install dialog previews the selected plugins and their dependencies before installing.
 
-Use **Update from…** on an installed plugin to change its branch, tag, or commit. The choice is remembered for subsequent updates, including when both refs point to the same commit. **Use default branch** returns to the repository's default branch. Only the selected plugin's files change; its dependents reload. Settings and connections remain in place. A failed activation restores the previous files and source, but cannot undo external side effects performed by plugin code.
+**Plugins → Community** loads the current [community catalog](https://github.com/tader/switchboard-plugins) when opened and when **Refresh** is clicked. Its listings are not bundled with Switchboard releases. Each listing installs one plugin folder. Contribute a listing through a pull request in the catalog repository; its README describes the format and validation command.
+
+For private repositories, choose **GitHub access → Automatic** or one of your local GitHub connections. Automatic access tries public access, `SWITCHBOARD_GITHUB_TOKEN`, the remembered connection when it belongs to you, then your other eligible GitHub connections. Explicit selection uses only the chosen connection. A personal access token needs repository Contents read access; OAuth access may need the `repo` scope and organization authorization. Another administrator's connections and satellite connections are not used. Successful saved connections are remembered by id for later checks and updates; credentials remain encrypted in the connection store. **Automatic** ignores the previous preference for that operation and remembers any saved connection that succeeds.
+
+Missing dependencies are installed recursively from matching folders in the requested repository, then from the live catalog. A compatible installed dependency is reused. When a version requirement needs an existing dependency upgraded, Switchboard considers its tracked ref and checks the requirements of the enabled plugins that use it. The preview shows shared dependency upgrades and affected dependents. It does not search old release tags, switch dependency refs or automatically downgrade dependencies. Enable disabled dependencies explicitly first; incompatible built-in helpers require a Switchboard upgrade.
+
+*Check for updates* compares installed commits with their tracked refs. **Update all** previews all available updates together, regardless of the search filter, so shared dependencies are resolved consistently. Each plugin retains its own tracked ref. Incompatible requirements stop the preview with an explanation.
+
+Use **Update from…** to change a selected plugin's branch, tag, commit or GitHub access choice. The ref is remembered, including when both refs point to the same commit. **Use default branch** returns to the repository's default branch. Changes are pinned to the previewed commits; previews expire after ten minutes or become stale when installed plugin code, settings or state changes. Settings and connections remain in place. A failed activation restores every changed plugin's previous files and metadata, but cannot undo external side effects performed by plugin code.
+
+### Installation API
+
+`POST /api/admin/plugins/install/plan` accepts `{repo, ref?, path?, githubConnectionId?, expectedId?}`. `expectedId` checks that a single-plugin listing still points to the expected manifest. `POST /api/admin/plugins/update/plan` accepts `{updates: [{id, ref?, githubConnectionId?}]}` for one or multiple plugins. Both return `{planId, expiresAt, changes, affectedDependents, requiresReview}` without executing downloaded plugin code.
+
+Apply the reviewed preview with `POST /api/admin/plugins/apply` and `{planId}`. It returns `{ids, changes, plugins}`. The preview belongs to the requesting administrator and can be applied once. An expired or stale preview returns HTTP 409; request a new preview.
+
+For `githubConnectionId`, a string explicitly selects your local GitHub connection, `null` uses automatic access, and omission on update prefers the remembered connection before falling back automatically. For update `ref`, omission retains the tracked ref and `null` follows the default branch.
+
+The direct install/update endpoints retain their response shapes. If a direct operation requires a shared dependency upgrade, they return HTTP 409 with `code: "plugin_review_required"` and the concrete `plan`; review it before sending its `planId` to the apply endpoint.
 
 Plugins run in Switchboard process with full access. Only install plugins you trust.

@@ -12,6 +12,7 @@ import { type CallInput, envelope, execute, issueToken, passThrough } from '../p
 import { auditFacets, auditHistogram, callerFrom, getAudit, queryAudit } from '../audit.ts';
 import { getDoc, guidesByService, listDocs } from '../docs.ts';
 import { requestSatellite } from '../satellites.ts';
+import { listUpstreams, connectionShares, setConnectionShares } from '../upstreams.ts';
 import { mcpClientMetadata } from '../mcp-auth.ts';
 import { executeMcp, validateMcpInput, type McpInput, type McpOperation } from '../upstream-mcp.ts';
 
@@ -25,6 +26,10 @@ api.get('/services', (c) => {
 
 api.get('/docs', (c) => c.json(listDocs(c.get('user').role === 'admin')));
 api.get('/docs/*', (c) => c.json(getDoc(decodeURIComponent(c.req.path.replace(/^\/api\/docs\//, '')), c.get('user').role === 'admin')));
+
+api.get('/upstreams', requireFullAccess, (c) => c.json(listUpstreams().map(({ id, name, url, enabled, state }) => ({ id, name, url, enabled, state }))));
+api.get('/connections/:ref/shares', requireFullAccess, (c) => c.json(connectionShares(c.get('user').id, c.req.param('ref'))));
+api.put('/connections/:ref/shares', requireFullAccess, async (c) => c.json(setConnectionShares(c.get('user').id, c.req.param('ref'), await c.req.json())));
 
 api.get('/connections', (c) => c.json(listConnections(c.get('user').id, c.get('token')?.connectionIds)));
 
@@ -161,7 +166,7 @@ api.post('/call', async (c) => {
 // --- audit trail ---
 
 // Limited tokens (agents) cannot read the trail: it covers all of the user's connections.
-const includeUpstreamActivity = (c: Context<Env>) => c.get('user').role === 'admin' && !!(config.satelliteCentralUrl && config.satelliteToken);
+const includeUpstreamActivity = (c: Context<Env>) => c.get('user').role === 'admin';
 api.get('/audit', requireFullAccess, (c) => {
   const q = c.req.query();
   const num = (v?: string) => (v ? Number(v) : undefined);

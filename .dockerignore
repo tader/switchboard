@@ -4,3 +4,12 @@ web/dist
 .data
 .data-dev
 test
+.git
+.env
+.agents
+.codex
+.aws
+start.sh
+*.log
+compose.yaml
+docker-compose.dev.yml

@@ -6,39 +6,31 @@ adminOnly: true
 
 # Satellites
 
-Satellites make services on a private or intermittently connected machine available through this Switchboard. The private machine opens an outbound WebSocket; it does not need a public address or inbound firewall rule.
+Satellites open an outbound WebSocket to an upstream Switchboard. Provider credentials and configuration stay on the machine that owns the connection.
 
-## Connect a machine
+## Connect and share
 
-1. Open **Satellites**, choose **Add satellite**, and give the machine a name.
-2. Copy the two environment variables. The device credential is shown only once.
-3. Run a separate Switchboard instance on the private machine with those variables and its own persistent data directory.
+1. On the upstream, open **Satellites**, add the machine and copy its device token. Select which upstream users may use its shared connections.
+2. On the private machine, run a separate Switchboard with its own persistent data directory. Open **Satellites → Upstreams → Add upstream** and enter the upstream URL and token.
+3. Install plugins and create connections on that private machine.
+4. From a connection's menu, select **Share with upstreams**, choose the upstreams and save. Nothing is shared by default.
 
-```yaml
-environment:
-  SWITCHBOARD_SATELLITE_CENTRAL_URL: "{{publicUrl}}"
-  SWITCHBOARD_SATELLITE_TOKEN: "sws_…"
-```
+Each upstream can receive a different selection. Only a connection's local owner can change its sharing grants. Upstream users automatically receive read-only handles; they can invoke shared HTTP and MCP connections and inspect their OpenAPI descriptions. Upstreams cannot create, reconnect, rename or delete connections on satellites, nor request raw provider tokens.
 
-The satellite still needs `SWITCHBOARD_PUBLIC_URL` for provider sign-in flows and a persistent `SWITCHBOARD_DATA_DIR`. Install machine-specific plugins on that instance. Their services appear on the central Connections page after the satellite connects.
+## Access and activity
 
-> [!IMPORTANT]
-> Keep the satellite data directory and device token private. Local application credentials are encrypted in that data directory and are not copied to the central instance.
+The upstream device owner is allowed automatically; administrators can allow additional upstream users. This grants use of the connections that the satellite explicitly shares with that upstream. Local Activity records identify the local owner, upstream and claimed requesting upstream user. Removing a grant cancels active work, whose outcome may already be committed by the provider.
 
-## User access
+## Multiple upstreams and chains
 
-The satellite owner is allowed automatically. Select additional users on the Satellites page if they should be able to create their own connections. Each connection has exactly one owner; users cannot invoke or discover another user's connection.
-
-Allowing a user to access the machine does not give them an existing connection. It only lets them create their own connection using an advertised service.
+Add several upstreams in the local UI and choose grants independently. A connection received from a downstream satellite can be explicitly shared onward; each hop enforces its own user access and sharing grants. Instance identifiers prevent cycles, routes have at most eight hops, and deadlines and cancellation propagate through the chain.
 
 ## Offline behavior
 
-Connections remain visible while their machine is offline. Calls fail immediately with `503 Service Unavailable` and `satellite_offline`; Switchboard does not queue them. The connection becomes usable again when the outbound WebSocket reconnects.
+Imported handles and saved calls remain visible while the providing machine is offline or a grant is revoked. They become unavailable; calls are not queued or replayed. Offline requests return `503` with `satellite_offline`. Reconnecting restores eligible handles with their existing IDs.
 
-Rotating a satellite credential disconnects it immediately. Configure the newly shown token on the private machine before restarting it.
+Rotate a device token upstream and update the corresponding upstream entry on the satellite. Removing an upstream or disabling it stops its agent without changing local connections or other upstreams.
 
-## Satellite chains
+## Upgrading
 
-A Switchboard may connect to an upstream Switchboard while accepting satellites of its own. Its Satellites page shows the upstream connection and its live state above the downstream machines.
-
-Each link remains an independent trust and user boundary. Services from a downstream satellite are not automatically advertised through the intermediate Switchboard to its upstream; create and manage those connections on the intermediate Switchboard.
+Both sides require satellite protocol 2; older peers are rejected with an upgrade message. The legacy `SWITCHBOARD_SATELLITE_CENTRAL_URL` and `SWITCHBOARD_SATELLITE_TOKEN` variables bootstrap one upstream once. Later changes belong in the UI. Legacy shadow-owned connections are assigned to the oldest active local administrator, preserving IDs and credentials. No grants are created automatically; review and share each connection locally.

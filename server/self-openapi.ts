@@ -64,8 +64,23 @@ export function openapiDocument() {
       '/api/me': { get: op('Account', 'Who the token belongs to') },
       '/api/me/token': { delete: op('Account', 'Revoke the token making this request') },
       '/api/services': { get: op('Connections', 'Services and their sign-in methods') },
+      '/api/upstreams': { get: op('Connections', 'List upstreams available for owner-selected sharing') },
+      '/api/connections/{ref}/shares': {
+        get: op('Connections', 'Read sharing grants for a connection you own', { parameters: [ref] }),
+        put: op('Connections', 'Replace sharing grants for a connection you own', { parameters: [ref],
+          requestBody: json({ type: 'object', required: ['upstreamIds'], properties: { upstreamIds: { type: 'array', items: { type: 'string' }, description: 'An empty list revokes all sharing' } } }),
+        }),
+      },
+      '/api/admin/upstreams': {
+        get: op('Admin', 'List configured upstreams and live status without device tokens'),
+        post: op('Admin', 'Configure an outbound upstream', { requestBody: json({ type: 'object', required: ['name', 'url', 'token'], properties: { name: { type: 'string' }, url: { type: 'string' }, token: { type: 'string' }, enabled: { type: 'boolean', default: true } } }) }),
+      },
+      '/api/admin/upstreams/{id}': {
+        patch: op('Admin', 'Change an upstream without changing local connections', { parameters: [id('Upstream id')], requestBody: json({ type: 'object', properties: { name: { type: 'string' }, url: { type: 'string' }, token: { type: 'string', description: 'Omit or leave blank to preserve the token' }, enabled: { type: 'boolean' } } }) }),
+        delete: op('Admin', 'Remove an upstream and its sharing grants', { parameters: [id('Upstream id')] }),
+      },
       '/api/connections': {
-        get: op('Connections', 'List connections'),
+        get: op('Connections', 'List local connections and read-only shared handles', { description: 'readOnly=true identifies imported satellite connections. Only execution, OpenAPI discovery and explicit onward sharing are supported for imported handles.' }),
         post: op('Connections', 'Connect an account', {
           description: 'Returns status "connected", "redirect" (open url in a browser) or "device" (show the code, then poll).',
           requestBody: json(
@@ -149,6 +164,24 @@ export function openapiDocument() {
       },
       '/api/tokens/{id}': { delete: op('Tokens', 'Revoke an API token', { parameters: [id('Token id')] }) },
       '/api/admin/plugins': { get: op('Admin', 'List plugins') },
+      '/api/admin/plugins/community': { get: op('Admin', 'Fetch the live community plugin catalog', { description: 'Fetches the current public catalog on each request. Listings are not bundled with Switchboard.' }) },
+      '/api/admin/plugins/install/plan': { post: op('Admin', 'Preview an installation and its dependencies', {
+        requestBody: json({ type: 'object', required: ['repo'], properties: {
+          repo: { type: 'string' }, ref: { type: 'string' }, path: { type: 'string' }, expectedId: { type: 'string', description: 'Optional expected id for a single-plugin listing' },
+          githubConnectionId: { type: 'string', nullable: true, description: 'A local GitHub connection owned by the administrator; null or omitted selects automatically' },
+        } }, { repo: 'owner/repo' }),
+        description: 'Returns planId, expiresAt, changes, affectedDependents and requiresReview. No plugin code executes. Plans are administrator-bound and expire after ten minutes.',
+      }) },
+      '/api/admin/plugins/update/plan': { post: op('Admin', 'Preview coordinated plugin updates', {
+        requestBody: json({ type: 'object', required: ['updates'], properties: { updates: { type: 'array', minItems: 1, maxItems: 100, items: {
+          type: 'object', required: ['id'], properties: { id: { type: 'string' }, ref: { type: 'string', nullable: true, description: 'Omit to keep the tracked ref; null follows the default branch' }, githubConnectionId: { type: 'string', nullable: true, description: 'Omit to prefer the remembered connection; null requests automatic selection' } },
+        } } } }, { updates: [{ id: 'example' }] }),
+        description: 'Preview one or multiple updates together, including shared dependency upgrades and compatibility checks.',
+      }) },
+      '/api/admin/plugins/apply': { post: op('Admin', 'Apply a reviewed plugin preview', {
+        requestBody: json({ type: 'object', required: ['planId'], properties: { planId: { type: 'string' } } }),
+        description: 'Applies pinned commits and returns ids, changes and plugins. A stale or expired preview returns 409. Activation failures restore previous plugin files and metadata.',
+      }) },
       '/api/admin/plugins/install': {
         post: op('Admin', 'Install plugins from GitHub', { requestBody: json(
             {
@@ -158,6 +191,7 @@ export function openapiDocument() {
                 repo: { type: 'string', description: 'owner/repo or a github.com URL, also to a folder' },
                 ref: { type: 'string', description: 'Branch, tag or commit; default: the default branch' },
                 path: { type: 'string', description: 'Folder in the repository' },
+                githubConnectionId: { type: 'string', nullable: true, description: 'Local GitHub connection owned by the administrator; omit or null for automatic selection' },
               },
             },
             { repo: 'owner/repo' },
@@ -169,6 +203,7 @@ export function openapiDocument() {
         parameters: [id('Plugin id')],
         requestBody: { ...json({ type: 'object', properties: {
           ref: { type: 'string', nullable: true, minLength: 1, description: 'Branch, tag or commit. Omit to keep the tracked ref; null follows the repository default branch. Remembered for future updates.' },
+          githubConnectionId: { type: 'string', nullable: true, description: 'Select a local GitHub connection; omit to prefer the remembered connection, or null for automatic selection' },
         } }), required: false },
       }) },
       '/api/admin/plugins/{id}/reload': { post: op('Admin', 'Reload a plugin', { parameters: [id('Plugin id')] }) },

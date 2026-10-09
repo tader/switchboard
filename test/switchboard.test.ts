@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import crypto from 'node:crypto';
+import { installFixturePlugins } from './plugin-fixtures.ts';
 import WebSocket from 'ws';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
@@ -116,6 +117,7 @@ const waitFor = async (fn: () => boolean | Promise<boolean>, ms = 8000) => {
 };
 
 before(async () => {
+  installFixturePlugins(dataDir);
   await startUpstream();
   const port = 20000 + Math.floor(Math.random() * 20000);
   base = `http://127.0.0.1:${port}`;
@@ -185,6 +187,8 @@ test('cross-site requests with the session cookie are rejected', async () => {
 
 test('plugins and services are listed', async () => {
   const plugins = (await req('GET', '/api/admin/plugins')).data;
+  assert.deepEqual(plugins.filter((p: any) => p.origin === 'builtin').map((p: any) => p.id).sort(), ['api-key', 'mcp', 'oauth2']);
+  assert.equal(plugins.find((p: any) => p.id === 'github').origin, 'installed');
   const gmail = plugins.find((p: any) => p.id === 'gmail');
   assert.equal(gmail.status, 'active');
   assert.deepEqual(gmail.dependencies, ['google']);
@@ -708,84 +712,37 @@ test('users: invite, sign in, admin-only areas', async () => {
   cookie = adminCookie;
 });
 
-test('satellites: outbound socket, catalogue, per-user connection, call and offline state', async () => {
+test('satellites expose read-only shared connections, never connection-management services', async () => {
   const admin = (await req('GET', '/api/me')).data;
   const made = await req('POST', '/api/admin/satellites', { name: 'Home PC', ownerUserId: admin.id });
-  assert.equal(made.status, 201, JSON.stringify(made.data));
-  assert.match(made.data.token, /^sws_/);
-  const satellite = made.data.satellite;
-
-  const messages: any[] = [];
-  const waiters: ((m: any) => void)[] = [];
-  const wsUrl = base.replace(/^http/, 'ws') + '/api/satellites/connect';
-  const ws = new WebSocket(wsUrl, { headers: { authorization: `Bearer ${made.data.token}` } });
-  ws.on('message', (raw) => {
-    const message = JSON.parse(String(raw));
-    const waiter = waiters.shift();
-    if (waiter) waiter(message); else messages.push(message);
-  });
-  const next = () => messages.length ? Promise.resolve(messages.shift()) : new Promise<any>((resolve) => waiters.push(resolve));
+  assert.equal(made.status, 201); const satellite = made.data.satellite;
+  const messages: any[] = []; const waiters: ((m: any) => void)[] = [];
+  const ws = new WebSocket(base.replace(/^http/, 'ws') + '/api/satellites/connect', { headers: { authorization: `Bearer ${made.data.token}`, 'x-switchboard-satellite-protocol': '2' } });
+  ws.on('message', raw => { const message = JSON.parse(String(raw)); const waiter = waiters.shift(); if (waiter) waiter(message); else messages.push(message); });
+  const next = () => messages.length ? Promise.resolve(messages.shift()) : new Promise<any>(resolve => waiters.push(resolve));
   await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-  assert.equal((await next()).type, 'welcome');
-  ws.send(JSON.stringify({
-    protocol: 1, type: 'catalog', version: 'test-1', catalog: { services: [{
-      id: 'family-tree', name: 'Family Tree', description: 'Local genealogy', pluginId: 'family-tree', hasOpenapi: true,
-      methods: [{ id: 'local', name: 'Local profile', fields: [{ key: 'tree', label: 'Tree', required: true }] }],
-    }, { id: 'old-mcp', name: 'Old MCP', kind: 'mcp', pluginId: 'old-mcp', methods: [{ id: 'none', name: 'None', fields: [] }] }] },
-  }));
+  const welcome = await next(); assert.equal(welcome.protocol, 2);
+  ws.send(JSON.stringify({ protocol: 2, type: 'catalog', version: 'test-1', catalog: { instanceId: 'private-machine', connections: [{
+    id: 'remote-c1', name: 'family-tree', serviceId: 'family-tree', serviceName: 'Family Tree', kind: 'http', hasOpenapi: true, status: 'ok', route: ['private-machine'], credentials: { secret: 'must-not-copy' }, config: { secret: 'must-not-copy' },
+  }] } }));
   assert.equal((await next()).type, 'catalog.accepted');
-  await waitFor(async () => (await req('GET', '/api/services')).data.some((s: any) => s.id === `sat/${satellite.id}/family-tree`));
-
-  // Merely enrolling a machine does not expose it to another user.
-  const adminCookie = cookie;
-  cookie = aliceCookie;
-  assert.ok(!(await req('GET', '/api/services')).data.some((s: any) => s.id.includes(satellite.id)));
-  cookie = adminCookie;
-
-  const connecting = req('POST', '/api/connections', { service: `sat/${satellite.id}/family-tree`, method: 'local', config: { tree: 'Smith' } });
-  const connectMessage = await next();
-  assert.equal(connectMessage.operation, 'connect.start');
-  assert.equal(connectMessage.userId, admin.id);
-  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: connectMessage.requestId, result: {
-    status: 'connected', connection: { id: 'remote-c1', name: 'family-tree', serviceId: 'family-tree', methodId: 'local', methodName: 'Local profile', account: { label: 'Smith tree' }, config: { tree: 'Smith' } },
-  } }));
-  const connected = await connecting;
-  assert.equal(connected.status, 200, JSON.stringify(connected.data));
-  assert.equal(connected.data.connection.satellite.id, satellite.id);
-  assert.equal(connected.data.connection.canIssueToken, false);
-
-  const calling = req('POST', '/api/call', { connection: connected.data.connection.id, method: 'GET', url: '/people' });
-  const callMessage = await next();
-  assert.equal(callMessage.operation, 'call');
-  assert.equal(callMessage.payload.connection, 'remote-c1');
-  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: callMessage.requestId, result: {
-    status: 200, statusText: 'OK', headers: [['content-type', 'application/json']], body: Buffer.from('{"people":2}').toString('base64'),
-    url: 'http://127.0.0.1:9999/people', durationMs: 4,
-    sent: { method: 'GET', url: 'http://127.0.0.1:9999/people', headers: [], authQuery: [], retried: false },
-  } }));
-  const called = await calling;
-  assert.equal(called.status, 200, JSON.stringify(called.data));
-  assert.equal(JSON.parse(called.data.body).people, 2);
-
-  const deleting = req('DELETE', `/api/connections/${connected.data.connection.id}`);
-  const deleteMessage = await next();
-  assert.equal(deleteMessage.operation, 'connection.delete');
-  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: deleteMessage.requestId, result: { ok: true } }));
-  assert.equal((await deleting).status, 200);
-
-  const oldConnect = req('POST', '/api/connections', { service: `sat/${satellite.id}/old-mcp`, method: 'none' });
-  const oldMessage = await next();
-  ws.send(JSON.stringify({ protocol: 1, type: 'result', requestId: oldMessage.requestId, result: { status: 'connected', connection: { id: 'remote-old', name: 'old-mcp', kind: 'mcp', methodId: 'none', config: {} } } }));
-  const oldConnection = await oldConnect;
-  const unsupportedMcp = await req('POST', `/api/connections/${oldConnection.data.connection.id}/mcp/tools/list`, {});
-  assert.equal(unsupportedMcp.status, 501);
-  assert.match(unsupportedMcp.data.error, /update the satellite/);
-
-  ws.close();
-  await waitFor(async () => !(await req('GET', '/api/admin/satellites')).data.find((s: any) => s.id === satellite.id).online);
-  const offlineConnect = await req('POST', '/api/connections', { service: `sat/${satellite.id}/family-tree`, method: 'local', config: { tree: 'Smith' } });
-  assert.equal(offlineConnect.status, 503, JSON.stringify(offlineConnect.data));
-  assert.equal(offlineConnect.data.code, 'satellite_offline');
+  const connection = (await req('GET', '/api/connections')).data.find((c: any) => c.satellite?.id === satellite.id);
+  assert.ok(connection); assert.equal(connection.readOnly, true); assert.deepEqual(connection.config, {});
+  assert.ok(!(await req('GET', '/api/services')).data.some((s: any) => s.satellite));
+  const adminCookie = cookie; cookie = aliceCookie;
+  assert.ok(!(await req('GET', '/api/connections')).data.some((c: any) => c.satellite?.id === satellite.id)); cookie = adminCookie;
+  for (const [method, p, body] of [
+    ['POST', '/api/connections', { service: `sat/${satellite.id}/family-tree` }],
+    ['POST', `/api/connections/${connection.id}/reconnect`, {}], ['PATCH', `/api/connections/${connection.id}`, { name: 'injected' }], ['DELETE', `/api/connections/${connection.id}`, undefined],
+  ] as const) assert.equal((await req(method, p, body)).status, 403);
+  const calling = req('POST', '/api/call', { connection: connection.id, method: 'GET', url: '/people' });
+  const callMessage = await next(); assert.equal(callMessage.operation, 'call'); assert.equal(callMessage.payload.connection, 'remote-c1');
+  assert.deepEqual(callMessage.route, [welcome.instanceId]);
+  ws.send(JSON.stringify({ protocol: 2, type: 'result', requestId: callMessage.requestId, result: { status: 200, statusText: 'OK', headers: [['content-type', 'application/json']], body: Buffer.from('{"people":2}').toString('base64'), url: 'http://127.0.0.1:9999/people', durationMs: 4, sent: { method: 'GET', url: 'http://127.0.0.1:9999/people', headers: [], authQuery: [], retried: false } } }));
+  const called = await calling; assert.equal(called.status, 200, JSON.stringify(called.data)); assert.equal(JSON.parse(called.data.body).people, 2);
+  ws.close(); await waitFor(async () => !(await req('GET', '/api/admin/satellites')).data.find((s: any) => s.id === satellite.id).online);
+  const offline = await req('POST', '/api/call', { connection: connection.id, method: 'GET', url: '/' });
+  assert.equal(offline.status, 503); assert.equal(offline.data.code, 'satellite_offline');
   await req('DELETE', `/api/admin/satellites/${satellite.id}`);
 });
 

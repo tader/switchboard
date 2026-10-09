@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { BookOpen, Code2, ExternalLink, FileKey, History, KeyRound, Laptop, LayoutGrid, List, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal, Trash2, Unlock } from 'lucide-react';
+import { ConnectionSharing } from '../components/ConnectionSharing';
 import { api, type Connection, type FlowResult, type Service } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
@@ -17,6 +18,7 @@ export function Connections() {
   const connections = useResource(() => api<Connection[]>('/connections'));
   const services = useResource(() => api<Service[]>('/services'));
   const [connect, setConnect] = useState<{ service?: Service; connection?: Connection } | null>(null);
+  const [sharing, setSharing] = useState<Connection | null>(null);
   const [rename, setRename] = useState<Connection | null>(null);
   const [scripts, setScripts] = useState<Connection | null>(null);
   const [filter, setFilter] = useState('');
@@ -59,6 +61,8 @@ export function Connections() {
     return [...groups];
   }, [visible]);
 
+  useEffect(() => { const timer = setInterval(connections.reload, 10_000); return () => clearInterval(timer); }, []);
+
   const serviceById = (id: string) => services.data?.find((s) => s.id === id);
 
   const remove = async (c: Connection) => {
@@ -82,10 +86,11 @@ export function Connections() {
     { label: 'Open in console', icon: <SquareTerminal />, onSelect: () => navigate(`/console?connection=${c.id}`), disabled: c.status === 'unavailable' },
     { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
     { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
-    { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c) },
-    { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service },
+    { label: 'Share with upstreams', icon: <Server />, onSelect: () => setSharing(c) },
+    { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c), hidden: c.readOnly },
+    { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service || c.readOnly },
     'separator',
-    { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true },
+    { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true, hidden: c.readOnly },
   ]} />;
 
   const hasSatellites = connections.data?.some(c => c.satellite) ?? false;
@@ -93,6 +98,7 @@ export function Connections() {
 
   return (
     <>
+      {sharing && <ConnectionSharing connection={sharing} onClose={() => setSharing(null)} />}
       <PageHeader
         title="Connections"
         actions={

@@ -1,7 +1,0 @@
-{
-  "id": "plex",
-  "name": "Plex",
-  "version": "1.0.0",
-  "description": "Plex accounts and Plex Media Servers.",
-  "icon": "icon.svg"
-}

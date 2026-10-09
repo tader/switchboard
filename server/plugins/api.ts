@@ -12,6 +12,8 @@ export interface PluginManifest {
   main?: string;
   /** Ids of plugins whose exports this plugin uses via ctx.require(). */
   dependencies?: string[];
+  /** Optional npm semver ranges, keyed by an id declared in dependencies. */
+  dependencyVersions?: Record<string, string>;
   /** Instance-wide settings configured by an administrator (e.g. an OAuth client). */
   settings?: Field[];
   /** Icon file relative to the plugin directory (svg/png). */

@@ -178,14 +178,14 @@ async function executeRemote(user: User, row: any, input: CallInput, method: str
   signal?.addEventListener('abort', abort, { once: true });
   try {
     if (signal?.aborted) throw new HttpError(499, 'Request cancelled');
-    const r = await requestSatellite<any>(row.satellite_id, user.id, 'call', { connection: row.remote_connection_id, input: encoded, caller });
+    const r = await requestSatellite<any>(row.satellite_id, user.id, 'call', { connection: row.remote_connection_id, input: encoded, caller }, 120_000, signal);
     if (aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
     const sent: SentRequest = {
       ...r.sent,
       body: r.sent?.body == null ? undefined : Buffer.from(r.sent.body, r.sent.bodyEncoding === 'base64' ? 'base64' : 'utf8'),
     };
     const ex: Executed = {
-      response: new Response(Buffer.from(r.body ?? '', 'base64'), { status: r.status, statusText: r.statusText, headers: r.headers }),
+      response: new Response([204, 205, 304].includes(r.status) || method === 'HEAD' ? null : Buffer.from(r.body ?? '', 'base64'), { status: r.status, statusText: r.statusText, headers: r.headers }),
       url: new URL(r.url), durationMs: r.durationMs, sent,
     };
     if (caller) {

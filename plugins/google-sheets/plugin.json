@@ -1,8 +1,0 @@
-{
-  "id": "google-sheets",
-  "name": "Google Sheets",
-  "version": "1.0.0",
-  "description": "Read and write Google Sheets spreadsheets.",
-  "dependencies": ["google"],
-  "icon": "icon.svg"
-}

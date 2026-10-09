@@ -3,28 +3,16 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { randomId, randomToken, sha256 } from './crypto.ts';
 import { all, now, one, run } from './db.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
+import { connectionChanged, onConnectionChange } from './connection-events.ts';
+import { instanceId, forwardingRoute, SATELLITE_PROTOCOL, SATELLITE_MAX_MESSAGE, SATELLITE_OPERATIONS, MAX_SATELLITE_HOPS } from './satellite-protocol.ts';
 
-const PROTOCOL = 1;
+const PROTOCOL = SATELLITE_PROTOCOL;
 const REQUEST_TIMEOUT = 120_000;
-const MAX_MESSAGE = 2 * 1024 * 1024;
+const MAX_MESSAGE = SATELLITE_MAX_MESSAGE;
 
-export interface SatelliteService {
-  kind?: 'http' | 'mcp';
-  mcpExecution?: boolean;
-  id: string;
-  name: string;
-  description?: string;
-  pluginId: string;
-  icon?: string;
-  methods: {
-    id: string;
-    name: string;
-    description?: string;
-    fields?: unknown[];
-    unavailable?: string;
-    redirect?: boolean;
-  }[];
-  hasOpenapi?: boolean;
+export interface SatelliteConnection {
+  id: string; name: string; serviceId: string; serviceName: string; kind: 'http' | 'mcp';
+  icon?: string; hasOpenapi: boolean; status: 'ok' | 'error' | 'unavailable'; route: string[];
 }
 
 interface Session {
@@ -48,29 +36,53 @@ function view(r: any) {
     connectedAt: session?.connectedAt ?? null,
     lastSeenAt: r.last_seen_at ?? null,
     catalogVersion: r.catalog_version ?? null,
-    services: catalog(r).services,
+    connections: catalog(r).connections,
     userIds: all<{ user_id: string }>('SELECT user_id FROM satellite_users WHERE satellite_id = ? ORDER BY user_id', r.id).map((x) => x.user_id),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
 }
 
-function catalog(r: any): { services: SatelliteService[] } {
-  try {
-    const parsed = r.catalog_json ? JSON.parse(r.catalog_json) : {};
-    return { services: Array.isArray(parsed.services) ? parsed.services : [] };
-  } catch {
-    return { services: [] };
+function catalog(r: any): { connections: SatelliteConnection[] } {
+  try { const parsed = JSON.parse(r.catalog_json ?? '{}'); return { connections: Array.isArray(parsed.connections) ? parsed.connections : [] }; }
+  catch { return { connections: [] }; }
+}
+
+/** Materialized per-user handles retain existing ids and saved calls, without provider secrets. */
+export function syncSatelliteConnections(userId: string) {
+  const satellites = all(`SELECT s.* FROM satellites s JOIN satellite_users su ON su.satellite_id = s.id
+    JOIN users u ON u.id = su.user_id WHERE su.user_id = ? AND s.disabled = 0 AND u.disabled = 0`, userId);
+  for (const satellite of satellites) for (const c of catalog(satellite).connections) {
+    const existing = one('SELECT * FROM connections WHERE user_id = ? AND satellite_id = ? AND remote_connection_id = ?', userId, satellite.id, c.id);
+    const t = now();
+    if (existing) {
+      if (existing.kind !== c.kind || existing.status !== c.status) connectionChanged(existing.id);
+      run('UPDATE connections SET kind = ?, status = ?, config_enc = NULL, credentials_enc = NULL, account_id = NULL, account_label = NULL, account_avatar = NULL WHERE id = ?', c.kind, c.status, existing.id);
+      continue;
+    }
+    const base = c.name.replace(/[^a-zA-Z0-9._@+-]+/g, '-').replace(/^[^a-zA-Z0-9]+/, '') || 'shared';
+    let name = base;
+    for (let n = 2; one('SELECT 1 FROM connections WHERE user_id = ? AND name = ?', userId, name); n++) name = `${base}-${n}`;
+    run(`INSERT INTO connections (id, user_id, service_id, method_id, name, status, created_at, updated_at, satellite_id, remote_connection_id, kind)
+      VALUES (?, ?, ?, 'shared', ?, ?, ?, ?, ?, ?, ?)`, randomId('c'), userId, remoteServiceId(satellite.id, c.serviceId), name, c.status, t, t, satellite.id, c.id, c.kind);
   }
 }
 
+export function satelliteConnection(userId: string, satelliteId: string, connectionId: string): SatelliteConnection {
+  if (!userCanUseSatellite(userId, satelliteId)) throw new HttpError(403, 'You cannot use this satellite');
+  const row = one('SELECT * FROM satellites WHERE id = ?', satelliteId);
+  const c = row && catalog(row).connections.find(c => c.id === connectionId);
+  if (!c) throw new HttpError(403, 'This connection is no longer shared by the satellite');
+  return c;
+}
+
 export function listSatellites() {
-  return all('SELECT * FROM satellites ORDER BY name COLLATE NOCASE').map(view);
+  return all('SELECT * FROM satellites WHERE removed = 0 ORDER BY name COLLATE NOCASE').map(view);
 }
 
 export function getSatellite(id: string) {
   const r = one('SELECT * FROM satellites WHERE id = ?', id);
-  if (!r) throw notFound('Satellite not found');
+  if (!r || r.removed) throw notFound('Satellite not found');
   return view(r);
 }
 
@@ -78,7 +90,7 @@ export function createSatellite(name: string, ownerUserId: string) {
   name = String(name ?? '').trim();
   if (!name || name.length > 100) throw badRequest('Give the satellite a name of at most 100 characters');
   if (!one('SELECT 1 FROM users WHERE id = ?', ownerUserId)) throw badRequest('Unknown owner');
-  if (one('SELECT 1 FROM satellites WHERE name = ?', name)) throw badRequest('A satellite already has that name');
+  if (one('SELECT 1 FROM satellites WHERE name = ? AND removed = 0', name)) throw badRequest('A satellite already has that name');
   const id = randomId('sat');
   const token = `sws_${randomToken(32)}`;
   const t = now();
@@ -105,10 +117,13 @@ export function updateSatellite(id: string, patch: { name?: string; disabled?: b
   }
   if (patch.disabled !== undefined) {
     run('UPDATE satellites SET disabled = ?, updated_at = ? WHERE id = ?', patch.disabled ? 1 : 0, now(), id);
+    if (patch.disabled) { connectionChanged(); }
     if (patch.disabled) closeSession(id, 4001, 'Satellite disabled');
   }
   if (patch.userIds !== undefined) {
-    const ids = [...new Set([...patch.userIds.map(String), current.ownerUserId])];
+    if (!Array.isArray(patch.userIds) || patch.userIds.some(id => typeof id !== 'string')) throw badRequest('userIds must be an array');
+    const ids = [...new Set([...patch.userIds, current.ownerUserId])];
+    connectionChanged();
     for (const userId of ids) if (!one('SELECT 1 FROM users WHERE id = ?', userId)) throw badRequest(`Unknown user "${userId}"`);
     run('DELETE FROM satellite_users WHERE satellite_id = ?', id);
     for (const userId of ids) run('INSERT INTO satellite_users (satellite_id, user_id, created_at) VALUES (?, ?, ?)', id, userId, now());
@@ -119,7 +134,11 @@ export function updateSatellite(id: string, patch: { name?: string; disabled?: b
 export function deleteSatellite(id: string) {
   getSatellite(id);
   closeSession(id, 4001, 'Satellite removed');
-  run('DELETE FROM satellites WHERE id = ?', id);
+  connectionChanged();
+  run('DELETE FROM satellite_users WHERE satellite_id = ?', id);
+  run('UPDATE satellites SET disabled = 1, removed = 1, name = ?, catalog_json = NULL WHERE id = ?', `removed-${id}`, id);
+  // Preserve imported handles referenced by saved calls; this tombstone cannot reconnect.
+  run('UPDATE satellites SET token_hash = ? WHERE id = ?', sha256(randomToken(32)), id);
 }
 
 export function userCanUseSatellite(userId: string, satelliteId: string) {
@@ -130,24 +149,6 @@ export function userCanUseSatellite(userId: string, satelliteId: string) {
   );
 }
 
-export function servicesForUser(userId: string) {
-  const rows = all(
-    `SELECT s.* FROM satellites s JOIN satellite_users su ON su.satellite_id = s.id
-     WHERE su.user_id = ? AND s.disabled = 0 ORDER BY s.name COLLATE NOCASE`,
-    userId,
-  );
-  return rows.flatMap((r) => catalog(r).services.map((service) => ({ satellite: view(r), service })));
-}
-
-export function satelliteService(userId: string, satelliteId: string, serviceId: string) {
-  if (!userCanUseSatellite(userId, satelliteId)) throw new HttpError(403, 'You cannot use this satellite');
-  const r = one('SELECT * FROM satellites WHERE id = ?', satelliteId);
-  if (!r) throw notFound('Satellite not found');
-  const service = catalog(r).services.find((s) => s.id === serviceId);
-  if (!service) throw badRequest(`Service "${serviceId}" is not advertised by ${r.name}`);
-  return { satellite: view(r), service };
-}
-
 export const remoteServiceId = (satelliteId: string, serviceId: string) => `sat/${satelliteId}/${serviceId}`;
 
 export function parseRemoteServiceId(value: string): { satelliteId: string; serviceId: string } | undefined {
@@ -155,30 +156,19 @@ export function parseRemoteServiceId(value: string): { satelliteId: string; serv
   return m ? { satelliteId: m[1], serviceId: m[2] } : undefined;
 }
 
-function validateCatalog(value: any): { services: SatelliteService[] } {
-  if (!value || !Array.isArray(value.services) || value.services.length > 200) throw new Error('Invalid satellite catalogue');
+export function validateSatelliteCatalog(value: any): { instanceId: string; connections: SatelliteConnection[] } {
+  if (!value || typeof value.instanceId !== 'string' || !value.instanceId || value.instanceId.length > 100 || value.instanceId === instanceId() || !Array.isArray(value.connections) || value.connections.length > 1000) throw new Error('Invalid satellite connection catalogue');
   const seen = new Set<string>();
-  const services = value.services.map((s: any) => {
-    if (!s || typeof s.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,99}$/.test(s.id) || seen.has(s.id)) throw new Error('Invalid or duplicate service id');
-    if (typeof s.name !== 'string' || !s.name.trim() || !Array.isArray(s.methods) || s.methods.length > 20) throw new Error(`Invalid service ${s.id}`);
-    if (s.kind !== undefined && s.kind !== 'http' && s.kind !== 'mcp') throw new Error(`Invalid service kind for ${s.id}`);
-    seen.add(s.id);
-    return {
-      kind: s.kind ?? 'http',
-      mcpExecution: s.kind === 'mcp' && s.mcpExecution === true,
-      id: s.id,
-      name: s.name.slice(0, 100),
-      description: typeof s.description === 'string' ? s.description.slice(0, 500) : undefined,
-      pluginId: typeof s.pluginId === 'string' ? s.pluginId.slice(0, 100) : s.id,
-      icon: typeof s.icon === 'string' && s.icon.length <= 100_000 ? s.icon : undefined,
-      hasOpenapi: !!s.hasOpenapi,
-      methods: s.methods.map((m: any) => {
-        if (!m || typeof m.id !== 'string' || typeof m.name !== 'string') throw new Error(`Invalid method for ${s.id}`);
-        return { id: m.id.slice(0, 100), name: m.name.slice(0, 100), description: typeof m.description === 'string' ? m.description.slice(0, 500) : undefined, fields: Array.isArray(m.fields) ? m.fields.slice(0, 50) : [], unavailable: typeof m.unavailable === 'string' ? m.unavailable.slice(0, 500) : undefined, redirect: !!m.redirect };
-      }),
-    };
+  const connections = value.connections.map((c: any) => {
+    if (!c || typeof c.id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(c.id) || seen.has(c.id)) throw new Error('Invalid or duplicate shared connection id');
+    if (typeof c.name !== 'string' || !c.name.trim() || typeof c.serviceId !== 'string' || !c.serviceId || c.serviceId.length > 200 || typeof c.serviceName !== 'string' || !c.serviceName) throw new Error('Invalid shared connection');
+    if (!['http', 'mcp'].includes(c.kind) || !['ok', 'error', 'unavailable'].includes(c.status)) throw new Error('Invalid shared connection kind or status');
+    if (!Array.isArray(c.route) || !c.route.length || c.route.length > MAX_SATELLITE_HOPS || c.route.some((id: any) => typeof id !== 'string' || !id || id.length > 100) || new Set(c.route).size !== c.route.length || c.route.includes(instanceId()) || c.route.at(-1) !== value.instanceId) throw new Error('Satellite route contains a loop');
+    seen.add(c.id);
+    return { id: c.id, name: c.name.slice(0, 100), serviceId: c.serviceId, serviceName: c.serviceName.slice(0, 100), kind: c.kind, status: c.status,
+      hasOpenapi: !!c.hasOpenapi, icon: typeof c.icon === 'string' && c.icon.length <= 100_000 ? c.icon : undefined, route: [...c.route] };
   });
-  return { services };
+  return { instanceId: value.instanceId, connections };
 }
 
 function closeSession(id: string, code: number, reason: string) {
@@ -210,7 +200,11 @@ function receive(session: Session, raw: Buffer | ArrayBuffer | Buffer[]) {
   if (message.type === 'heartbeat') return;
   if (message.type === 'catalog') {
     try {
-      const value = validateCatalog(message.catalog);
+      const value = validateSatelliteCatalog(message.catalog);
+      const previous = one('SELECT * FROM satellites WHERE id = ?', session.satelliteId);
+      if (JSON.stringify(catalog(previous)) !== JSON.stringify({ connections: value.connections })) {
+        for (const row of all('SELECT id FROM connections WHERE satellite_id = ?', session.satelliteId)) connectionChanged(row.id);
+      }
       run('UPDATE satellites SET catalog_json = ?, catalog_version = ?, updated_at = ? WHERE id = ?', JSON.stringify(value), String(message.version ?? '').slice(0, 100) || null, now(), session.satelliteId);
       session.socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'catalog.accepted', version: message.version ?? null }));
     } catch (e: any) {
@@ -223,7 +217,7 @@ function receive(session: Session, raw: Buffer | ArrayBuffer | Buffer[]) {
     if (!pending) return;
     session.pending.delete(String(message.requestId));
     clearTimeout(pending.timer);
-    if (message.type === 'error') pending.reject(new HttpError(Number(message.status) || 502, String(message.error ?? 'Satellite request failed')));
+    if (message.type === 'error') pending.reject(new HttpError(Number.isInteger(message.status) && message.status >= 400 && message.status <= 599 ? message.status : 502, String(message.error ?? 'Satellite request failed').slice(0, 2000)));
     else pending.resolve(message.result);
   }
 }
@@ -239,6 +233,7 @@ export function attachSatelliteWebSockets(server: Server) {
       return;
     }
     if (url.pathname !== '/api/satellites/connect') return;
+    if (request.headers['x-switchboard-satellite-protocol'] !== String(PROTOCOL)) { socket.write('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\nUpgrade both Switchboards to satellite protocol 2'); socket.destroy(); return; }
     const header = request.headers.authorization;
     const token = header?.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
     const row = token && one('SELECT * FROM satellites WHERE token_hash = ?', sha256(token));
@@ -254,7 +249,7 @@ export function attachSatelliteWebSockets(server: Server) {
     const session: Session = { socket, satelliteId: row.id, connectedAt: now(), lastHeartbeat: now(), pending: new Map() };
     sessions.set(row.id, session);
     run('UPDATE satellites SET last_seen_at = ? WHERE id = ?', now(), row.id);
-    socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'welcome', satelliteId: row.id, heartbeatSeconds: 20, maxMessageBytes: MAX_MESSAGE }));
+    socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'welcome', instanceId: instanceId(), satelliteId: row.id, heartbeatSeconds: 20, maxMessageBytes: MAX_MESSAGE }));
     socket.on('message', (data) => receive(session, data as Buffer));
     socket.on('close', () => {
       if (sessions.get(row.id) === session) closeSession(row.id, 1000, 'Satellite disconnected');
@@ -274,6 +269,11 @@ export function attachSatelliteWebSockets(server: Server) {
 }
 
 export async function requestSatellite<T>(satelliteId: string, userId: string, operation: string, payload: unknown, timeoutMs = REQUEST_TIMEOUT, signal?: AbortSignal): Promise<T> {
+  if (!SATELLITE_OPERATIONS.has(operation)) throw new HttpError(403, 'Upstreams may only execute explicitly shared connections');
+  const remote = (payload as any)?.connection;
+  if (typeof remote !== 'string') throw badRequest('A shared connection id is required');
+  const descriptor = satelliteConnection(userId, satelliteId, remote);
+  if (descriptor.status !== 'ok') throw new HttpError(503, 'The shared connection is unavailable on its satellite');
   if (signal?.aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
   if (!userCanUseSatellite(userId, satelliteId)) throw new HttpError(403, 'You cannot use this satellite');
   const satellite = getSatellite(satelliteId);
@@ -284,8 +284,11 @@ export async function requestSatellite<T>(satelliteId: string, userId: string, o
     throw error;
   }
   const requestId = randomId('sr');
-  const deadline = now() + Math.min(Math.max(timeoutMs, 1), REQUEST_TIMEOUT);
+  const handles = new Set(all<{ id: string }>('SELECT id FROM connections WHERE satellite_id = ? AND remote_connection_id = ?', satelliteId, remote).map(c => c.id));
+  const { path: route, deadline } = forwardingRoute(timeoutMs);
   return new Promise<T>((resolve, reject) => {
+    let unsubscribe = () => {};
+    const cleanup = () => { signal?.removeEventListener('abort', abort); unsubscribe(); };
     const cancel = () => {
       session.pending.delete(requestId);
       if (session.socket.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'cancel', requestId }));
@@ -293,19 +296,20 @@ export async function requestSatellite<T>(satelliteId: string, userId: string, o
     const abort = () => {
       clearTimeout(timer);
       cancel();
-      signal?.removeEventListener('abort', abort);
+      cleanup();
       reject(new HttpError(499, 'Request cancelled; the upstream outcome may be unknown'));
     };
     const timer = setTimeout(() => {
       cancel();
-      signal?.removeEventListener('abort', abort);
+      cleanup();
       reject(new HttpError(504, `Request to ${satellite.name} timed out; the outcome may be unknown`));
     }, deadline - now());
     session.pending.set(requestId, {
-      resolve: value => { signal?.removeEventListener('abort', abort); resolve(value); },
-      reject: error => { signal?.removeEventListener('abort', abort); reject(error); }, timer,
+      resolve: value => { cleanup(); resolve(value); },
+      reject: error => { cleanup(); reject(error); }, timer,
     });
+    unsubscribe = onConnectionChange(id => { if (!id || handles.has(id)) abort(); });
     signal?.addEventListener('abort', abort, { once: true });
-    session.socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'request', requestId, userId, operation, deadline, payload }));
+    session.socket.send(JSON.stringify({ protocol: PROTOCOL, type: 'request', requestId, userId, operation, deadline, route, payload }));
   });
 }

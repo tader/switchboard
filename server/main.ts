@@ -20,6 +20,7 @@ import { prune } from './audit.ts';
 import type { Env } from './auth.ts';
 import { attachSatelliteWebSockets } from './satellites.ts';
 import { startSatelliteAgent } from './satellite-agent.ts';
+import { initializeUpstreams } from './upstreams.ts';
 import { stopUpstreamMcp } from './upstream-mcp.ts';
 
 fs.mkdirSync(config.dataDir, { recursive: true });
@@ -29,7 +30,7 @@ initDb();
 const app = new Hono<Env>();
 
 app.onError((err, c) => {
-  if (err instanceof HttpError) return c.json({ error: err.message, ...((err as any).code ? { code: (err as any).code } : {}) }, err.status as any);
+  if (err instanceof HttpError) return c.json({ error: err.message, ...((err as any).code ? { code: (err as any).code } : {}), ...((err as any).plan ? { plan: (err as any).plan } : {}) }, err.status as any);
   if (err instanceof SyntaxError && /JSON/.test(err.message)) return c.json({ error: 'Invalid JSON body' }, 400);
   console.error(err);
   return c.json({ error: 'Internal error' }, 500);
@@ -76,12 +77,13 @@ app.get('*', (c) => {
   return c.html(fs.readFileSync(index, 'utf8'));
 });
 
+const setupUrl = ensureAdmin();
+initializeUpstreams();
 await plugins.start();
 const stopSatelliteAgent = startSatelliteAgent();
 prune();
 setInterval(prune, 6 * 3600_000).unref();
 
-const setupUrl = ensureAdmin();
 if (setupUrl) {
   console.log(`\nNo administrator can sign in yet. Set a password for "${config.adminUsername}" (valid 24 hours):\n${setupUrl}\n`);
 }

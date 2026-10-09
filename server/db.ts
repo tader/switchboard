@@ -202,6 +202,23 @@ const migrations: string[] = [
   ALTER TABLE saved_calls ADD COLUMN kind TEXT NOT NULL DEFAULT 'http' CHECK (kind IN ('http', 'mcp'));
   ALTER TABLE saved_calls ADD COLUMN mcp_request TEXT;
   `,
+  // Explicit outbound upstreams and owner-selected connection grants.
+  `
+  CREATE TABLE instance_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE upstreams (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, url TEXT NOT NULL,
+    token_enc TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE connection_upstream_shares (
+    upstream_id TEXT NOT NULL REFERENCES upstreams(id) ON DELETE CASCADE,
+    connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    PRIMARY KEY (upstream_id, connection_id)
+  );
+  ALTER TABLE audit_log ADD COLUMN upstream_id TEXT;
+  ALTER TABLE audit_log ADD COLUMN upstream_user_id TEXT;
+  `,
+  `ALTER TABLE satellites ADD COLUMN removed INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export function initDb() {

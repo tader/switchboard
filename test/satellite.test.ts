@@ -6,6 +6,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { installFixturePlugins } from './plugin-fixtures.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-satellite-'));
@@ -22,6 +23,7 @@ const waitFor = async (fn: () => boolean | Promise<boolean>, ms = 12_000) => {
 };
 
 function launch(port: number, dataDir: string, extra: Record<string, string> = {}) {
+  installFixturePlugins(dataDir, ['shell-command']);
   let output = '';
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], {
     cwd: root,
@@ -118,23 +120,30 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal((await satelliteRequest('POST', '/api/auth/invite', { token: satelliteInvitation, password: 'satellite password' })).status, 200);
   assert.equal((await satelliteRequest('PUT', '/api/admin/plugins/shell-command/settings', { enabled: true })).status, 200);
   await waitFor(async () => (await request('GET', '/api/admin/satellites')).data[0]?.online === true);
-  const upstreamState = await satelliteRequest('GET', '/api/admin/satellite-upstream');
-  assert.equal(upstreamState.data.configured, true);
-  assert.equal(upstreamState.data.state, 'online');
-  assert.equal(upstreamState.data.centralUrl, centralUrl);
-  assert.equal((await request('GET', '/api/admin/satellite-upstream')).data.configured, false, 'a central instance has no upstream');
-  await waitFor(async () => (await request('GET', '/api/services')).data.some((s: any) => s.id === `sat/${enrolled.data.satellite.id}/http`));
-  const remoteHttp = (await request('GET', '/api/services')).data.find((s: any) => s.id === `sat/${enrolled.data.satellite.id}/http`);
-  assert.deepEqual(remoteHttp.satellite, { id: enrolled.data.satellite.id, name: 'Test laptop', online: true });
+  const upstreamState = await satelliteRequest('GET', '/api/admin/upstreams');
+  assert.equal(upstreamState.data.length, 1);
+  assert.equal(upstreamState.data[0].state, 'online');
+  assert.equal(upstreamState.data[0].url, centralUrl);
+  assert.equal(upstreamState.data[0].token, undefined);
+  const upstreamId = upstreamState.data[0].id;
+  assert.deepEqual((await request('GET', '/api/admin/upstreams')).data, []);
+  assert.ok(!(await request('GET', '/api/services')).data.some((s: any) => s.satellite), 'upstream cannot create satellite connections');
+  const forbidden = await request('POST', '/api/connections', { service: `sat/${enrolled.data.satellite.id}/http`, method: 'token', config: { token: 'injected' } });
+  assert.equal(forbidden.status, 403);
 
-  const connected = await request('POST', '/api/connections', {
-    service: `sat/${enrolled.data.satellite.id}/http`, method: 'token',
-    config: { baseUrl: upstreamUrl, token: 'satellite-only-secret', label: 'Private local API', openapi: `${upstreamUrl}/spec.json` },
-  });
-  assert.equal(connected.status, 200, JSON.stringify(connected.data));
-  assert.equal(connected.data.connection.satellite.name, 'Test laptop');
-  assert.equal(connected.data.connection.config.token, undefined, 'secret config is not returned to central');
-
+  const local = await satelliteRequest('POST', '/api/connections', { service: 'http', method: 'token', name: 'shared-api',
+    config: { baseUrl: upstreamUrl, token: 'satellite-only-secret', label: 'Private local API', openapi: `${upstreamUrl}/spec.json` } });
+  assert.equal(local.status, 200, JSON.stringify(local.data));
+  assert.equal((await request('GET', '/api/connections')).data.length, 0, 'creation does not implicitly share');
+  assert.equal((await satelliteRequest('PUT', `/api/connections/${local.data.connection.id}/shares`, { upstreamIds: [upstreamId] })).status, 200);
+  await waitFor(async () => (await request('GET', '/api/connections')).data.some((c: any) => c.name === 'shared-api'));
+  const connected = { data: { connection: (await request('GET', '/api/connections')).data.find((c: any) => c.name === 'shared-api') } };
+  assert.equal(connected.data.connection.readOnly, true);
+  assert.deepEqual(connected.data.connection.config, {});
+  assert.equal(connected.data.connection.account, null);
+  for (const [method, suffix, body] of [['PATCH', '', { name: 'injected' }], ['POST', '/reconnect', {}], ['DELETE', '', undefined]] as const) {
+    assert.equal((await request(method, `/api/connections/${connected.data.connection.id}${suffix}`, body)).status, 403);
+  }
   const called = await request('POST', '/api/call', { connection: connected.data.connection.id, method: 'POST', url: '/local', body: 'hello' });
   assert.equal(called.status, 200, JSON.stringify(called.data));
   const result = JSON.parse(called.data.body);
@@ -149,6 +158,8 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal(satelliteAudit.data.items[0].client.name, 'Upstream: Web console');
   assert.equal(satelliteAudit.data.items[0].source, 'console');
   assert.equal(satelliteAudit.data.items[0].status, 200);
+  assert.equal(satelliteAudit.data.items[0].upstream.id, upstreamId);
+  assert.equal(satelliteAudit.data.items[0].upstream.userId, me.id);
   assert.ok(satelliteAudit.data.items[0].responseSize > 0);
   const satelliteFacets = await satelliteRequest('GET', '/api/audit/facets');
   assert.equal(satelliteFacets.data.connections[0].count, 1);
@@ -179,11 +190,12 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal(satelliteMcpAudit.data.total, 1);
   assert.equal(satelliteMcpAudit.data.items[0].client.name, 'Upstream: Satellite MCP test');
 
-  const remoteMcp = await request('POST', '/api/connections', {
-    service: `sat/${enrolled.data.satellite.id}/mcp`, method: 'token',
-    config: { endpoint: `${upstreamUrl}/mcp`, token: 'satellite-mcp-secret' },
-  });
-  assert.equal(remoteMcp.status, 200, JSON.stringify(remoteMcp.data));
+  const localMcp = await satelliteRequest('POST', '/api/connections', { service: 'mcp', method: 'token', name: 'shared-mcp',
+    config: { endpoint: `${upstreamUrl}/mcp`, token: 'satellite-mcp-secret' } });
+  assert.equal(localMcp.status, 200, JSON.stringify(localMcp.data));
+  await satelliteRequest('PUT', `/api/connections/${localMcp.data.connection.id}/shares`, { upstreamIds: [upstreamId] });
+  await waitFor(async () => (await request('GET', '/api/connections')).data.some((c: any) => c.name === 'shared-mcp'));
+  const remoteMcp = { data: { connection: (await request('GET', '/api/connections')).data.find((c: any) => c.name === 'shared-mcp') } };
   const remoteMcpId = remoteMcp.data.connection.id;
   assert.equal(remoteMcp.data.connection.kind, 'mcp');
   assert.equal(remoteMcp.data.connection.config.token, undefined);
@@ -201,28 +213,71 @@ test('a real satellite keeps credentials local and executes a per-user connectio
   assert.equal(fs.readFileSync(path.join(centralDir, 'switchboard.db')).includes(Buffer.from('satellite-mcp-secret')), false);
   const pendingMcp = request('POST', `/api/connections/${remoteMcpId}/mcp/tools/call`, { name: 'wait' });
   await waitFor(() => waitingMcp);
-  assert.equal((await request('DELETE', `/api/connections/${remoteMcpId}`)).status, 200);
-  assert.equal((await pendingMcp).status, 499, 'connection deletion cancels an in-flight satellite MCP request');
+  assert.equal((await satelliteRequest('PUT', `/api/connections/${localMcp.data.connection.id}/shares`, { upstreamIds: [] })).status, 200);
+  assert.equal((await pendingMcp).status, 499, 'share revocation cancels an in-flight satellite MCP request');
 
   const centralDb = fs.readFileSync(path.join(centralDir, 'switchboard.db'));
   assert.equal(centralDb.includes(Buffer.from('satellite-only-secret')), false, 'central database contains no local credential plaintext');
   assert.equal((await request('GET', `/api/connections/${connected.data.connection.id}/token`)).status, 400, 'raw tokens stay on the satellite');
-  assert.equal((await request('DELETE', `/api/connections/${connected.data.connection.id}`)).status, 200);
+  assert.equal((await request('DELETE', `/api/connections/${connected.data.connection.id}`)).status, 403);
 
-  await waitFor(async () => {
-    const service = (await request('GET', '/api/services')).data.find((s: any) => s.id === `sat/${enrolled.data.satellite.id}/shell-command`);
-    return service?.methods[0]?.unavailable === undefined;
-  });
-  const shellService = (await request('GET', '/api/services')).data.find((s: any) => s.id === `sat/${enrolled.data.satellite.id}/shell-command`);
+  const shellService = (await satelliteRequest('GET', '/api/services')).data.find((s: any) => s.id === 'shell-command');
   assert.equal(shellService.methods[0].fields[0].type, 'text');
-  const shell = await request('POST', '/api/connections', {
-    service: `sat/${enrolled.data.satellite.id}/shell-command`, method: 'command',
-    config: { command: 'printf "satellite command output\\n"' },
-  });
-  assert.equal(shell.status, 200, JSON.stringify(shell.data));
+  const localShell = await satelliteRequest('POST', '/api/connections', { service: 'shell-command', method: 'command', name: 'shared-command', config: { command: 'printf "satellite command output\\n"' } });
+  assert.equal(localShell.status, 200, JSON.stringify(localShell.data));
+  await satelliteRequest('PUT', `/api/connections/${localShell.data.connection.id}/shares`, { upstreamIds: [upstreamId] });
+  await waitFor(async () => (await request('GET', '/api/connections')).data.some((c: any) => c.name === 'shared-command'));
+  const shell = { data: { connection: (await request('GET', '/api/connections')).data.find((c: any) => c.name === 'shared-command') } };
   assert.equal(shell.data.connection.config.command, undefined);
   const shellCall = await request('POST', '/api/call', { connection: shell.data.connection.id, method: 'GET', url: '/' });
   assert.equal(shellCall.status, 200, JSON.stringify(shellCall.data));
   assert.equal(shellCall.data.body, 'satellite command output\n');
-  assert.equal((await request('DELETE', `/api/connections/${shell.data.connection.id}`)).status, 200);
+  assert.equal((await satelliteRequest('DELETE', `/api/connections/${localShell.data.connection.id}`)).status, 200);
+
+  // A second upstream receives a different selection, independently of the first.
+  const secondPort = centralPort + 6000;
+  const second = launch(secondPort, path.join(scratch, 'second-upstream'));
+  await waitFor(() => second.output().includes('Switchboard listening'));
+  let secondCookie = '';
+  const secondRequest = async (method: string, pathname: string, body?: unknown) => {
+    const r = await fetch(`http://127.0.0.1:${secondPort}${pathname}`, { method,
+      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', ...(secondCookie ? { cookie: secondCookie } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body) });
+    if (r.headers.get('set-cookie')) secondCookie = r.headers.get('set-cookie')!.split(';')[0];
+    return { status: r.status, data: await r.json() };
+  };
+  const secondInvite = second.output().match(/\/invite#(\S+)/)?.[1];
+  assert.equal((await secondRequest('POST', '/api/auth/invite', { token: secondInvite, password: 'second password' })).status, 200);
+  const secondMe = (await secondRequest('GET', '/api/me')).data;
+  const secondDevice = (await secondRequest('POST', '/api/admin/satellites', { name: 'Direct satellite', ownerUserId: secondMe.id })).data;
+  const secondLink = await satelliteRequest('POST', '/api/admin/upstreams', { name: 'Second', url: `http://127.0.0.1:${secondPort}`, token: secondDevice.token });
+  assert.equal(secondLink.status, 201, JSON.stringify(secondLink.data));
+  const secondLocal = await satelliteRequest('POST', '/api/connections', { service: 'http', method: 'token', name: 'second-only', config: { baseUrl: upstreamUrl, token: 'second-only-secret' } });
+  await satelliteRequest('PUT', `/api/connections/${secondLocal.data.connection.id}/shares`, { upstreamIds: [secondLink.data.id] });
+  await waitFor(async () => (await secondRequest('GET', '/api/connections')).data.some((c: any) => c.name === 'second-only'));
+  assert.ok(!(await secondRequest('GET', '/api/connections')).data.some((c: any) => c.name === 'shared-api'));
+  assert.ok(!(await request('GET', '/api/connections')).data.some((c: any) => c.name === 'second-only'));
+  assert.equal((await request('POST', '/api/call', { connection: connected.data.connection.id, method: 'GET', url: '/local' })).status, 200);
+
+  // Explicit onward sharing crosses two links; reverse sharing cannot form a cycle.
+  const chainDevice = (await secondRequest('POST', '/api/admin/satellites', { name: 'Intermediate', ownerUserId: secondMe.id })).data;
+  const chainLink = await request('POST', '/api/admin/upstreams', { name: 'Chain', url: `http://127.0.0.1:${secondPort}`, token: chainDevice.token });
+  assert.equal(chainLink.status, 201, JSON.stringify(chainLink.data));
+  await request('PUT', `/api/connections/${connected.data.connection.id}/shares`, { upstreamIds: [chainLink.data.id] });
+  await waitFor(async () => (await secondRequest('GET', '/api/connections')).data.some((c: any) => c.name === 'shared-api'));
+  const chainHandle = (await secondRequest('GET', '/api/connections')).data.find((c: any) => c.name === 'shared-api');
+  const chainCall = await secondRequest('POST', '/api/call', { connection: chainHandle.id, method: 'GET', url: '/local' });
+  assert.equal(chainCall.status, 200, JSON.stringify(chainCall.data));
+  assert.equal(JSON.parse(chainCall.data.body).auth, 'Bearer satellite-only-secret');
+  const localMe = (await satelliteRequest('GET', '/api/me')).data;
+  const reverseDevice = (await satelliteRequest('POST', '/api/admin/satellites', { name: 'Reverse link', ownerUserId: localMe.id })).data;
+  const reverseLink = await secondRequest('POST', '/api/admin/upstreams', { name: 'Reverse', url: `http://127.0.0.1:${satellitePort}`, token: reverseDevice.token });
+  await secondRequest('PUT', `/api/connections/${chainHandle.id}/shares`, { upstreamIds: [reverseLink.data.id] });
+  await waitFor(async () => (await satelliteRequest('GET', '/api/admin/satellites')).data.some((s: any) => s.name === 'Reverse link' && s.online));
+  assert.deepEqual((await satelliteRequest('GET', '/api/admin/satellites')).data.find((s: any) => s.name === 'Reverse link').connections, []);
+  await satelliteRequest('PUT', `/api/connections/${local.data.connection.id}/shares`, { upstreamIds: [] });
+  await waitFor(async () => (await secondRequest('GET', '/api/connections')).data.find((c: any) => c.id === chainHandle.id)?.status === 'unavailable');
+  assert.equal((await secondRequest('POST', '/api/call', { connection: chainHandle.id, method: 'GET', url: '/local' })).status, 403);
+  assert.equal((await secondRequest('POST', '/api/call', { connection: 'second-only', method: 'GET', url: '/local' })).status, 200);
+
 });

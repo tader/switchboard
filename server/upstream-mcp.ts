@@ -6,7 +6,7 @@ import { badRequest, HttpError } from './http.ts';
 import { limitResponse, mcpEndpoint, MCP_RESPONSE_LIMIT, MCP_TIMEOUT } from './mcp-network.ts';
 import { record, redactBody, type Caller } from './audit.ts';
 import type { User } from './users.ts';
-import { parseRemoteServiceId, satelliteService, requestSatellite } from './satellites.ts';
+import { satelliteConnection, requestSatellite } from './satellites.ts';
 
 export type McpOperation = 'tools/list' | 'tools/call' | 'resources/list' | 'resources/templates/list' | 'resources/read' | 'prompts/list' | 'prompts/get' | 'completion/complete';
 export interface McpInput {
@@ -41,10 +41,7 @@ export function validateMcpInput(input: McpInput) {
 }
 
 async function executeRemoteMcp(user: User, row: any, input: McpInput, signal?: AbortSignal, caller?: Caller) {
-  const parsed = parseRemoteServiceId(row.service_id);
-  if (!parsed || !satelliteService(user.id, row.satellite_id, parsed.serviceId).service.mcpExecution) {
-    throw new HttpError(501, 'This satellite does not support MCP execution; update the satellite');
-  }
+  if (satelliteConnection(user.id, row.satellite_id, row.remote_connection_id).kind !== 'mcp') throw badRequest('This shared connection is not MCP');
   const controller = new AbortController();
   active.set(controller, row.id);
   const started = Date.now();

@@ -1,8 +1,12 @@
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  plan?: PluginPlan;
+  constructor(status: number, message: string, details?: { code?: string; plan?: PluginPlan }) {
     super(message);
     this.status = status;
+    this.code = details?.code;
+    this.plan = details?.plan;
   }
 }
 
@@ -25,7 +29,7 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   }
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/auth/')) unauthorized.dispatchEvent(new Event('401'));
-    throw new ApiError(res.status, data?.error ?? `Request failed (${res.status})`);
+    throw new ApiError(res.status, data?.error ?? `Request failed (${res.status})`, data);
   }
   return data as T;
 }
@@ -76,6 +80,7 @@ export interface Service {
 }
 
 export interface Connection {
+  readOnly: boolean;
   kind: 'http' | 'mcp';
   id: string;
   name: string;
@@ -193,10 +198,11 @@ export interface PluginInfo {
   version: string;
   description?: string;
   dependencies: string[];
+  dependencyVersions?: Record<string, string>;
   dependents: string[];
   origin: 'builtin' | 'installed';
   overridesBuiltin: boolean;
-  source?: { type: 'github'; repo: string; ref?: string; path: string; commit: string };
+  source?: { type: 'github'; repo: string; ref?: string; path: string; commit: string; githubConnectionId?: string };
   enabled: boolean;
   status: 'active' | 'error' | 'disabled' | 'blocked';
   error?: string;
@@ -221,16 +227,15 @@ export interface Satellite {
   connectedAt: number | null;
   lastSeenAt: number | null;
   catalogVersion: string | null;
-  services: { id: string; name: string }[];
+  connections: { id: string; name: string; kind: 'http' | 'mcp' }[];
   userIds: string[];
   createdAt: number;
   updatedAt: number;
 }
 
 export interface SatelliteUpstream {
-  configured: boolean;
-  centralUrl: string | null;
-  state: 'not-configured' | 'connecting' | 'online' | 'offline';
+  id: string; name: string; url: string; enabled: boolean; hasToken: boolean; sharedConnections: number;
+  state: 'disabled' | 'connecting' | 'online' | 'offline';
   connectedAt: number | null;
   lastSeenAt: number | null;
   lastError: string | null;
@@ -240,4 +245,22 @@ export interface SatelliteUpstream {
 export interface Info {
   publicUrl: string;
   callbackUrl: string;
+}
+
+export interface CommunityPlugin {
+  icon?: string;
+  id: string;
+  name: string;
+  description: string;
+  repo: string;
+  ref?: string;
+  path?: string;
+}
+export interface PluginCatalog { schemaVersion: 1; plugins: CommunityPlugin[] }
+export interface PluginPlan {
+  planId: string;
+  expiresAt: number;
+  requiresReview: boolean;
+  affectedDependents: string[];
+  changes: { id: string; name: string; fromVersion: string | null; version: string; action: 'install' | 'update'; dependency: boolean; source: NonNullable<PluginInfo['source']> }[];
 }

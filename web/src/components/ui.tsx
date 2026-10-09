@@ -196,12 +196,14 @@ export function Alert({ tone = 'red', children, className }: { tone?: 'red' | 'a
 }
 
 export function ServiceIcon({ icon, name, size = 'md' }: { icon?: string; name: string; size?: 'sm' | 'md' | 'lg' }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [icon]);
   const box = { sm: 'size-6 rounded-md p-1', md: 'size-9 rounded-lg p-1.5', lg: 'size-11 rounded-xl p-2' }[size];
-  if (icon) {
+  if (icon && !failed) {
     const src = icon.startsWith('<') ? `data:image/svg+xml;utf8,${encodeURIComponent(icon)}` : icon;
     return (
       <span className={cx('flex shrink-0 items-center justify-center bg-white ring-1 ring-zinc-200 dark:bg-zinc-100 dark:ring-zinc-700', box)}>
-        <img src={src} alt="" className="size-full object-contain" />
+        <img src={src} alt="" onError={() => setFailed(true)} referrerPolicy="no-referrer" className="size-full object-contain" />
       </span>
     );
   }

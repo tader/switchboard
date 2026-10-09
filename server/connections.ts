@@ -6,10 +6,11 @@ import { HttpError, badRequest, notFound } from './http.ts';
 import type { AuthMethod, ConnectArgs, ConnectStep, Connected, Connection, Field, ServiceDefinition } from './plugins/api.ts';
 import { plugins } from './plugins/manager.ts';
 import type { User } from './users.ts';
-import { getSatellite, parseRemoteServiceId, remoteServiceId, requestSatellite, satelliteService, servicesForUser } from './satellites.ts';
+import { getSatellite, parseRemoteServiceId, satelliteConnection, syncSatelliteConnections } from './satellites.ts';
 
 export interface ConnectionView {
   kind: 'http' | 'mcp';
+  readOnly: boolean;
   id: string;
   name: string;
   serviceId: string;
@@ -65,25 +66,15 @@ export function resolveBaseUrl(service: ServiceDefinition, conn: Connection): st
 export function toView(r: any): ConnectionView {
   const conn = rowToConnection(r);
   if (r.satellite_id) {
-    const parsed = parseRemoteServiceId(conn.serviceId);
-    let sat: any;
-    let remote: any;
-    try {
-      sat = getSatellite(r.satellite_id);
-      remote = sat.services.find((s: any) => s.id === parsed?.serviceId);
-    } catch {}
-    const method = remote?.methods?.find((m: any) => m.id === conn.methodId);
-    const offline = !sat?.online;
-    return {
-      kind: r.kind ?? 'http',
-      id: conn.id, name: conn.name, serviceId: conn.serviceId, serviceName: remote?.name ?? parsed?.serviceId ?? conn.serviceId,
-      methodId: conn.methodId, methodName: method?.name ?? conn.methodId, account: conn.account ?? null,
-      config: conn.config, status: offline ? 'unavailable' : r.status,
-      statusMessage: offline ? `${sat?.name ?? 'Satellite'} is offline${sat?.lastSeenAt ? ` (last seen ${new Date(sat.lastSeenAt).toISOString()})` : ''}` : r.status_message,
-      baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, canIssueToken: false, redirectUri: r.redirect_uri ?? null,
+    let sat: any; let remote: any;
+    try { sat = getSatellite(r.satellite_id); remote = satelliteConnection(r.user_id, r.satellite_id, r.remote_connection_id); } catch {}
+    const unavailable = !sat?.online || !remote || remote.status !== 'ok';
+    return { kind: r.kind ?? 'http', readOnly: true, id: conn.id, name: conn.name, serviceId: conn.serviceId,
+      serviceName: remote?.serviceName ?? conn.serviceId, methodId: 'shared', methodName: 'Shared connection', account: null, config: {},
+      status: unavailable ? 'unavailable' : 'ok', statusMessage: !remote ? 'This connection is no longer shared with you' : !sat?.online ? `${sat.name} is offline` : remote.status !== 'ok' ? 'The connection is unavailable on its satellite' : null,
+      baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, canIssueToken: false, redirectUri: null,
       createdAt: r.created_at, updatedAt: r.updated_at, lastUsedAt: r.last_used_at,
-      satellite: sat ? { id: sat.id, name: sat.name, online: sat.online, lastSeenAt: sat.lastSeenAt } : { id: r.satellite_id, name: r.satellite_id, online: false, lastSeenAt: null },
-    };
+      satellite: { id: r.satellite_id, name: sat?.name ?? r.satellite_id, online: !!sat?.online, lastSeenAt: sat?.lastSeenAt ?? null } };
   }
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
@@ -93,6 +84,7 @@ export function toView(r: any): ConnectionView {
   } catch {}
   const unavailable = !service ? 'The plugin providing this service is not active' : !method ? 'This sign-in method is no longer offered' : null;
   return {
+    readOnly: false,
     id: conn.id,
     kind: r.kind ?? 'http',
     name: conn.name,
@@ -116,6 +108,7 @@ export function toView(r: any): ConnectionView {
 }
 
 export function listConnections(userId: string, only?: string[] | null): ConnectionView[] {
+  syncSatelliteConnections(userId);
   return all('SELECT * FROM connections WHERE user_id = ? ORDER BY service_id, name COLLATE NOCASE', userId)
     .filter((r) => !only || only.includes(r.id))
     .map(toView);
@@ -123,6 +116,7 @@ export function listConnections(userId: string, only?: string[] | null): Connect
 
 /** Looks a connection up by id or name. */
 export function getConnectionRow(userId: string, ref: string): any {
+  syncSatelliteConnections(userId);
   const r = one('SELECT * FROM connections WHERE user_id = ? AND (id = ? OR name = ?)', userId, ref, ref);
   if (!r) throw notFound(`Connection "${ref}" not found`);
   return r;
@@ -141,6 +135,7 @@ export function loadConnection(userId: string, ref: string) {
 
 export function renameConnection(userId: string, ref: string, name: string) {
   const row = getConnectionRow(userId, ref);
+  if (row.satellite_id) throw new HttpError(403, 'Shared satellite connections are managed on their satellite');
   name = name.trim();
   if (!NAME.test(name)) throw badRequest('Names may contain letters, digits, ".", "_", "@", "+" and "-"');
   if (one('SELECT 1 FROM connections WHERE user_id = ? AND name = ? AND id != ?', userId, name, row.id)) throw badRequest('You already have a connection with that name');
@@ -151,12 +146,7 @@ export function renameConnection(userId: string, ref: string, name: string) {
 export async function deleteConnection(userId: string, ref: string) {
   const row = getConnectionRow(userId, ref);
   connectionChanged(row.id);
-  if (row.satellite_id) {
-    await requestSatellite(row.satellite_id, userId, 'connection.delete', { connection: row.remote_connection_id });
-    run('DELETE FROM connections WHERE id = ?', row.id);
-    run('UPDATE saved_calls SET connection_id = NULL WHERE connection_id = ?', row.id);
-    return;
-  }
+  if (row.satellite_id) throw new HttpError(403, 'Shared satellite connections are managed on their satellite');
   const conn = rowToConnection(row);
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
@@ -220,17 +210,7 @@ export function listServices(userId?: string): ServiceView[] {
       pluginId,
       methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback })),
     }))
-  const remote: ServiceView[] = userId ? servicesForUser(userId).map(({ satellite, service }) => ({
-    kind: service.kind ?? 'http',
-    id: remoteServiceId(satellite.id, service.id),
-    name: service.name,
-    description: service.description,
-    icon: service.icon,
-    pluginId: service.pluginId,
-    methods: service.methods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: (m.fields ?? []) as Field[], unavailable: !satellite.online ? `${satellite.name} is offline` : m.unavailable, redirect: !!m.redirect })),
-    satellite: { id: satellite.id, name: satellite.name, online: satellite.online },
-  })) : [];
-  return [...local, ...remote].sort((a, b) => a.name.localeCompare(b.name));
+  return local.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export type FlowResult =
@@ -271,7 +251,7 @@ export async function startConnect(
   const remoteParsed = existingRow?.satellite_id
     ? parseRemoteServiceId(existingRow.service_id)
     : parseRemoteServiceId(existingRow?.service_id ?? input.service ?? '');
-  if (remoteParsed) return startRemoteConnect(user, input, existingRow, remoteParsed);
+  if (existingRow?.satellite_id || remoteParsed) throw new HttpError(403, 'Create and manage satellite connections on the satellite, then explicitly share them');
   let existing: Connection | undefined;
   if (input.connection) existing = rowToConnection(getConnectionRow(user.id, input.connection));
   const serviceId = existing?.serviceId ?? input.service;
@@ -295,60 +275,6 @@ export async function startConnect(
   const args: ConnectArgs = { config: cfg, callbackUrl: redirectUri ?? callbackUrl, state: flowId, connection: existing };
   const step = await callPlugin(() => method.connect(args));
   return handleStep(user, step, { flowId, service, method, cfg, name: input.name?.trim(), connectionId: existing?.id, redirectUri });
-}
-
-async function startRemoteConnect(
-  user: User,
-  input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string; redirectUri?: string },
-  existingRow: any,
-  remote: { satelliteId: string; serviceId: string },
-): Promise<FlowResult> {
-  const { service } = satelliteService(user.id, remote.satelliteId, remote.serviceId);
-  const methodId = input.method ?? existingRow?.method_id ?? service.methods.find((m) => !m.unavailable)?.id;
-  const method = service.methods.find((m) => m.id === methodId);
-  if (!method) throw badRequest(`Unknown sign-in method "${methodId}"`);
-  if (method.unavailable) throw badRequest(method.unavailable);
-  if (input.name && !NAME.test(input.name.trim())) throw badRequest('Names may contain letters, digits, ".", "_", "@", "+" and "-"');
-  if (input.name && one('SELECT 1 FROM connections WHERE user_id = ? AND name = ? AND id != ?', user.id, input.name.trim(), existingRow?.id ?? '')) throw badRequest('You already have a connection with that name');
-  const result = await requestSatellite<any>(remote.satelliteId, user.id, 'connect.start', {
-    service: remote.serviceId, method: methodId, config: input.config ?? {}, name: input.name,
-    connection: existingRow?.remote_connection_id, ...(method.redirect ? { redirectUri: input.redirectUri ?? callbackUrl } : {}),
-  });
-  if (result.status === 'connected') return { status: 'connected', connection: storeRemoteConnection(user, existingRow, remote, result.connection) };
-  // Keep the provider's state value: its callback arrives at central Switchboard and must resolve
-  // the flow that the satellite created. Satellite flow ids are cryptographically random.
-  const flowId = String(result.flowId);
-  if (!flowId || one('SELECT 1 FROM connect_flows WHERE id = ?', flowId)) throw badRequest('The satellite returned an invalid sign-in flow');
-  run(
-    `INSERT INTO connect_flows (id, user_id, service_id, method_id, connection_id, name, config_enc, pending_enc, kind, expires_at, created_at, redirect_uri, satellite_id, remote_flow_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    flowId, user.id, remoteServiceId(remote.satelliteId, remote.serviceId), methodId, existingRow?.id ?? null, input.name?.trim() ?? null,
-    encrypt({}), encrypt(null), result.status, now() + 15 * 60_000, now(), input.redirectUri ?? null, remote.satelliteId, result.flowId,
-  );
-  return result.status === 'redirect'
-    ? { ...result, flowId, ...(input.redirectUri ? { manual: true } : { manual: false }) }
-    : { ...result, flowId };
-}
-
-function storeRemoteConnection(user: User, existingRow: any, remote: { satelliteId: string; serviceId: string }, result: any): ConnectionView {
-  if (result.kind !== undefined && result.kind !== 'http' && result.kind !== 'mcp') throw badRequest('The satellite returned an invalid connection kind');
-  const t = now();
-  const id = existingRow?.id ?? randomId('c');
-  const serviceKey = remoteServiceId(remote.satelliteId, remote.serviceId);
-  const name = existingRow?.name ?? uniqueName(user.id, result.name || remote.serviceId);
-  if (existingRow) {
-    run(`UPDATE connections SET method_id = ?, name = ?, account_id = ?, account_label = ?, account_avatar = ?, config_enc = ?,
-         credentials_enc = NULL, status = 'ok', status_message = NULL, updated_at = ?, remote_connection_id = ?, kind = ? WHERE id = ?`,
-      result.methodId, result.name ?? name, result.account?.id ?? null, result.account?.label ?? null, result.account?.avatarUrl ?? null,
-      encrypt(result.config ?? {}), t, result.id, result.kind ?? 'http', id);
-  } else {
-    run(`INSERT INTO connections (id, user_id, service_id, method_id, name, account_id, account_label, account_avatar, config_enc, credentials_enc,
-         status, created_at, updated_at, satellite_id, remote_connection_id, kind)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ok', ?, ?, ?, ?, ?)`,
-      id, user.id, serviceKey, result.methodId, name, result.account?.id ?? null, result.account?.label ?? null, result.account?.avatarUrl ?? null,
-      encrypt(result.config ?? {}), t, t, remote.satelliteId, result.id, result.kind ?? 'http');
-  }
-  return toView(one('SELECT * FROM connections WHERE id = ?', id));
 }
 
 /**
@@ -419,8 +345,7 @@ function existingConn(userId: string, connectionId: string | null) {
 
 /** Completes a redirect flow. Returns the flow's user id so the caller can verify the session. */
 export async function completeRedirect(flowId: string, params: Record<string, string>, user: User): Promise<ConnectionView> {
-  const remoteFlow = one('SELECT * FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId);
-  if (remoteFlow) return completeRemoteFlow(remoteFlow, user, 'connect.callback', { params });
+  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId)) throw badRequest('Legacy satellite sign-in is no longer supported; sign in on the satellite');
   const { r, service, method, cfg, pending } = loadFlow(flowId, 'redirect');
   if (r.user_id !== user.id) throw badRequest('This sign-in was started by another user');
   run('DELETE FROM connect_flows WHERE id = ?', flowId);
@@ -439,8 +364,7 @@ export async function completeRedirect(flowId: string, params: Record<string, st
  * just the code. A pasted address must belong to this flow (its state is the flow id).
  */
 export async function completeFromPaste(flowId: string, pasted: string, user: User): Promise<ConnectionView> {
-  const remoteFlow = one('SELECT * FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId);
-  if (remoteFlow) return completeRemoteFlow(remoteFlow, user, 'connect.complete', { url: String(pasted ?? '') });
+  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId)) throw badRequest('Legacy satellite sign-in is no longer supported; sign in on the satellite');
   const text = String(pasted ?? '').trim();
   if (!text) throw badRequest('Paste the address you were sent to after signing in');
   let params: Record<string, string>;
@@ -462,16 +386,7 @@ export async function completeFromPaste(flowId: string, pasted: string, user: Us
 }
 
 export async function pollDevice(flowId: string, user: User): Promise<FlowResult | { status: 'pending'; interval?: number }> {
-  const remoteFlow = one('SELECT * FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId);
-  if (remoteFlow) {
-    if (remoteFlow.user_id !== user.id) throw notFound();
-    const result = await requestSatellite<any>(remoteFlow.satellite_id, user.id, 'connect.poll', { flowId: remoteFlow.remote_flow_id });
-    if (result.status === 'pending') return result;
-    run('DELETE FROM connect_flows WHERE id = ?', flowId);
-    const parsed = parseRemoteServiceId(remoteFlow.service_id)!;
-    const existing = remoteFlow.connection_id ? getConnectionRow(user.id, remoteFlow.connection_id) : undefined;
-    return { status: 'connected', connection: storeRemoteConnection(user, existing, parsed, result.connection) };
-  }
+  if (one('SELECT 1 FROM connect_flows WHERE id = ? AND satellite_id IS NOT NULL', flowId)) throw badRequest('Legacy satellite sign-in is no longer supported; sign in on the satellite');
   const { r, service, method, cfg, pending } = loadFlow(flowId, 'device');
   if (r.user_id !== user.id) throw notFound();
   if (!method.poll) throw badRequest('This method does not support polling');
@@ -493,20 +408,7 @@ export async function pollDevice(flowId: string, user: User): Promise<FlowResult
 }
 
 export function cancelFlow(flowId: string, user: User) {
-  const remoteFlow = one('SELECT * FROM connect_flows WHERE id = ? AND user_id = ? AND satellite_id IS NOT NULL', flowId, user.id);
-  if (remoteFlow) void requestSatellite(remoteFlow.satellite_id, user.id, 'connect.cancel', { flowId: remoteFlow.remote_flow_id }).catch(() => {});
   run('DELETE FROM connect_flows WHERE id = ? AND user_id = ?', flowId, user.id);
-}
-
-async function completeRemoteFlow(row: any, user: User, operation: string, payload: Record<string, unknown>): Promise<ConnectionView> {
-  if (row.user_id !== user.id) throw badRequest('This sign-in was started by another user');
-  if (row.expires_at < now()) throw badRequest('This sign-in attempt has expired. Please try again.');
-  const result = await requestSatellite<any>(row.satellite_id, user.id, operation, { flowId: row.remote_flow_id, ...payload });
-  if (result.status !== 'connected' || !result.connection) throw badRequest('The satellite did not complete the connection');
-  run('DELETE FROM connect_flows WHERE id = ?', row.id);
-  const parsed = parseRemoteServiceId(row.service_id)!;
-  const existing = row.connection_id ? getConnectionRow(user.id, row.connection_id) : undefined;
-  return storeRemoteConnection(user, existing, parsed, result.connection);
 }
 
 function storeConnection(user: User, f: FlowInfo, result: Connected): ConnectionView {

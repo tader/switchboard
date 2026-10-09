@@ -1,11 +1,14 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { type Env, requireAdmin, requireUser } from '../auth.ts';
 import { badRequest } from '../http.ts';
-import { checkUpdates, install, parseRepo, uninstall, update, updateOptions } from '../plugins/github.ts';
+import { applyPlan, checkUpdates, install, parseRepo, previewInstall, previewUpdates, uninstall, update, updateOptions, type GithubContext } from '../plugins/github.ts';
+import { communityCatalog } from '../plugins/catalog.ts';
+import { connectionOption } from '../plugins/github-access.ts';
+import { callerFrom } from '../audit.ts';
 import { type PluginRecord, pluginIcon, plugins } from '../plugins/manager.ts';
 import { type Role, createInvite, createUser, deleteUser, getUser, listUsers, pendingInvites, updateUser } from '../users.ts';
 import { createSatellite, deleteSatellite, getSatellite, listSatellites, rotateSatelliteToken, updateSatellite } from '../satellites.ts';
-import { satelliteAgentStatus } from '../satellite-agent.ts';
+import { listUpstreams, createUpstream, updateUpstream, deleteUpstream, hasConfiguredUpstreams } from '../upstreams.ts';
 
 export const admin = new Hono<Env>();
 admin.use('*', requireUser, requireAdmin);
@@ -16,6 +19,7 @@ const view = (p: PluginRecord) => ({
   version: p.manifest.version,
   description: p.manifest.description,
   dependencies: p.manifest.dependencies ?? [],
+  dependencyVersions: p.manifest.dependencyVersions ?? {},
   dependents: [...plugins.plugins.values()].filter((o) => o.manifest.dependencies?.includes(p.id)).map((o) => o.id),
   origin: p.origin,
   overridesBuiltin: p.overridesBuiltin,
@@ -31,19 +35,49 @@ const view = (p: PluginRecord) => ({
 
 admin.get('/plugins', (c) => c.json([...plugins.plugins.values()].sort((a, b) => a.manifest.name.localeCompare(b.manifest.name)).map(view)));
 
+const githubContext = (c: Context<Env>, githubConnectionId?: unknown): GithubContext => ({ user: c.get('user'), caller: callerFrom(c, 'plugin'), githubConnectionId: connectionOption(githubConnectionId) });
+
+async function pluginRequest(c: Context<Env>): Promise<Record<string, any>> {
+  const body = await c.req.json();
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw badRequest('Expected a JSON object');
+  return body;
+}
+
+// Static GET routes must precede /plugins/:id.
+admin.get('/plugins/community', async (c) => {
+  c.header('cache-control', 'no-store');
+  return c.json(await communityCatalog());
+});
+
+admin.post('/plugins/install/plan', async (c) => {
+  const { repo, ref, path, githubConnectionId, expectedId } = await pluginRequest(c);
+  return c.json(await previewInstall(parseRepo(repo, ref, path), githubContext(c, githubConnectionId), expectedId));
+});
+
+admin.post('/plugins/update/plan', async (c) => {
+  const { updates } = await pluginRequest(c);
+  return c.json(await previewUpdates(updates, githubContext(c)));
+});
+
+admin.post('/plugins/apply', async (c) => {
+  const { planId } = await pluginRequest(c);
+  const result = await applyPlan(planId, githubContext(c));
+  return c.json({ ...result, plugins: result.ids.map((id) => view(plugins.get(id))) });
+});
+
 admin.get('/plugins/:id', (c) => {
   const p = plugins.get(c.req.param('id'));
   return c.json({ ...view(p), logs: p.logs.slice(-100) });
 });
 
 admin.post('/plugins/install', async (c) => {
-  const { repo, ref, path } = await c.req.json<{ repo: string; ref?: string; path?: string }>();
+  const { repo, ref, path, githubConnectionId } = await pluginRequest(c);
   if (!repo) throw badRequest('repo is required');
-  const ids = await install(parseRepo(repo, ref, path));
+  const ids = await install(parseRepo(repo, ref, path), githubContext(c, githubConnectionId));
   return c.json(ids.map((id) => view(plugins.get(id))));
 });
 
-admin.post('/plugins/check-updates', async (c) => c.json(await checkUpdates()));
+admin.post('/plugins/check-updates', async (c) => c.json(await checkUpdates(githubContext(c))));
 
 admin.post('/plugins/:id/update', async (c) => {
   const raw = await c.req.text();
@@ -51,7 +85,7 @@ admin.post('/plugins/:id/update', async (c) => {
   if (raw.trim()) {
     try { body = JSON.parse(raw); } catch { throw badRequest('Invalid JSON'); }
   }
-  const r = await update(c.req.param('id'), updateOptions(body));
+  const r = await update(c.req.param('id'), updateOptions(body), githubContext(c));
   return c.json({ ...r, plugin: view(plugins.get(r.id)) });
 });
 
@@ -83,7 +117,15 @@ admin.delete('/plugins/:id', async (c) => {
 // --- satellites ---
 
 admin.get('/satellites', (c) => c.json(listSatellites()));
-admin.get('/satellite-upstream', (c) => c.json(satelliteAgentStatus()));
+admin.get('/upstreams', (c) => c.json(listUpstreams()));
+async function upstreamMutation<T>(operation: () => T): Promise<T> {
+  const before = hasConfiguredUpstreams(); const result = operation();
+  if (before !== hasConfiguredUpstreams()) await plugins.reload([...plugins.plugins.keys()]);
+  return result;
+}
+admin.post('/upstreams', async (c) => { const body = await c.req.json(); return c.json(await upstreamMutation(() => createUpstream(body)), 201); });
+admin.patch('/upstreams/:id', async (c) => { const body = await c.req.json(); return c.json(await upstreamMutation(() => updateUpstream(c.req.param('id'), body))); });
+admin.delete('/upstreams/:id', async (c) => { await upstreamMutation(() => deleteUpstream(c.req.param('id'))); return c.json({ ok: true }); });
 
 admin.get('/satellites/:id', (c) => c.json(getSatellite(c.req.param('id'))));
 

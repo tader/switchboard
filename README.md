@@ -34,8 +34,8 @@ On first start, and whenever no administrator can sign in, the log contains a se
 | `SWITCHBOARD_SESSION_TTL_SECS` | 14 days | |
 | `SWITCHBOARD_WATCH_PLUGINS` | `true` | Reload plugins when their files change. |
 | `SWITCHBOARD_AUDIT_RETENTION_DAYS` | `90` | How long the activity log is kept; `0` keeps it forever. |
-| `SWITCHBOARD_SATELLITE_CENTRAL_URL` | | On a satellite, the public URL of its central Switchboard. Set together with `SWITCHBOARD_SATELLITE_TOKEN`. |
-| `SWITCHBOARD_SATELLITE_TOKEN` | | One-time-shown device credential created on the central instance's Satellites page. |
+| `SWITCHBOARD_SATELLITE_CENTRAL_URL` | | First-start bootstrap for one upstream URL; later changes are managed in the UI. |
+| `SWITCHBOARD_SATELLITE_TOKEN` | | First-start bootstrap token created on the upstream's Satellites page; grants are selected locally. |
 
 Switchboard was called Hub before: `HUB_*` variables, `hub_` tokens, the `X-Hub-Token` header and an existing `hub.db` keep working.
 
@@ -43,9 +43,11 @@ Back up the data dir. Without `secret.key` (or `SWITCHBOARD_SECRET_KEY`) stored 
 
 ### Satellites
 
-A satellite is another Switchboard instance on a machine that is not always online. It makes an outbound WebSocket connection to the central instance, so the machine needs no inbound port through its firewall or NAT. Add it under *Satellites*, copy the two environment variables shown there to the private instance, and start that instance normally. Its active plugin services then appear when an allowed user creates a connection.
+A satellite owns its connections and explicitly shares selected connections with each upstream. On the upstream, add the machine under **Satellites** and copy its device token. On the private instance, use **Satellites → Upstreams → Add upstream**, enter the upstream URL and token, then create connections locally and choose **Share with upstreams** from each connection's menu. Multiple upstreams can receive different selections.
 
-Satellite connections belong to one central user and cannot be shared. Provider credentials and secret connection fields are encrypted only in the satellite's data directory. Calls are audited on both Switchboards: the central user's Activity page records the routed call, while a satellite administrator's Activity page includes every upstream call executed there and identifies its upstream client. Raw provider tokens cannot be handed out for satellite connections. When the machine is offline calls fail immediately with `503` and error code `satellite_offline`; calls are not queued or rapidly retried.
+Allowed users on an upstream receive read-only handles automatically. They can execute shared HTTP and MCP connections and browse their OpenAPI descriptions, but cannot create, rename, reconnect or delete connections on the satellite. Credentials and configuration remain local. Activity records identify the local owner, upstream and requesting upstream user. Revocation cancels active requests. Offline calls fail immediately with `503` and `satellite_offline`.
+
+A received connection may be explicitly shared onward. Each hop enforces its own grants; instance routes prevent cycles and limit a request to eight hops. All connected instances must support satellite protocol 2. The old environment variables bootstrap one upstream on first startup only; they do not grant any connections. During upgrade, legacy satellite shadow-owned connections are assigned to the oldest active local administrator and remain unshared until that owner selects upstreams.
 
 #### Run a satellite without Docker
 
@@ -71,11 +73,13 @@ export SWITCHBOARD_SATELLITE_TOKEN='sws_…'
 npm start
 ```
 
-The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Machine-specific plugins are configured in this local UI; for example, enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service is advertised upstream.
+The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Machine-specific plugins are configured in this local UI; for example, install **Shell command** from **Plugins → Community**, then enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service is advertised upstream.
 
 The satellite needs only outbound HTTPS/WebSocket access to the central URL. No inbound firewall or router port is required. For unattended use, put the variables in a permission-restricted service configuration and run Switchboard as a dedicated low-privilege OS user. Shell commands execute with that user's filesystem permissions.
 
-### Setting up Google and GitHub
+### Installing and setting up services
+
+Switchboard includes **MCP**, **API Keys**, and **OAuth**. Install other services from **Plugins → Community** first. Google and Microsoft app plugins automatically install their shared provider plugin. Setup guides appear after installation.
 
 - **Google** (Gmail, Calendar, Drive, Docs, Sheets, Google APIs): create a *Web application* OAuth client in the Google Cloud console, add the redirect URI shown in *Plugins → Google → Settings*, and enter the client id and secret there. Enable each API you use (Gmail, Calendar, Drive, Docs, Sheets) in the same Cloud project. While the consent screen is in testing, add each Google account as a test user. Users can also bring their own client under *Advanced* when connecting.
 - **Home Assistant**: no setup. Sign in through the browser (Switchboard's URL is the OAuth client id, as Home Assistant expects) or paste a long-lived token. The URL must be reachable from Switchboard container; `.local` names usually aren't, so use an IP or hostname.
@@ -83,7 +87,7 @@ The satellite needs only outbound HTTPS/WebSocket access to the central URL. No 
 - **Todoist**: API tokens work without setup; for browser sign-in create an app in the Todoist App Management Console.
 - **Spotify**: create an app at developer.spotify.com/dashboard (Web API), add the redirect URI, and add each user under *User Management* while the app is in development mode. The client secret is only needed for *App only* access.
 - **Plex**: no setup. Sign in through plex.tv, with a code at plex.tv/link, or with a token. Switchboard picks the first of your servers it can reach (local HTTPS first); set *Server URL* under *Advanced* to choose one.
-- **Microsoft 365 and Outlook.com** (Outlook Mail, Outlook Calendar, OneDrive, Microsoft To Do, Microsoft Graph): create an app registration in the Microsoft Entra admin center and enter it under *Plugins → Microsoft → Settings*. Browser sign-in needs a client secret; sign-in with a code needs *Allow public client flows*. See *Docs → Setting up Microsoft sign-in*. The API reference uses slim descriptions built from Microsoft's 44 MB one by `plugins/microsoft/openapi/build.ts`.
+- **Microsoft 365 and Outlook.com** (Outlook Mail, Outlook Calendar, OneDrive, Microsoft To Do, Microsoft Graph): create an app registration in the Microsoft Entra admin center and enter it under *Plugins → Microsoft → Settings*. Browser sign-in needs a client secret; sign-in with a code needs *Allow public client flows*. See *Docs → Setting up Microsoft sign-in*. The API reference uses slim descriptions built from Microsoft's 44 MB one by the [Microsoft plugin build tool](https://github.com/tader/switchboard-plugin-microsoft/blob/main/plugins/microsoft/openapi/build.ts).
 - **Google Keep**: Google only offers the Keep API to Google Workspace, and its consent screen never shows the Keep scopes (`invalid_scope`, "Some requested scopes cannot be shown"; intended behavior per Google), so it connects only with a *Service account*: a Workspace admin authorizes the service account's client id for the Keep scopes under *Security → API controls → Domain-wide delegation*, and you paste its JSON key and the user to act as. The generic *Google APIs* service offers service accounts too.
 - **Switchboard**: connect to another Switchboard with one of its API tokens, or *Sign in with Switchboard*: the other Switchboard asks you to approve and which connections to share, then issues a token. No setup on either side.
 - **GitHub**: personal access tokens work without setup. For browser sign-in and sign-in with a code, create a GitHub OAuth app (enable device flow for the latter) and enter it in *Plugins → GitHub → Settings*.
@@ -143,7 +147,9 @@ Everything in the web app is available with a token that has full access (tokens
 | `GET/POST /api/calls`, `GET/PUT/DELETE /api/calls/:id`, `POST /api/calls/:id/run` | Saved calls |
 | `GET/POST /api/tokens`, `PATCH/DELETE /api/tokens/:id` | API tokens |
 | `GET /api/admin/plugins`, `GET /api/admin/plugins/:id` (with log) | Admin: plugins |
-| `POST /api/admin/plugins/install` `{repo, ref?, path?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` `{ref?}` | Install/update from GitHub; omit update ref to keep it, set a branch/tag/commit to switch, or `null` for the default branch |
+| `POST /api/admin/plugins/install` `{repo, ref?, path?, githubConnectionId?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` `{ref?, githubConnectionId?}` | Install/update from GitHub; omit update ref to keep it or use `null` for the default branch. Select your local GitHub connection or use automatic access |
+| `GET /api/admin/plugins/community` | Live community catalog, fetched at runtime |
+| `POST /api/admin/plugins/install/plan`, `POST /api/admin/plugins/update/plan`, `POST /api/admin/plugins/apply` `{planId}` | Preview and apply plugin/dependency changes; [request formats](docs/plugins.md#installation-api) |
 | `POST /api/admin/plugins/:id/reload`, `PATCH /api/admin/plugins/:id` `{enabled}`, `GET/PUT /api/admin/plugins/:id/settings`, `DELETE /api/admin/plugins/:id` | |
 | `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/:id`, `POST /api/admin/users/:id/invite` | Admin: users |
 | `GET/POST /api/admin/satellites`, `GET/PATCH/DELETE /api/admin/satellites/:id`, `POST /api/admin/satellites/:id/rotate-token` | Admin: outbound satellite enrolment, user access and credential rotation |
@@ -163,6 +169,14 @@ Every request through Switchboard is logged per user, whether it goes through th
 
 The web app has guides under *Docs*: using Switchboard from AI assistants (Claude, Codex, Copilot, OpenCode), the Switchboard API with a reference generated from its OpenAPI description, and setup guides that plugins ship in their `docs/` folder (for example Google sign-in and Google Keep). Switchboard's own guides live in `docs/guides/`.
 
+## Separately maintained plugins
+
+The 19 provider and machine-specific plugins previously bundled here now each have a repository named `tader/switchboard-plugin-<id>`. Find them in the live [community catalog](https://github.com/tader/switchboard-plugins). This includes GitHub, Google and its apps, Microsoft and its apps, Home Assistant, Plex, Spotify, Todoist, Shell command, and Switchboard-to-Switchboard connections.
+
+**Before upgrading an existing instance, install its used plugins from Community, including plugins used on satellites.** **Install the shared Google or Microsoft plugin explicitly as well when using their apps.** An older Switchboard may reuse its bundled helper when installing an app; that helper also needs an installed copy before upgrading. Installed copies take precedence over built-ins. Their plugin IDs, service IDs, authentication methods, settings, credentials and persistent data directories are preserved; keep the instance data directory and encryption key. Missing plugins leave connections unavailable until the plugin is installed again. Do not delete or reconnect them solely for this move.
+
+Install **GitHub** first if you use saved GitHub connections to access private plugin repositories. Public installation also works without a GitHub connection; `SWITCHBOARD_GITHUB_TOKEN` remains available for bootstrap access.
+
 ## Atlassian plugins
 
 Jira, Confluence and Bitbucket are maintained in [tader/switchboard-plugin-atlassian](https://github.com/tader/switchboard-plugin-atlassian). Install that repository through **Plugins → Install from GitHub**.
@@ -181,7 +195,9 @@ Mail and Calendar require macOS 14+, Node 24+, Xcode Command Line Tools and the 
 
 See [docs/plugins.md](docs/plugins.md). Built-in plugins live in `plugins/`; plugins installed from GitHub go to `<data>/plugins/` and take precedence over a built-in plugin with the same id.
 
-Use **Plugins → Actions → Update from…** to test an installed plugin from another branch, tag, or commit. Future updates follow that ref. Choose **Use default branch** to return to the repository default. The plugin card shows the tracked ref and installed commit. If the new version cannot activate, Switchboard restores the previous plugin files and source; plugin code's external side effects cannot be undone.
+**Plugins → Community** browses the live [community catalog](https://github.com/tader/switchboard-plugins); open it or click **Refresh** to fetch current listings. Private repository installation can use your saved GitHub connections automatically or a connection you select. Successful choices are remembered for updates. Missing plugin dependencies are installed recursively; optional `dependencyVersions` semver ranges are checked before installation and during loading.
+
+Use **Plugins → Actions → Update from…** to test an installed plugin from another branch, tag, or commit. Future updates follow that ref. Choose **Use default branch** to return to the repository default. Installation and updates preview changes before applying them, including shared dependency upgrades and affected plugins. **Update all** coordinates available updates on their individual tracked refs. If activation fails, Switchboard restores every changed plugin's previous files and metadata; plugin code's external side effects cannot be undone.
 
 ## Development
 
@@ -193,3 +209,15 @@ Use **Plugins → Actions → Update from…** to test an installed plugin from 
 Or `just dev` for a container (port 8771) that mounts the repository; copy `docker-compose.dev.example.yml` to `docker-compose.dev.yml` first.
 
 Stack: TypeScript run directly by Node 24 (type stripping, no build step), Hono, SQLite (`node:sqlite`), React + Vite + Tailwind for `web/`.
+
+### Published images and releases
+
+GitHub Actions builds `ghcr.io/tader/switchboard` for Linux amd64 and arm64. `edge` follows validated main commits; `sha-<commit>` identifies their exact source. Stable releases publish `<version>` and the current stable release also updates `latest`. Pull requests build and smoke-test images without publishing. Use a persistent volume at `/data`:
+
+```sh
+docker run -d --name switchboard -p 8770:8770 -v switchboard-data:/data ghcr.io/tader/switchboard:edge
+```
+
+Release-please opens a release PR from Conventional Commits (`fix:` bumps patch, `feat:` bumps minor, `feat!:` signals breaking changes). Merge that PR to update versions and changelogs and create the GitHub release. Switchboard's release workflow calls the Docker publisher directly, so releases created with `GITHUB_TOKEN` still publish images. Enable **Allow GitHub Actions to create and approve pull requests** in each active repository's Actions settings. No personal access token secret is needed.
+
+Google, Microsoft, Atlassian and macOS plugins have independent release components within their family repositories; their `plugin.json` versions are updated together with their component package manifests. The community catalog is unversioned and always read from main.

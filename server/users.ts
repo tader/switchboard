@@ -2,7 +2,7 @@ import { all, now, one, run } from './db.ts';
 import { hashPassword, randomId, randomToken, sha256, verifyPassword } from './crypto.ts';
 import { config } from './config.ts';
 import { badRequest, notFound } from './http.ts';
-import { requestSatellite } from './satellites.ts';
+import { connectionChanged } from './connection-events.ts';
 
 export type Role = 'admin' | 'user';
 
@@ -103,9 +103,7 @@ export async function deleteUser(id: string) {
   const user = getUser(id);
   if (!user) throw notFound();
   if (user.role === 'admin' && activeAdminCount(id) === 0) throw badRequest('At least one active administrator is required');
-  const satellites = all<{ satellite_id: string }>('SELECT DISTINCT satellite_id FROM connections WHERE user_id = ? AND satellite_id IS NOT NULL', id);
-  // Do not silently orphan credentials on an offline machine. The administrator can retry when it returns.
-  for (const { satellite_id } of satellites) await requestSatellite(satellite_id, id, 'user.delete', {});
+  connectionChanged();
   run('DELETE FROM users WHERE id = ?', id);
 }
 

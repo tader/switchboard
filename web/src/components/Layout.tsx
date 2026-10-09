@@ -89,6 +89,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </nav>
       <div>
         <Menu
+          block
           align="start"
           footer={<>Version {import.meta.env.VITE_APP_VERSION}</>}
           trigger={(p) => (

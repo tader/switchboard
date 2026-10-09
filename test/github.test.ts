@@ -50,6 +50,7 @@ before(async () => {
   };
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = String(input);
+    if (url === 'https://raw.githubusercontent.com/tader/switchboard-plugins/main/plugins.json') return Response.json({ schemaVersion: 1, plugins: [] });
     if (url.startsWith('https://api.github.com/repos/owner/repo/commits/')) {
       const ref = decodeURIComponent(url.split('/commits/')[1]);
       resolved.push(ref);
