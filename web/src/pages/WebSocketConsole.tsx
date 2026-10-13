@@ -5,7 +5,7 @@ import { Alert, Badge, Button, Card, Dialog, FormField, Input, PageHeader, Selec
 import { JsonView } from '../components/JsonView';
 import { useResource } from '../lib';
 
-type Operation = { id: string; title: string; description?: string; mode: 'command' | 'subscription'; inputSchema: unknown; outputSchema?: unknown; eventSchema?: unknown; readOnlyHint?: boolean };
+type Operation = { id: string; title: string; description?: string; mode: 'command' | 'subscription'; inputSchema: unknown; outputSchema?: unknown; eventSchema?: unknown; rest?: { method: string; path: string }; readOnlyHint?: boolean };
 type Subscription = { id: string; operationId: string; status: string; reason?: string; expiresAt: number };
 type Event = { sequence: number; time: number; value: unknown };
 type Page = Subscription & { events: Event[]; nextCursor: number; gap?: { from: number; to: number } };
@@ -14,6 +14,8 @@ export function WebSocketConsole({ connection, connections, onConnection, onHttp
   const toast = useToast();
   const [params] = useSearchParams();
   const root = `/connections/${connection.id}/websocket`;
+  const [proxyAvailable, setProxyAvailable] = useState(false);
+  const [rawMode, setRawMode] = useState(false);
   const [query, setQuery] = useState('');
   const [operations, setOperations] = useState<Operation[]>([]);
   const [nextOffset, setNextOffset] = useState<number | undefined>();
@@ -37,7 +39,8 @@ export function WebSocketConsole({ connection, connections, onConnection, onHttp
   async function load(offset = 0, signal?: AbortSignal) {
     setLoading(true);
     try {
-      const page = await api<{ operations: Operation[]; nextOffset?: number }>(`${root}/operations?query=${encodeURIComponent(query)}&limit=100&offset=${offset}`, { signal });
+      const page = await api<{ proxy?: boolean; operations: Operation[]; nextOffset?: number }>(`${root}/operations?query=${encodeURIComponent(query)}&limit=100&offset=${offset}`, { signal });
+      setProxyAvailable(page.proxy === true);
       setOperations(old => offset ? [...old, ...page.operations] : page.operations); setNextOffset(page.nextOffset);
     } catch (e: any) { if (e.name !== 'AbortError') setError(e.message); }
     finally { setLoading(false); }
@@ -132,7 +135,8 @@ export function WebSocketConsole({ connection, connections, onConnection, onHttp
     <PageHeader title="Console" actions={<Select aria-label="Connection" value={connection.id} onChange={e => onConnection(e.target.value)}>{connections.map(c => <option key={c.id} value={c.id}>{c.name} · {c.serviceName}</option>)}</Select>} />
     <div className="flex items-center gap-2"><Button onClick={onHttp}>HTTP</Button><Badge>WebSocket</Badge></div>
     {error && <Alert>{error}</Alert>}
-    <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+    {proxyAvailable && <div className="flex gap-2"><Button onClick={() => setRawMode(false)}>Declared operations</Button><Button onClick={() => setRawMode(true)}>WebSocket proxy</Button></div>}
+    {rawMode ? <RawWebSocketConsole connectionId={connection.id} /> : <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
       <Card className="space-y-3 p-4"><Input aria-label="Search WebSocket operations" placeholder="Search operations" value={query} onChange={e => setQuery(e.target.value)} />
         {operations.map(op => <button type="button" key={op.id} disabled={busy} onClick={() => pick(op)} className="block w-full rounded px-2 py-2 text-left text-[13px] hover:bg-zinc-100 dark:hover:bg-zinc-800"><span className="block font-medium">{op.title}</span><span className="text-xs text-zinc-500">{op.mode} · {op.id}</span></button>)}
         {!loading && !operations.length && <p className="text-xs text-zinc-500">No operations available.</p>}
@@ -142,6 +146,7 @@ export function WebSocketConsole({ connection, connections, onConnection, onHttp
       <div className="min-w-0 space-y-4">
         <Card className="space-y-3 p-4">
           <h2 className="text-sm font-semibold">{operation?.title ?? 'Select an operation'}</h2>{operation?.description && <p className="text-[13px] text-zinc-500">{operation.description}</p>}
+          {operation?.rest && <p className="break-all font-mono text-xs text-zinc-500">REST: {operation.rest.method} /api/connections/{connection.id}/plugin{operation.rest.path}</p>}
           <FormField label="Arguments (JSON)"><Textarea aria-label="Arguments (JSON)" value={args} disabled={!operation || busy} onChange={e => setArgs(e.target.value)} rows={6} className="font-mono text-xs" /></FormField>
           {operation && <details><summary className="cursor-pointer text-xs text-zinc-500">Schemas and operation</summary><JsonView value={operation} /></details>}
           <div className="flex flex-wrap gap-2"><Button variant="primary" loading={busy} disabled={!operation || busy} onClick={run}>{operation?.mode === 'subscription' ? 'Start subscription' : 'Run command'}</Button>
@@ -155,6 +160,7 @@ export function WebSocketConsole({ connection, connections, onConnection, onHttp
         </Card>)}
       </div>
     </div>
+    }
     <Dialog open={saveOpen} onClose={() => setSaveOpen(false)} title="Save command"><div className="space-y-3"><FormField label="Name"><Input value={saveName} onChange={e => setSaveName(e.target.value)} /></FormField><Button variant="primary" disabled={!saveName.trim()} onClick={save}>Save</Button></div></Dialog>
   </div>;
 }
@@ -201,4 +207,40 @@ export function WebSocketOperationReference({ connectionId, onPick }: { connecti
     {!loading && !error && !operations.length && <p className="p-2 text-xs text-zinc-500">No WebSocket operations match.</p>}
     {nextOffset !== undefined && <Button size="sm" loading={loading} onClick={() => void load(nextOffset)}>Load more</Button>}
   </section>;
+}
+
+
+function RawWebSocketConsole({ connectionId }: { connectionId: string }) {
+  const socket = useRef<WebSocket | null>(null);
+  const [state, setState] = useState('Disconnected');
+  const [message, setMessage] = useState('{"id":1,"type":"get_config"}');
+  const [frames, setFrames] = useState<string[]>([]);
+  const [error, setError] = useState('');
+  useEffect(() => () => { socket.current?.close(); }, [connectionId]);
+  const connect = () => {
+    socket.current?.close(); setError(''); setFrames([]); setState('Connecting');
+    const url = new URL(`/api/connections/${encodeURIComponent(connectionId)}/websocket/proxy`, window.location.href);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(url); socket.current = ws;
+    ws.onopen = () => setState('Connected');
+    ws.onclose = () => { if (socket.current === ws) setState('Disconnected'); };
+    ws.onerror = () => setError('WebSocket proxy could not connect or was interrupted.');
+    ws.onmessage = event => setFrames(old => [...old, String(event.data).slice(0, 10000)].slice(-100));
+  };
+  const send = () => {
+    try {
+      if (socket.current?.readyState !== WebSocket.OPEN) throw new Error('Connect first');
+      JSON.parse(message);
+      socket.current.send(message); setError('');
+    } catch (error: any) { setError(error.message); }
+  };
+  return <Card className="space-y-3 p-4">
+    <h2 className="text-sm font-semibold">WebSocket proxy · {state}</h2>
+    <p className="text-[13px] text-zinc-500">Switchboard authenticates to the provider. Send provider protocol messages here; use unique message IDs to match replies.</p>
+    {error && <Alert>{error}</Alert>}
+    <div className="flex gap-2"><Button disabled={state === 'Connecting' || state === 'Connected'} onClick={connect}>Connect</Button><Button disabled={state === 'Disconnected'} onClick={() => socket.current?.close()}>Disconnect</Button></div>
+    <FormField label="Message (JSON)"><Textarea value={message} onChange={event => setMessage(event.target.value)} rows={5} className="font-mono text-xs" /></FormField>
+    <Button disabled={state !== 'Connected'} onClick={send}>Send message</Button>
+    <div className="max-h-80 overflow-auto"><JsonView value={frames} /></div>
+  </Card>;
 }

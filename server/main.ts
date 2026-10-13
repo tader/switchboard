@@ -1,3 +1,4 @@
+import { attachWebSocketProxy } from './websocket-proxy.ts';
 import { stopWebSockets } from './websocket-transport.ts';
 import { stopWebSocketSubscriptions } from './websocket.ts';
 import fs from 'node:fs';
@@ -92,6 +93,7 @@ if (setupUrl) {
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () => {
   console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);
 });
+const stopWebSocketProxy = attachWebSocketProxy(server as import('node:http').Server);
 const stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Server);
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
@@ -99,6 +101,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     stopWebSocketSubscriptions();
     stopWebSockets();
     stopProviderMcp();
+    stopWebSocketProxy();
     stopPeerWebSockets();
     stopPeerAgent();
     server.close();

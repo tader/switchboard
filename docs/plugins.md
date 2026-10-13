@@ -240,3 +240,10 @@ limits. Installed plugins still use type-only imports and cannot require their o
 `node_modules`. See the [TypeScript plugin contract](../server/plugins/api.ts) and
 the [complete test-plugin adapter](../test/fixtures/websocket-plugin/index.ts) for
 reply dispatching, message authentication, commands, and subscriptions.
+
+
+### Frame proxy and REST bindings
+
+Set `websocket.proxy: true` to enable authenticated, dedicated raw frame relays to the capability's fixed endpoint. Core applies the existing auth hooks, host policy, socket quotas, credential invalidation, and access checks; the protocol adapter is not created on relay sockets. Managed operations continue to use their own adapter sockets.
+
+Command operations may declare `rest: { method: 'GET' | 'POST' | 'PUT', path: '/relative/path' }`. Core serves these under `/api/connections/:ref/plugin`, executing the command through its managed WebSocket adapter and returning its result directly as JSON. GET bindings require `readOnlyHint: true`. Paths must be unique per method and contain lowercase letters, digits, slashes, or hyphens. GET query arguments are validated against the input schema (boolean values are decoded); POST/PUT accept the argument object as JSON. Core generates `/plugin/openapi.json` from the operation schemas. These features currently require local connections.

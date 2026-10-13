@@ -192,3 +192,12 @@ reads while hidden and stops subscriptions it started when leaving the WebSocket
 console. Abrupt closure is handled by lease expiry. Saved calls use
 `kind: "websocket"` and `websocketRequest: { operationId, arguments }`; only commands
 can be saved. `/api/calls/:id/run` accepts argument overrides.
+
+
+### Raw WebSocket proxy and plugin REST endpoints
+
+For a local connection whose plugin enables frame proxying, upgrade `/api/connections/:ref/websocket/proxy` to a WebSocket. Scripts pass a Switchboard bearer token in the upgrade request; browsers use the same-origin session cookie. Switchboard opens a dedicated upstream socket and authenticates before relaying frames, so clients send provider commands without the provider's authentication handshake. The console's **WebSocket proxy** mode uses this endpoint. Each proxy has its own socket and message ID namespace. Access revocation, credential changes, plugin changes, shutdown, and upstream disconnection close the relay. Frames are bounded to 1 MiB, with bounded send queues; slow clients are disconnected. Commands are never replayed.
+
+Plugins may attach a `rest: { method, path }` binding to a declared WebSocket command. These endpoints are served under `/api/connections/:ref/plugin`; GET arguments come from query parameters and POST/PUT arguments from a JSON body. Boolean query arguments use `true` or `false`. The route validates against the command schema, executes the plugin adapter on an authenticated provider WebSocket, and returns the command's result directly as JSON. Its OpenAPI reference is at `/api/connections/:ref/plugin/openapi.json`. Raw proxies and plugin REST bindings currently require local connections.
+
+The Home Assistant plugin declares GET `/plugin/lovelace/dashboards`, GET `/plugin/lovelace/config`, PUT `/plugin/lovelace/config`, and GET `/plugin/system/logs`, each prefixed by `/api/connections/:ref`. Dashboard configuration calls accept `url_path`; reads also accept `force=true`. PUT accepts the full `{ "url_path": "my-home", "config": { ... } }` configuration and returns JSON `null` when HA acknowledges the save. The logs endpoint returns condensed system-log warnings and errors. Both interfaces connect to Home Assistant over WebSocket.

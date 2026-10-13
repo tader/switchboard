@@ -201,7 +201,7 @@ export async function executeWebSocket(access: WebSocketAccess, ref: string, inp
       const words = (input.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
       const operations = service.websocket.operations.filter(op => words.every(word => `${op.id} ${op.title} ${op.description ?? ''}`.toLowerCase().includes(word)));
       const offset = integer(input.offset, 0, 0, 1000, 'offset'); const limit = integer(input.limit, 20, 1, 100, 'limit');
-      result = { operations: operations.slice(offset, offset + limit), ...(offset + limit < operations.length ? { nextOffset: offset + limit } : {}) };
+      result = { proxy: service.websocket.proxy === true, operations: operations.slice(offset, offset + limit), ...(offset + limit < operations.length ? { nextOffset: offset + limit } : {}) };
     } else if (input.action === 'operation') result = { operation: localOperation(access, row.id, input.operationId) };
     else {
       const op = localOperation(access, row.id, input.operationId);

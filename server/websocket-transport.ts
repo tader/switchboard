@@ -7,7 +7,7 @@ import { onConnectionChange, onCredentialsChange } from './connection-events.ts'
 import { onAccessChange } from './access-events.ts';
 import type { WebSocketAccess } from './websocket-access.ts';
 import { HttpError, badRequest } from './http.ts';
-import { sha256 } from './crypto.ts';
+import { randomId, sha256 } from './crypto.ts';
 import { WS_LIMITS } from './websocket-schema.ts';
 
 export function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -84,6 +84,7 @@ export interface ManagedWebSocket {
   connectionId: string;
   access: WebSocketAccess;
   adapter: WebSocketSession;
+  channel?: WebSocketChannel;
   controller: AbortController;
   endpoint: string;
   fingerprint: string;
@@ -116,12 +117,13 @@ function enforceQuota(access: WebSocketAccess) {
   const entries = [...pool.values(), ...opening.values()];
   if (entries.length >= WS_LIMITS.instance || entries.filter(s => s.access.user.id === access.user.id).length >= WS_LIMITS.user || entries.filter(s => s.access.user.id === access.user.id && s.access.principal === access.principal).length >= WS_LIMITS.principal) throw new HttpError(429, 'WebSocket socket quota reached');
 }
-export async function acquireWebSocket(access: WebSocketAccess, id: string, signal: AbortSignal): Promise<ManagedWebSocket> {
+export async function acquireWebSocket(access: WebSocketAccess, id: string, signal: AbortSignal, raw = false): Promise<ManagedWebSocket> {
   access.check(id);
   const { service, conn } = loadConnection(access.user.id, id);
   if (!service.websocket) throw badRequest('This connection has no WebSocket operations');
+  if (raw && !service.websocket.proxy) throw badRequest('This plugin does not support a WebSocket proxy');
   const target = endpoint(service, conn);
-  const key = JSON.stringify([access.user.id, access.principal, id]);
+  const key = JSON.stringify([access.user.id, access.principal, id, raw ? randomId('wsproxy') : null]);
   let existing = pool.get(key);
   if (existing && (existing.service !== service || existing.fingerprint !== fingerprint(conn) || existing.endpoint !== target.href)) { existing.close('Connection or credentials changed'); existing = undefined; }
   if (existing) { existing.lastUsed = Date.now(); return existing; }
@@ -162,12 +164,12 @@ export async function acquireWebSocket(access: WebSocketAccess, id: string, sign
       });
       openSignal.throwIfAborted(); access.check(id);
       const current = loadConnection(access.user.id, id).conn;
-      const creation = Promise.resolve(service.websocket!.createSession({ channel: channel!, connection: current, signal: controller.signal }));
+      const creation = Promise.resolve(raw ? { call: async () => { throw badRequest('Raw relay has no operation adapter'); } } : service.websocket!.createSession({ channel: channel!, connection: current, signal: controller.signal }));
       creation.then(value => { if (controller.signal.aborted) Promise.resolve().then(() => value.dispose?.()).catch(() => {}); }).catch(() => {});
       adapter = await abortable(creation, openSignal);
       openSignal.throwIfAborted(); access.check(id);
       if (!adapter || typeof adapter.call !== 'function') throw new Error('WebSocket session must implement call');
-      const session: ManagedWebSocket = { connectionId: id, access, adapter, controller, service, endpoint: target.href,
+      const session: ManagedWebSocket = { connectionId: id, access, adapter, channel: raw ? channel : undefined, controller, service, endpoint: target.href,
         fingerprint: fingerprint(current), holds: 0, lastUsed: Date.now(), close(reason) {
           if (controller.signal.aborted) return;
           session.reason = reason;

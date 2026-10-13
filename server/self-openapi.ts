@@ -62,6 +62,8 @@ export function openapiDocument() {
     components: { securitySchemes: { token: { type: 'http', scheme: 'bearer' } } },
     security: [{ token: [] }],
     paths: {
+      '/api/connections/{ref}/websocket/proxy': { get: op('WebSocket', 'Upgrade to an authenticated provider frame relay', { parameters: [ref], description: 'Local connections with proxy support only. Authenticate with a Switchboard bearer token or same-origin session cookie. Provider authentication is performed server-side before frames are relayed.', responses: { '101': { description: 'WebSocket relay established' } } }) },
+      '/api/connections/{ref}/plugin/openapi.json': { get: op('Connections', 'OpenAPI reference for plugin REST endpoints backed by WebSocket commands', { parameters: [ref] }) },
       '/api/connections/{ref}/websocket/operations': { get: op('WebSocket', 'Search/list WebSocket operations', { parameters: [ref, { name: 'query', in: 'query', schema: { type: 'string' } }, { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0 } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }] }) },
       '/api/connections/{ref}/websocket/operations/{operationId}': { get: op('WebSocket', 'Inspect a WebSocket operation', { parameters: [ref, { name: 'operationId', in: 'path', required: true, description: 'URL-encode slashes in operation ids', schema: { type: 'string' } }] }) },
       '/api/connections/{ref}/websocket/call': { post: op('WebSocket', 'Execute a declared command', { parameters: [ref], requestBody: json({ type: 'object', required: ['operationId'], properties: { operationId: { type: 'string' }, arguments: { type: 'object', default: {} } } }) }) },
