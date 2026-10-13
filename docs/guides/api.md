@@ -150,6 +150,10 @@ gmail = build("gmail", "v1", credentials=Credentials(token))
 
 ## WebSocket operations
 
+The console's **API reference** includes a **WebSocket operations** section for connections that support it. Search for an operation and select it to open its description, input/output schemas, and command or subscription controls. Selecting an entry does not execute it.
+
+For Home Assistant, the plugin provides `lovelace/dashboards/list` to discover dashboards, `lovelace/config` to get a configuration, `lovelace/config/save` to update the full configuration, and `system_log/list` to get condensed warnings and errors. These operations all use the server-managed WebSocket connection to Home Assistant. Dashboard calls accept an optional `url_path`; omit it for the default dashboard. Saves require an admin and a storage-mode dashboard. Live log operations and their requirements are listed alongside the commands.
+
 Connections with `hasWebSocket: true` offer plugin-defined commands and subscriptions.
 Switchboard keeps their sockets and credentials on the server. Clients cannot supply
 an endpoint or authentication frame.

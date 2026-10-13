@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { api, type Connection, type SavedCall } from '../api';
-import { Alert, Badge, Button, Card, Dialog, FormField, Input, PageHeader, Select, Textarea, useToast } from '../components/ui';
+import { Alert, Badge, Button, Card, Dialog, FormField, Input, PageHeader, Select, Spinner, Textarea, useToast } from '../components/ui';
 import { JsonView } from '../components/JsonView';
 import { useResource } from '../lib';
 
@@ -61,6 +61,16 @@ export function WebSocketConsole({ connection, connections, onConnection, onHttp
     const request = call.websocketRequest;
     api<{ operation: Operation }>(`${root}/operations/${encodeURIComponent(request.operationId)}`).then(value => { setOperation(value.operation); setArgs(JSON.stringify(request.arguments, null, 2)); }).catch(e => setError(e.message));
   }, [params, saved.data, connection.id]);
+  const wantedOperation = params.get('operation');
+  useEffect(() => {
+    if (!wantedOperation) return;
+    const controller = new AbortController();
+    setOperation(undefined); setArgs('{}'); setError(''); setResult(undefined);
+    api<{ operation: Operation }>(`${root}/operations/${encodeURIComponent(wantedOperation)}`, { signal: controller.signal })
+      .then(value => setOperation(value.operation))
+      .catch(e => { if (e.name !== 'AbortError') setError(e.message); });
+    return () => controller.abort();
+  }, [connection.id, wantedOperation]);
   const liveIds = subs.filter(s => s.status === 'active').map(s => s.id).join(',');
   useEffect(() => {
     if (!visible) return;
@@ -147,4 +157,48 @@ export function WebSocketConsole({ connection, connections, onConnection, onHttp
     </div>
     <Dialog open={saveOpen} onClose={() => setSaveOpen(false)} title="Save command"><div className="space-y-3"><FormField label="Name"><Input value={saveName} onChange={e => setSaveName(e.target.value)} /></FormField><Button variant="primary" disabled={!saveName.trim()} onClick={save}>Save</Button></div></Dialog>
   </div>;
+}
+
+
+/** WebSocket operations are supplied by the plugin catalog, not its REST OpenAPI document. */
+export function WebSocketOperationReference({ connectionId, onPick }: { connectionId: string; onPick(id: string): void }) {
+  const [query, setQuery] = useState('');
+  const [operations, setOperations] = useState<Operation[]>([]);
+  const [nextOffset, setNextOffset] = useState<number>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const request = useRef<AbortController | null>(null);
+  const root = `/connections/${connectionId}/websocket/operations`;
+  const load = async (offset: number) => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const signal = controller.signal;
+    setLoading(true); setError('');
+    try {
+      const page = await api<{ operations: Operation[]; nextOffset?: number }>(`${root}?query=${encodeURIComponent(query)}&limit=100&offset=${offset}`, { signal });
+      setOperations(old => offset ? [...old, ...page.operations] : page.operations);
+      setNextOffset(page.nextOffset);
+    } catch (e: any) { if (e.name !== 'AbortError') setError(e.message); }
+    finally { if (!signal?.aborted) setLoading(false); }
+  };
+  useEffect(() => {
+    setOperations([]); setNextOffset(undefined);
+    void load(0);
+    return () => request.current?.abort();
+  }, [connectionId, query]);
+  return <section aria-label="WebSocket API reference" className="border-b border-zinc-200 p-3 dark:border-zinc-800">
+    <h2 className="mb-2 text-xs font-semibold text-zinc-600 dark:text-zinc-300">WebSocket operations</h2>
+    <Input aria-label="Search WebSocket API reference" placeholder="Search WebSocket operations" value={query} onChange={e => setQuery(e.target.value)} className="mb-2 h-8 text-[13px]" />
+    {error && <Alert>{error}<Button size="sm" onClick={() => void load(0)}>Try again</Button></Alert>}
+    <ul>{operations.map(op => <li key={op.id}>
+      <button type="button" onClick={() => onPick(op.id)} title={op.description} className="block w-full rounded-lg px-2.5 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800/60">
+        <span className="block text-[13px]">{op.title}</span>
+        <span className="block truncate font-mono text-[11px] text-zinc-500">{op.mode} · {op.id}</span>
+      </button>
+    </li>)}</ul>
+    {loading && <div className="flex justify-center p-2"><Spinner /></div>}
+    {!loading && !error && !operations.length && <p className="p-2 text-xs text-zinc-500">No WebSocket operations match.</p>}
+    {nextOffset !== undefined && <Button size="sm" loading={loading} onClick={() => void load(nextOffset)}>Load more</Button>}
+  </section>;
 }
