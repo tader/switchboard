@@ -1,3 +1,5 @@
+import { executeWebSocket, type WebSocketAction } from './websocket.ts';
+import { websocketAccess } from './websocket-access.ts';
 // MCP server at /mcp (Streamable HTTP). Dual-era: requests carrying per-request `_meta`
 // (protocol 2026-07-28) are served statelessly with header validation; clients on earlier
 // revisions open with `initialize` and are served without a session. Every tool runs as the
@@ -26,6 +28,7 @@ Use this sequence: list_connections → search_operations → get_operation → 
 These are MCP tools. If your host exposes them as deferred tools, invoke them through the host's deferred tool-call mechanism; do not treat a discovered operationId as a new native tool.
 Paths are relative to the connection's base URL. Credentials are added by Switchboard; never send your own Authorization header.
 For MCP connections use search_mcp_tools → get_mcp_tool → call_mcp_tool, or list/read_mcp_resources and list/get_mcp_prompts. Native resources and prompts use immutable connection IDs in their namespace.
+For connections with hasWebSocket use search_websocket_operations → get_websocket_operation → call_websocket_operation or subscribe_websocket. Preserve event cursors, inspect gaps and terminal status, and unsubscribe when finished. Results are in structuredContent.
 For paginated operations, preserve the same filters and keep calling with the returned nextToken until it is absent before claiming the result is complete. Prefer restrictive filters before paginating.`;
 
 type Json = Record<string, any>;
@@ -48,6 +51,19 @@ const MAX_TEXT = 100_000;
 
 const mcpTool = (name: string, description: string, properties: Json, required: string[], readOnlyHint = true) => ({ name, description, inputSchema: { type: 'object', properties: { connection: { type: 'string' }, ...properties }, required: ['connection', ...required], additionalProperties: false }, annotations: { readOnlyHint, openWorldHint: true, ...(readOnlyHint ? {} : { destructiveHint: true, idempotentHint: false }) } });
 
+const wsTools: Record<string, WebSocketAction> = {
+  search_websocket_operations: 'operations', get_websocket_operation: 'operation', call_websocket_operation: 'call',
+  list_websocket_subscriptions: 'subscriptions', subscribe_websocket: 'subscribe', read_websocket_events: 'read', unsubscribe_websocket: 'unsubscribe',
+};
+const websocketTools = [
+  mcpTool('search_websocket_operations', 'Search plugin WebSocket operations; use get_websocket_operation before execution. Continue with nextOffset when present.', { query: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, []),
+  mcpTool('get_websocket_operation', 'Inspect a WebSocket operation schema and command/subscription mode.', { operationId: { type: 'string' } }, ['operationId']),
+  mcpTool('call_websocket_operation', 'Execute a declared WebSocket command. Credentials and sockets are managed by Switchboard.', { operationId: { type: 'string' }, arguments: { type: 'object' } }, ['operationId'], false),
+  mcpTool('list_websocket_subscriptions', 'List this token’s subscription handles for a connection.', {}, []),
+  mcpTool('subscribe_websocket', 'Start a declared subscription. Read its buffered events with read_websocket_events. Handles expire after five minutes without reads and do not survive restart.', { operationId: { type: 'string' }, arguments: { type: 'object' } }, ['operationId'], false),
+  mcpTool('read_websocket_events', 'Read buffered events without consuming them. Preserve nextCursor. A gap reports dropped events; an interrupted subscription must be recreated.', { subscriptionId: { type: 'string' }, cursor: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 500 }, waitMs: { type: 'integer', minimum: 0, maximum: 25000 } }, ['subscriptionId']),
+  mcpTool('unsubscribe_websocket', 'Stop a subscription owned by this token.', { subscriptionId: { type: 'string' } }, ['subscriptionId'], false),
+];
 const tools = [
   {
     name: 'list_connections',
@@ -161,6 +177,7 @@ const tools = [
   mcpTool('list_mcp_prompts', 'List prompts and their argument definitions on an MCP connection.', { cursor: { type: 'string' } }, []),
   mcpTool('get_mcp_prompt', 'Get an upstream prompt with messages and roles preserved.', { name: { type: 'string' }, arguments: { type: 'object', additionalProperties: { type: 'string' } } }, ['name']),
   mcpTool('complete_mcp_argument', 'Complete a prompt or resource-template argument if the upstream server supports it.', { ref: { type: 'object' }, argument: { type: 'object' }, context: { type: 'object' } }, ['ref', 'argument']),
+  ...websocketTools,
 ];
 
 interface Ctx {
@@ -316,6 +333,13 @@ async function runCall(ctx: Ctx, connectionId: string, req: { method: string; ur
 }
 
 async function callTool(ctx: Ctx, name: string, args: Json) {
+  if (wsTools[name]) {
+    const row = connectionFor(ctx, args.connection);
+    try {
+      const result = await executeWebSocket(websocketAccess(ctx.c), row.id, { ...args, action: wsTools[name] }, ctx.c.req.raw.signal, callerFrom(ctx.c, 'mcp'));
+      return { content: [{ type: 'text', text: `WebSocket ${wsTools[name]} completed. See structuredContent for the complete result.` }], structuredContent: result };
+    } catch (error: any) { throw new ToolError(error.message); }
+  }
   if (['search_mcp_tools', 'get_mcp_tool', 'call_mcp_tool', 'list_mcp_resources', 'read_mcp_resource', 'list_mcp_prompts', 'get_mcp_prompt', 'complete_mcp_argument'].includes(name)) {
     const row = connectionFor(ctx, args.connection);
     const operations: Record<string, McpInput['operation']> = { search_mcp_tools: 'tools/list', get_mcp_tool: 'tools/list', call_mcp_tool: 'tools/call', list_mcp_resources: args.templates ? 'resources/templates/list' : 'resources/list', read_mcp_resource: 'resources/read', list_mcp_prompts: 'prompts/list', get_mcp_prompt: 'prompts/get', complete_mcp_argument: 'completion/complete' };
@@ -340,6 +364,7 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
         account: c.account?.label ?? null,
         baseUrl: c.baseUrl,
         hasApiReference: c.hasOpenapi,
+        hasWebSocket: c.hasWebSocket,
         status: c.status,
         location: c.peer ? { type: 'peer', name: c.peer.name, online: c.peer.online } : { type: 'local' },
         ...(c.statusMessage ? { problem: c.statusMessage } : {}),
@@ -413,13 +438,21 @@ async function callTool(ctx: Ctx, name: string, args: Json) {
         (r) => !ctx.token.connectionIds || ctx.token.connectionIds.includes(r.connection_id),
       );
       const names = new Map(listConnections(ctx.user.id).map((c) => [c.id, c.name]));
-      return json(rows.map((r) => ({ name: r.name, id: r.id, kind: r.kind, method: r.method, url: r.url, mcpRequest: r.mcp_request ? JSON.parse(r.mcp_request) : null, connection: names.get(r.connection_id) ?? null })));
+      return json(rows.map((r) => ({ name: r.name, id: r.id, kind: r.kind, method: r.method, url: r.url, mcpRequest: r.mcp_request ? JSON.parse(r.mcp_request) : null, websocketRequest: r.websocket_request ? JSON.parse(r.websocket_request) : null, connection: names.get(r.connection_id) ?? null })));
     }
     case 'run_saved_call': {
       const r = one('SELECT * FROM saved_calls WHERE user_id = ? AND (id = ? OR name = ?)', ctx.user.id, String(args.name ?? ''), String(args.name ?? ''));
       if (!r) throw new ToolError(`No saved call "${args.name}"; use list_saved_calls`);
       if (!r.connection_id) throw new ToolError('This saved call has no connection');
       const row = connectionFor(ctx, r.connection_id);
+      if (r.kind === 'websocket') {
+        const input = JSON.parse(r.websocket_request);
+        if (args.arguments !== undefined) input.arguments = { ...input.arguments, ...args.arguments };
+        try {
+          const result = await executeWebSocket(websocketAccess(ctx.c), row.id, { ...input, action: 'call' }, ctx.c.req.raw.signal, callerFrom(ctx.c, 'mcp', r.name));
+          return { content: [{ type: 'text', text: 'WebSocket command completed. See structuredContent.' }], structuredContent: result };
+        } catch (error: any) { throw new ToolError(error.message); }
+      }
       if (r.kind === 'mcp') {
         const input = JSON.parse(r.mcp_request);
         if (args.arguments !== undefined) input.arguments = { ...input.arguments, ...args.arguments };

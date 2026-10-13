@@ -305,3 +305,12 @@ Streamable HTTP's SSE response bodies are in scope.
   for unmerged PRs, other branches/commits, and direct/bot pushes.
 - Activation: the workflow becomes active when merged into main. A live Actions
   run remains to be verified after that merge; no application deployment needed.
+
+## Managed WebSocket operations
+
+The core WebSocket implementation is complete. See [websocket-plan.md](websocket-plan.md)
+for scope, defaults, checklist, and verification. Plugin-defined commands and buffered
+subscriptions are available through API/MCP, peers, and the console, including saved
+commands and redacted activity. All 85 tests, server typecheck, and web build passed;
+the previous-HEAD database upgrade and Chrome UI flows were verified. Home Assistant
+plugin integration and deployment are outside this change.

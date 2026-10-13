@@ -165,3 +165,78 @@ Plugins run in Switchboard process with full access. Only install plugins you tr
 `ctx.peer` is true when this instance has at least one configured peer, incoming or outgoing. It replaces the former satellite flag. A peer describes a relationship between two Switchboard instances; both can explicitly share local connections through **Connections → Sharing**. Plugins configure connections only on their local instance.
 
 The former `switchboard` plugin is retired and cannot be enabled. Its existing connection records and credentials remain stored, but unavailable. Configure Peers and choose sharing grants explicitly instead.
+
+## WebSocket-backed operations
+
+An HTTP-category service may declare `websocket` alongside `baseUrl` and `openapi`.
+No new connection kind or plugin dependency is required. The capability has:
+
+- `endpoint`: an absolute URL or a function of the connection. Relative URLs resolve
+  against `baseUrl`; HTTP(S) endpoints are converted to WS(S). The normal allowed-host
+  policy applies before and after authorization. WS requires an HTTP base URL.
+- `operations`: unique IDs, titles, descriptions, `mode` (`command` or `subscription`),
+  object `inputSchema`, optional `outputSchema`/`eventSchema`, and optional
+  `readOnlyHint`/`idempotentHint`. Schemas use JSON Schema draft 2020-12; references
+  must resolve locally. Validation does not coerce values or insert defaults.
+- `createSession({ channel, connection, signal })`: returns a protocol adapter with
+  `call(operationId, arguments, operationSignal)`, optional
+  `subscribe(operationId, arguments, emit, subscriptionSignal)`, and optional
+  `dispose()`. Results and emitted events must be JSON serializable.
+
+`channel.send(string | Uint8Array)` and `channel.receive(signal?)` are asynchronous.
+`channel.closed` resolves on closure. Authentication is the first receive consumer;
+then the session owns the single receive loop and dispatches correlated replies and
+subscription events. Initial frames are buffered before authentication starts.
+The session signal ends when the socket closes. Commands receive cancellation and
+timeout signals; subscriptions receive a lifetime signal that ends when stopped.
+Do not attach an operation timeout to a long-lived subscription's receive loop.
+
+Core calls the selected auth method's existing `authorize()` with an HTTP-equivalent
+GET upgrade request. For services that authenticate in frames, implement the optional
+`authenticateWebSocket(channel, connection, { force, signal })` hook. Both hooks may
+return updated credentials. Authentication is serialized with credential refresh.
+A definitive authentication rejection may throw an Error with
+`code = 'WEBSOCKET_AUTH_REJECTED'`; core opens a new socket once with `force: true`.
+The authorization method should refresh credentials on that forced attempt. Never
+include credentials or authentication frames in errors, results, events, or logs.
+
+For example, an HA-style message-authenticated method can use:
+
+```ts
+async authenticateWebSocket(channel, connection, { signal }) {
+  const greeting = JSON.parse(String(await channel.receive(signal)));
+  if (greeting.type !== 'auth_required') throw new Error('Unexpected authentication greeting');
+  await channel.send(JSON.stringify({
+    type: 'auth', access_token: connection.credentials.accessToken,
+  }));
+  const result = JSON.parse(String(await channel.receive(signal)));
+  if (result.type !== 'auth_ok') {
+    const error = Object.assign(new Error('Authentication rejected'), {
+      code: 'WEBSOCKET_AUTH_REJECTED',
+    });
+    throw error;
+  }
+}
+```
+
+This illustrates the documented [Home Assistant authentication handshake](https://developers.home-assistant.io/docs/api/websocket/);
+it does not implement its command protocol or token refresh.
+
+A subscription must resolve only after the upstream acknowledges it. Register its
+message ID and event callback before sending the start command so early events are
+retained. Return `{ stop: async () => { /* unsubscribe and await acknowledgement */ } }`.
+If no stop function is supplied, core closes the entire session when the subscription
+ends; other subscriptions on it become interrupted. Cancellation during creation
+must release partially created work. Dispose outstanding requests and listeners when
+the session signal aborts, and discard late replies to cancelled commands.
+
+Sockets are pooled by caller, connection, endpoint, plugin generation, and credential
+generation, with 60-second idle expiry. Core closes a session when a command is
+cancelled or times out; its other subscriptions become interrupted. Core never
+replays sent commands. Access changes, reconnect/delete, credential replacement,
+plugin reload/unload, and shutdown end affected sessions. Subscriptions use bounded
+in-memory event buffers and five-minute leases; see the API guide for quotas and
+limits. Installed plugins still use type-only imports and cannot require their own
+`node_modules`. See the [TypeScript plugin contract](../server/plugins/api.ts) and
+the [complete test-plugin adapter](../test/fixtures/websocket-plugin/index.ts) for
+reply dispatching, message authentication, commands, and subscriptions.

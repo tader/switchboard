@@ -1,5 +1,5 @@
 import { callbackUrl } from './config.ts';
-import { connectionChanged } from './connection-events.ts';
+import { connectionChanged, credentialsChanged } from './connection-events.ts';
 import { decrypt, encrypt, randomId, randomToken } from './crypto.ts';
 import { all, now, one, run } from './db.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
@@ -25,6 +25,7 @@ export interface ConnectionView {
   statusMessage: string | null;
   baseUrl: string | null;
   hasOpenapi: boolean;
+  hasWebSocket: boolean;
   canIssueToken: boolean;
   /** Redirect URI used instead of Switchboard's own when signing in; suggested again on reconnect. */
   redirectUri: string | null;
@@ -73,7 +74,7 @@ export function toView(r: any): ConnectionView {
     return { kind: r.kind ?? 'http', readOnly: true, id: conn.id, name: conn.name, serviceId: conn.serviceId,
       icon: remote?.icon, serviceName: remote?.serviceName ?? conn.serviceId, methodId: 'shared', methodName: 'Shared connection', account: null, config: {},
       status: unavailable ? 'unavailable' : 'ok', statusMessage: !remote ? 'This connection is no longer shared with you' : !peer?.online ? `${peer.name} is offline` : remote.status !== 'ok' ? 'The connection is unavailable on its peer' : null,
-      baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, canIssueToken: false, redirectUri: null,
+      baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, hasWebSocket: !!remote?.hasWebSocket, canIssueToken: false, redirectUri: null,
       createdAt: r.created_at, updatedAt: r.updated_at, lastUsedAt: r.last_used_at,
       peer: { id: r.peer_id, name: peer?.name ?? r.peer_id, online: !!peer?.online, lastSeenAt: peer?.lastSeenAt ?? null } };
   }
@@ -100,6 +101,7 @@ export function toView(r: any): ConnectionView {
     statusMessage: unavailable ?? r.status_message,
     baseUrl,
     hasOpenapi: !!service?.openapi,
+    hasWebSocket: !!service?.websocket,
     canIssueToken: !!method?.token,
     redirectUri: r.redirect_uri ?? null,
     createdAt: r.created_at,
@@ -163,6 +165,7 @@ export async function deleteConnection(userId: string, ref: string) {
 
 export function saveCredentials(id: string, credentials: unknown) {
   run(`UPDATE connections SET credentials_enc = ?, status = 'ok', status_message = NULL, updated_at = ? WHERE id = ?`, encrypt(credentials), now(), id);
+  credentialsChanged(id);
 }
 
 export function markError(id: string, message: string) {

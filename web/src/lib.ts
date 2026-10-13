@@ -66,6 +66,7 @@ export async function copy(text: string) {
 }
 
 export const METHOD_COLORS: Record<string, string> = {
+  WS: 'text-sky-600 dark:text-sky-400',
   GET: 'text-emerald-600 dark:text-emerald-400',
   POST: 'text-amber-600 dark:text-amber-400',
   PUT: 'text-sky-600 dark:text-sky-400',

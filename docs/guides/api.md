@@ -147,3 +147,44 @@ gmail = build("gmail", "v1", credentials=Credentials(token))
 - **Expired sign-ins:** Switchboard refreshes tokens itself, and retries once with fresh credentials after a `401`. If a sign-in can no longer be refreshed, the connection shows an error on the Connections page and needs **Reconnect**.
 - **Activity:** every request is in the [activity log](/activity), with secrets masked.
 - **API description:** an OpenAPI description of Switchboard's API is at [`/api/openapi.json`]({{publicUrl}}/api/openapi.json), for code generators and the console.
+
+## WebSocket operations
+
+Connections with `hasWebSocket: true` offer plugin-defined commands and subscriptions.
+Switchboard keeps their sockets and credentials on the server. Clients cannot supply
+an endpoint or authentication frame.
+
+1. `GET /api/connections/:ref/websocket/operations?query=logs` discovers operations.
+   Follow `nextOffset` with `offset` until absent. URL-encode the connection reference.
+2. `GET /api/connections/:ref/websocket/operations/:operationId` returns the complete
+   schema. URL-encode the operation id, including any slashes.
+3. `POST /api/connections/:ref/websocket/call` with
+   `{ "operationId": "example/read", "arguments": {} }` executes a command and
+   returns `{ result, durationMs, auditId }`.
+
+For an operation with `mode: "subscription"`, POST the same input to
+`/api/connections/:ref/websocket/subscriptions`. The response contains an `id`.
+POST `{ "cursor": 0, "waitMs": 25000 }` to
+`/api/connections/:ref/websocket/subscriptions/:id/read`. Save `nextCursor` for the
+next read; repeated cursors return the same retained events. Inspect `gap` for
+lost events and `status` for interruptions. DELETE the subscription URL to stop it.
+GET the subscriptions collection to list this caller's handles.
+
+Handles belong to the creating token or browser session. Reads renew a five-minute
+lease; unused subscriptions expire. Terminal buffers remain readable for five
+minutes. Handles and events are in memory and are lost on restart. Disconnections
+stop subscriptions; start a new one explicitly. Lost command replies are never
+replayed because a write may already have completed.
+
+Defaults: 100 events per page (maximum 500), 512 KiB pages, 1,000 events or 1 MiB per
+buffer. Overflow drops the oldest events and reports a gap. Arguments and individual
+events are limited to 256 KiB; frames/results to 1 MiB. Opening/authentication has a
+30-second deadline and operations a 60-second deadline. Socket and retained
+subscription quotas are eight per caller, sixteen per user, sixty-four per instance.
+These are server limits, not client settings.
+
+The console supports commands, saved commands, and subscriptions. It pauses event
+reads while hidden and stops subscriptions it started when leaving the WebSocket
+console. Abrupt closure is handled by lease expiry. Saved calls use
+`kind: "websocket"` and `websocketRequest: { operationId, arguments }`; only commands
+can be saved. `/api/calls/:id/run` accepts argument overrides.

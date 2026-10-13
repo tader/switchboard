@@ -255,6 +255,21 @@ const migrations: string[] = [
   UPDATE plugins SET enabled = 0 WHERE id = 'switchboard';
   `,
 
+  `
+  CREATE TABLE saved_calls_ws (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    connection_id TEXT, name TEXT NOT NULL, method TEXT NOT NULL, url TEXT NOT NULL,
+    path_params TEXT, query TEXT, headers TEXT, body TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'http' CHECK(kind IN ('http', 'mcp', 'websocket')), mcp_request TEXT, websocket_request TEXT
+  );
+  INSERT INTO saved_calls_ws SELECT id, user_id, connection_id, name, method, url, path_params, query, headers, body,
+    created_at, updated_at, kind, mcp_request, NULL FROM saved_calls;
+  DROP TABLE saved_calls;
+  ALTER TABLE saved_calls_ws RENAME TO saved_calls;
+  ALTER TABLE audit_log ADD COLUMN ws_operation TEXT;
+  ALTER TABLE audit_log ADD COLUMN ws_target TEXT;
+  ALTER TABLE audit_log ADD COLUMN ws_outcome TEXT;
+  `,
 ];
 
 export function initDb() {

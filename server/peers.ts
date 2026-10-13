@@ -1,3 +1,4 @@
+import { peerDisconnected } from './peer-events.ts';
 import { configuredPeerLinks, onPeersChanged, peersChanged, peerStatuses, peerToken, sharedConnection, validPeerName, validPeerUrl, type PeerStatus } from './peer-settings.ts';
 import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -13,7 +14,7 @@ const MAX_MESSAGE = PEER_MAX_MESSAGE;
 
 export interface PeerConnection {
   id: string; name: string; serviceId: string; serviceName: string; kind: 'http' | 'mcp';
-  icon?: string; hasOpenapi: boolean; status: 'ok' | 'error' | 'unavailable'; route: string[];
+  icon?: string; hasOpenapi: boolean; hasWebSocket?: boolean; status: 'ok' | 'error' | 'unavailable'; route: string[];
 }
 
 interface Session {
@@ -186,7 +187,7 @@ export function validatePeerCatalog(value: any): { instanceId: string; connectio
     if (!Array.isArray(c.route) || !c.route.length || c.route.length > MAX_PEER_HOPS || c.route.some((id: any) => typeof id !== 'string' || !id || id.length > 100) || new Set(c.route).size !== c.route.length || c.route.includes(instanceId()) || c.route.at(-1) !== value.instanceId) throw new Error('Peer route contains a loop');
     seen.add(c.id);
     return { id: c.id, name: c.name.slice(0, 100), serviceId: c.serviceId, serviceName: c.serviceName.slice(0, 100), kind: c.kind, status: c.status,
-      hasOpenapi: !!c.hasOpenapi, icon: typeof c.icon === 'string' && c.icon.length <= 100_000 ? c.icon : undefined, route: [...c.route] };
+      hasOpenapi: !!c.hasOpenapi, hasWebSocket: c.hasWebSocket === true, icon: typeof c.icon === 'string' && c.icon.length <= 100_000 ? c.icon : undefined, route: [...c.route] };
   });
   return { instanceId: value.instanceId, connections };
 }
@@ -201,6 +202,8 @@ function closeSession(id: string, code: number, reason: string) {
   for (const active of session.inFlight.values()) active.controller.abort();
   session.inFlight.clear();
   session.socket.close(code, reason.slice(0, 123));
+  peerDisconnected(id);
+  for (const row of all('SELECT id FROM connections WHERE peer_id = ?', id)) connectionChanged(row.id);
 }
 
 function bindIdentity(id: string, remote: unknown): string {

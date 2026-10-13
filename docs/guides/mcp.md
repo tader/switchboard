@@ -187,3 +187,21 @@ Any assistant that supports remote MCP servers over HTTP ("Streamable HTTP") wor
 | Requests fail with "not an allowed host" | Requests can only go to the service's own hosts, so credentials never leak elsewhere. |
 
 Switchboard speaks MCP 2026-07-28, and 2025-03-26 to 2025-11-25 for older clients.
+
+## WebSocket-backed services
+
+For a connection with `hasWebSocket`, use `search_websocket_operations`, then
+`get_websocket_operation` to inspect the schema, and `call_websocket_operation`
+with `connection`, `operationId`, and `arguments`. Results are returned as complete
+`structuredContent` with a short text summary. The MCP transport does not change.
+
+For live events, call `subscribe_websocket`, preserve its subscription id, and use
+`read_websocket_events` with `subscriptionId`, `cursor`, and optional `waitMs`
+(up to 25,000). Preserve `nextCursor`, inspect overflow `gap` and terminal `status`,
+and stop with `unsubscribe_websocket`. `list_websocket_subscriptions` lists this
+token's handles. Each of these tools takes `connection`.
+
+Reads renew a five-minute lease. Subscriptions do not survive a server restart and
+do not reconnect automatically. Another token cannot access a handle, even for the
+same account. `list_saved_calls` and `run_saved_call` also support saved WebSocket
+commands. Existing connection restrictions and MCP-only token audiences apply.

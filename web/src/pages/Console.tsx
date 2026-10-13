@@ -1,3 +1,4 @@
+import { WebSocketConsole } from './WebSocketConsole';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
@@ -84,6 +85,7 @@ export function Console() {
   }, [savedParam, saved.data]);
 
   const loadSaved = (s: SavedCall) => {
+    if (s.kind === 'websocket') { if (s.connectionId) setParams({ connection: s.connectionId, saved: s.id, transport: 'websocket' }, { replace: true }); return; }
     if (s.kind === 'mcp') { if (s.connectionId) setParams({ connection: s.connectionId, saved: s.id }, { replace: true }); return; }
     setDraft({ method: s.method, url: s.url, pathParams: s.pathParams, query: s.query, headers: s.headers, body: s.body });
     setCurrent(s);
@@ -143,7 +145,7 @@ export function Console() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (connection?.kind === 'mcp') return;
+      if (connection?.kind === 'mcp' || params.get('transport') === 'websocket') return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
         send();
@@ -208,12 +210,14 @@ export function Console() {
 
   const service = services.data?.find((s) => s.id === connection?.serviceId);
   if (connection?.kind === 'mcp') return <McpConsole key={connection.id} connection={connection} connections={usable} onConnection={setConnection} />;
+  if (connection?.hasWebSocket && params.get('transport') === 'websocket') return <WebSocketConsole key={connection.id} connection={connection} connections={usable} onConnection={setConnection} onHttp={() => setParams({ connection: connection.id }, { replace: true })} />;
   const groups = new Map<string, Connection[]>();
   for (const c of usable) groups.set(c.serviceName, [...(groups.get(c.serviceName) ?? []), c]);
 
   const sidebar = (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-zinc-200 p-3 dark:border-zinc-800">
+        {connection?.hasWebSocket && <Button className="mb-2 w-full" onClick={() => setParams({ connection: connection.id, transport: 'websocket' }, { replace: true })}>WebSocket operations</Button>}
         <Menu
           block
           align="start"
