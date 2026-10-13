@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/tader/switchboard/compare/v0.2.0...v0.3.0) (2026-10-13)
+
+
+### Features
+
+* add managed WebSocket plugin operations ([8884869](https://github.com/tader/switchboard/commit/8884869e460eac41f03f3458d3cef835b3a2e4f7))
+* add managed WebSocket plugin operations ([4f576c0](https://github.com/tader/switchboard/commit/4f576c069701404e13ca3ce7aa46978893a80b1d))
+
 ## [0.2.0](https://github.com/tader/switchboard/compare/v0.1.3...v0.2.0) (2026-10-09)
 
 
