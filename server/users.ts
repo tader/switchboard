@@ -1,3 +1,4 @@
+import { accessChanged } from './access-events.ts';
 import { all, now, one, run } from './db.ts';
 import { hashPassword, randomId, randomToken, sha256, verifyPassword } from './crypto.ts';
 import { config } from './config.ts';
@@ -134,10 +135,12 @@ export function sessionUser(token: string): User | undefined {
 
 export function deleteSession(token: string) {
   run('DELETE FROM sessions WHERE token_hash = ?', sha256(token));
+  accessChanged();
 }
 
 export function deleteOtherSessions(userId: string, keepToken?: string) {
   run('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?', userId, keepToken ? sha256(keepToken) : '');
+  accessChanged();
 }
 
 // --- invites (one-time links to set a password) ---
@@ -164,6 +167,7 @@ export function acceptInvite(token: string, password: string): User {
   setPassword(user.id, password);
   run('DELETE FROM invites WHERE user_id = ?', user.id);
   run('DELETE FROM sessions WHERE user_id = ?', user.id);
+  accessChanged();
   run('UPDATE users SET disabled = 0 WHERE id = ?', user.id);
   return getUser(user.id)!;
 }
@@ -225,11 +229,13 @@ export function updateToken(userId: string, id: string, patch: { name?: string; 
   if (patch.connectionIds !== undefined) {
     run('UPDATE api_tokens SET connection_ids = ? WHERE id = ?', patch.connectionIds ? JSON.stringify(patch.connectionIds) : null, id);
   }
+  accessChanged();
   return toToken(one('SELECT * FROM api_tokens WHERE id = ?', id));
 }
 
 export function deleteToken(userId: string, id: string) {
   run('DELETE FROM api_tokens WHERE id = ? AND user_id = ?', id, userId);
+  accessChanged();
 }
 
 export function tokenUser(secret: string): { user: User; token: ApiToken } | undefined {

@@ -165,6 +165,10 @@ export interface AuthMethod {
    * so cached tokens should be refreshed. Return new credentials to persist them.
    */
   authorize(req: OutgoingRequest, conn: Connection, opts: { force?: boolean; signal?: AbortSignal }): Promise<void | { credentials?: any }> | void | { credentials?: any };
+  /** Message authentication before the operation session starts. For a definitive
+   * rejection throw an Error with code='WEBSOCKET_AUTH_REJECTED'; core retries once
+   * with force=true. Never include credentials in error messages. */
+  authenticateWebSocket?(channel: WebSocketChannel, conn: Connection, opts: { force: boolean; signal: AbortSignal }): Promise<void | { credentials?: any }>;
   /** Hands out a usable bearer token, for scripts that use a provider SDK directly. */
   token?(conn: Connection, opts: { force?: boolean; signal?: AbortSignal }): Promise<TokenResult>;
   /** Called when the connection is deleted. */
@@ -193,5 +197,40 @@ export interface ServiceDefinition {
    * When its server is a placeholder or not an allowed host, the connection's base URL is used instead.
    */
   openapi?: string | object | ((conn: Connection) => string | object | undefined | Promise<string | object | undefined>);
+  /** Optional alongside REST. Endpoint and credentials are never client inputs. */
+  websocket?: WebSocketCapability;
   authMethods: AuthMethod[];
+}
+
+export interface WebSocketOperation {
+  id: string;
+  title: string;
+  description?: string;
+  mode: 'command' | 'subscription';
+  inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  eventSchema?: Record<string, unknown>;
+  readOnlyHint?: boolean;
+  idempotentHint?: boolean;
+}
+
+/** A single receive consumer (authentication first, then the protocol session).
+ * Frames arriving before receive() are buffered. No socket implementation import
+ * is necessary. Plugins must discard late replies to cancelled commands. */
+export interface WebSocketChannel {
+  send(data: string | Uint8Array): Promise<void>;
+  receive(signal?: AbortSignal): Promise<string | Uint8Array>;
+  closed: Promise<void>;
+}
+
+export interface WebSocketSession {
+  call(operationId: string, args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+  subscribe?(operationId: string, args: Record<string, unknown>, emit: (event: unknown) => void, signal: AbortSignal): Promise<{ stop?: () => void | Promise<void> }>;
+  dispose?(): void | Promise<void>;
+}
+
+export interface WebSocketCapability {
+  endpoint: string | ((conn: Connection) => string);
+  operations: WebSocketOperation[];
+  createSession(args: { channel: WebSocketChannel; connection: Connection; signal: AbortSignal }): WebSocketSession | Promise<WebSocketSession>;
 }

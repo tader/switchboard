@@ -1,3 +1,5 @@
+import { executeWebSocket } from './websocket.ts';
+import { peerWebsocketAccess } from './websocket-access.ts';
 import { toView, loadConnection } from './connections.ts';
 import { plugins } from './plugins/manager.ts';
 import { execute, type CallInput } from './proxy.ts';
@@ -24,7 +26,7 @@ export function sharedCatalogue(peerId: string, targetInstance?: string) {
     if (route.length > MAX_PEER_HOPS || new Set(route).size !== route.length || (targetInstance && route.includes(targetInstance))) return [];
     return [{ id: row.id, name: c.name, serviceId: c.serviceId, serviceName: c.serviceName, kind: c.kind,
       icon: row.peer_id ? peerConnection(row.user_id, row.peer_id, row.remote_connection_id).icon : plugins.service(c.serviceId)?.icon,
-      hasOpenapi: c.hasOpenapi, status: c.status, route }];
+      hasOpenapi: c.hasOpenapi, hasWebSocket: c.hasWebSocket, status: c.status, route }];
   });
   return { instanceId: instanceId(), connections };
 }
@@ -46,6 +48,7 @@ export async function handleSharedRequest(peerId: string, peerUserId: string, op
   const row = sharedConnection(peerId, payload.connection);
   const user = getUser(row.user_id)!;
   const caller = peerCaller(peerId, peerUserId, payload.caller);
+  if (operation === 'websocket') return executeWebSocket(peerWebsocketAccess(user, peerId, peerUserId, caller.tokenId!), row.id, payload.input, signal, caller);
   if (operation === 'mcp') return executeMcp(user, row.id, payload.input, signal, caller);
   if (operation === 'openapi') {
     if (row.peer_id) {

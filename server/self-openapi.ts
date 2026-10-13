@@ -40,7 +40,8 @@ const saved = {
   required: ['name'],
   properties: {
     name: { type: 'string', description: 'Unique per user; saved calls run by name or id' },
-    kind: { type: 'string', enum: ['http', 'mcp'], default: 'http' },
+    kind: { type: 'string', enum: ['http', 'mcp', 'websocket'], default: 'http' },
+    websocketRequest: { type: 'object', required: ['operationId', 'arguments'], properties: { operationId: { type: 'string' }, arguments: { type: 'object' } }, description: 'Save declared command operations only' },
     mcpRequest: { ...mcpRequest, description: 'For kind=mcp, save tools/call, resources/read or prompts/get' },
     connectionId: { type: 'string' },
     method: { type: 'string', default: 'GET' },
@@ -61,6 +62,15 @@ export function openapiDocument() {
     components: { securitySchemes: { token: { type: 'http', scheme: 'bearer' } } },
     security: [{ token: [] }],
     paths: {
+      '/api/connections/{ref}/websocket/operations': { get: op('WebSocket', 'Search/list WebSocket operations', { parameters: [ref, { name: 'query', in: 'query', schema: { type: 'string' } }, { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0 } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }] }) },
+      '/api/connections/{ref}/websocket/operations/{operationId}': { get: op('WebSocket', 'Inspect a WebSocket operation', { parameters: [ref, { name: 'operationId', in: 'path', required: true, description: 'URL-encode slashes in operation ids', schema: { type: 'string' } }] }) },
+      '/api/connections/{ref}/websocket/call': { post: op('WebSocket', 'Execute a declared command', { parameters: [ref], requestBody: json({ type: 'object', required: ['operationId'], properties: { operationId: { type: 'string' }, arguments: { type: 'object', default: {} } } }) }) },
+      '/api/connections/{ref}/websocket/subscriptions': {
+        get: op('WebSocket', 'List subscription handles owned by this caller', { parameters: [ref] }),
+        post: op('WebSocket', 'Start a declared subscription', { parameters: [ref], requestBody: json({ type: 'object', required: ['operationId'], properties: { operationId: { type: 'string' }, arguments: { type: 'object', default: {} } } }) }),
+      },
+      '/api/connections/{ref}/websocket/subscriptions/{id}/read': { post: op('WebSocket', 'Read buffered events; preserve nextCursor and inspect gaps/status', { parameters: [ref, id('Subscription handle')], requestBody: json({ type: 'object', properties: { cursor: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 }, waitMs: { type: 'integer', minimum: 0, maximum: 25000, default: 0 } } }) }) },
+      '/api/connections/{ref}/websocket/subscriptions/{id}': { delete: op('WebSocket', 'Stop a subscription; terminal buffers remain readable for five minutes', { parameters: [ref, id('Subscription handle')] }) },
       '/api/me': { get: op('Account', 'Who the token belongs to') },
       '/api/me/token': { delete: op('Account', 'Revoke the token making this request') },
       '/api/services': { get: op('Connections', 'Services and their sign-in methods') },

@@ -16,6 +16,9 @@ interface Entry {
   client: { tokenId: string; name: string } | null;
   savedCall: string | null;
   method: string | null;
+  wsOperation: string | null;
+  wsTarget: string | null;
+  wsOutcome: string | null;
   mcpOperation: string | null;
   mcpTarget: string | null;
   mcpOutcome: string | null;
@@ -383,7 +386,7 @@ export function Activity() {
                             {e.method}
                           </span>
                           <span className="min-w-0 truncate font-mono text-[12px]" title={e.url ?? undefined}>
-                            {e.mcpOperation ? `${e.mcpOperation}${e.mcpTarget ? ` · ${e.mcpTarget}` : ''}` : path}
+                            {e.wsOperation ? `${e.wsOperation}${e.wsTarget ? ` · ${e.wsTarget}` : ''}` : e.mcpOperation ? `${e.mcpOperation}${e.mcpTarget ? ` · ${e.mcpTarget}` : ''}` : path}
                           </span>
                           {e.savedCall && <Badge className="max-w-40 shrink-0 truncate">{e.savedCall}</Badge>}
                         </div>
@@ -459,6 +462,7 @@ function EntryDialog({ id, onClose, onFilter }: { id: number | null; onClose: ()
             <Alert tone="amber">The raw access token was handed out. Requests made with it go to the service directly and are not in this trail.</Alert>
           )}
           <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-1.5">
+            {e.wsOperation && <><Row label="Operation">{e.wsOperation}</Row><Row label="Target">{e.wsTarget ?? '—'}</Row><Row label="Outcome">{e.wsOutcome}</Row></>}
             {e.mcpOperation && <><Row label="Operation">{e.mcpOperation}</Row><Row label="Target">{e.mcpTarget ?? '—'}</Row><Row label="Outcome">{e.mcpOutcome}</Row></>}
             <Row label="Status">
               {e.status ?? '—'}

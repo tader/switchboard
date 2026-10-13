@@ -95,6 +95,7 @@ export interface Connection {
   statusMessage: string | null;
   baseUrl: string | null;
   hasOpenapi: boolean;
+  hasWebSocket: boolean;
   canIssueToken: boolean;
   redirectUri: string | null;
   createdAt: number;
@@ -115,8 +116,9 @@ export interface Pair {
 }
 
 export interface SavedCall {
+  websocketRequest: { operationId: string; arguments: Record<string, unknown> } | null;
   id: string;
-  kind: 'http' | 'mcp';
+  kind: 'http' | 'mcp' | 'websocket';
   mcpRequest: { operation: 'tools/call' | 'resources/read' | 'prompts/get'; name?: string; uri?: string; arguments?: Record<string, unknown> } | null;
   name: string;
   connectionId: string | null;

@@ -1,3 +1,5 @@
+import { stopWebSockets } from './websocket-transport.ts';
+import { stopWebSocketSubscriptions } from './websocket.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
@@ -94,6 +96,8 @@ const stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Se
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
+    stopWebSocketSubscriptions();
+    stopWebSockets();
     stopProviderMcp();
     stopPeerWebSockets();
     stopPeerAgent();

@@ -1,3 +1,6 @@
+import { validateWebSocketValue } from '../websocket-schema.ts';
+import { executeWebSocket } from '../websocket.ts';
+import { websocketAccess } from '../websocket-access.ts';
 import { Hono, type Context } from 'hono';
 import { type Env, assertConnectionAccess, identify, requireFullAccess, requireUser } from '../auth.ts';
 import { config } from '../config.ts';
@@ -61,6 +64,23 @@ for (const operation of ['tools/list', 'tools/call', 'resources/list', 'resource
     return c.json(await executeMcp(c.get('user'), row.id, { ...body, operation } as McpInput, c.req.raw.signal, callerFrom(c, 'call')));
   });
 }
+
+// WebSocket operations use the same identity, scopes and cookie-origin protection.
+api.get('/connections/:ref/websocket/operations', async c => c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), {
+  action: 'operations', query: c.req.query('query'), limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')),
+  offset: c.req.query('offset') === undefined ? undefined : Number(c.req.query('offset')),
+}, c.req.raw.signal, callerFrom(c, 'call'))));
+// Operation ids may contain slashes, so the console uses an encoded path component.
+api.get('/connections/:ref/websocket/operations/:operationId', async c => c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), { action: 'operation', operationId: c.req.param('operationId') }, c.req.raw.signal, callerFrom(c, 'call'))));
+api.get('/connections/:ref/websocket/subscriptions', async c => c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), { action: 'subscriptions' }, c.req.raw.signal, callerFrom(c, 'call'))));
+for (const [path, action] of [['call', 'call'], ['subscriptions', 'subscribe'], ['subscriptions/:id/read', 'read']] as const) {
+  api.post(`/connections/:ref/websocket/${path}`, async c => {
+    const body = await c.req.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw badRequest('WebSocket input must be an object');
+    return c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref')!, { ...body, action, ...(action === 'read' ? { subscriptionId: c.req.param('id') } : {}) }, c.req.raw.signal, callerFrom(c, 'call')));
+  });
+}
+api.delete('/connections/:ref/websocket/subscriptions/:id', async c => c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), { action: 'unsubscribe', subscriptionId: c.req.param('id') }, c.req.raw.signal, callerFrom(c, 'call'))));
 
 api.post('/connections', requireFullAccess, async (c) => {
   const body = await c.req.json();
@@ -188,6 +208,7 @@ const toSaved = (r: any) => ({
   id: r.id,
   kind: r.kind,
   mcpRequest: r.mcp_request ? JSON.parse(r.mcp_request) : null,
+  websocketRequest: r.websocket_request ? JSON.parse(r.websocket_request) : null,
   name: r.name,
   connectionId: r.connection_id,
   method: r.method,
@@ -202,7 +223,8 @@ const toSaved = (r: any) => ({
 
 function savedFields(b: any) {
   const kind = b.kind ?? 'http';
-  if (kind !== 'http' && kind !== 'mcp') throw badRequest('Saved request kind must be http or mcp');
+  if (!['http', 'mcp', 'websocket'].includes(kind)) throw badRequest('Saved request kind must be http, mcp or websocket');
+  if (kind === 'websocket' && (!b.websocketRequest || typeof b.websocketRequest.operationId !== 'string' || !b.websocketRequest.arguments || typeof b.websocketRequest.arguments !== 'object' || Array.isArray(b.websocketRequest.arguments))) throw badRequest('A saved WebSocket command needs operationId and object arguments');
   if (kind === 'mcp') {
     validateMcpInput(b.mcpRequest);
     if (!['tools/call', 'resources/read', 'prompts/get'].includes(b.mcpRequest.operation)) throw badRequest('Save a tool call, resource read or prompt request');
@@ -213,6 +235,7 @@ function savedFields(b: any) {
   return {
     kind,
     mcpRequest: kind === 'mcp' ? JSON.stringify(b.mcpRequest) : null,
+    websocketRequest: kind === 'websocket' ? JSON.stringify({ operationId: b.websocketRequest.operationId, arguments: b.websocketRequest.arguments }) : null,
     name,
     method: String(b.method ?? 'GET').toUpperCase(),
     url: String(b.url ?? ''),
@@ -227,7 +250,7 @@ function savedConnectionId(c: Context<Env>, ref: unknown, kind?: string): string
   if (!ref) return null;
   const row = getConnectionRow(c.get('user').id, String(ref));
   assertConnectionAccess(c, row.id);
-  if (kind && row.kind !== kind) throw badRequest('The saved request and connection must use the same protocol');
+  if (kind && row.kind !== (kind === 'websocket' ? 'http' : kind)) throw badRequest('The saved request and connection must use the same protocol');
   return row.id;
 }
 
@@ -240,11 +263,17 @@ api.get('/calls', (c) => {
 api.post('/calls', requireFullAccess, async (c) => {
   const b = await c.req.json();
   const f = savedFields(b);
+  if (f.kind === 'websocket') {
+    if (!b.connectionId) throw badRequest('A saved WebSocket command needs a connection');
+    const { operation } = await executeWebSocket(websocketAccess(c), b.connectionId, { action: 'operation', operationId: b.websocketRequest.operationId });
+    if (operation.mode !== 'command') throw badRequest('Only WebSocket commands can be saved');
+    validateWebSocketValue(operation, 'input', b.websocketRequest.arguments);
+  }
   const id = randomId('s');
   run(
-    `INSERT INTO saved_calls (id, user_id, connection_id, name, method, url, path_params, query, headers, body, created_at, updated_at, kind, mcp_request)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    id, c.get('user').id, savedConnectionId(c, b.connectionId, f.kind), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), now(), f.kind, f.mcpRequest,
+    `INSERT INTO saved_calls (id, user_id, connection_id, name, method, url, path_params, query, headers, body, created_at, updated_at, kind, mcp_request, websocket_request)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, c.get('user').id, savedConnectionId(c, b.connectionId, f.kind), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), now(), f.kind, f.mcpRequest, f.websocketRequest,
   );
   return c.json(toSaved(one('SELECT * FROM saved_calls WHERE id = ?', id)), 201);
 });
@@ -263,9 +292,15 @@ api.put('/calls/:id', requireFullAccess, async (c) => {
   const r = getSaved(c, c.req.param('id'));
   const b = await c.req.json();
   const f = savedFields(b);
+  if (f.kind === 'websocket') {
+    if (!b.connectionId) throw badRequest('A saved WebSocket command needs a connection');
+    const { operation } = await executeWebSocket(websocketAccess(c), b.connectionId, { action: 'operation', operationId: b.websocketRequest.operationId });
+    if (operation.mode !== 'command') throw badRequest('Only WebSocket commands can be saved');
+    validateWebSocketValue(operation, 'input', b.websocketRequest.arguments);
+  }
   run(
-    `UPDATE saved_calls SET connection_id = ?, name = ?, method = ?, url = ?, path_params = ?, query = ?, headers = ?, body = ?, updated_at = ?, kind = ?, mcp_request = ? WHERE id = ?`,
-    savedConnectionId(c, b.connectionId, f.kind), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), f.kind, f.mcpRequest, r.id,
+    `UPDATE saved_calls SET connection_id = ?, name = ?, method = ?, url = ?, path_params = ?, query = ?, headers = ?, body = ?, updated_at = ?, kind = ?, mcp_request = ?, websocket_request = ? WHERE id = ?`,
+    savedConnectionId(c, b.connectionId, f.kind), f.name, f.method, f.url, f.pathParams, f.query, f.headers, f.body, now(), f.kind, f.mcpRequest, f.websocketRequest, r.id,
   );
   return c.json(toSaved(one('SELECT * FROM saved_calls WHERE id = ?', r.id)));
 });
@@ -286,6 +321,10 @@ api.post('/calls/:id/run', async (c) => {
   if (!connection) throw badRequest('This saved call has no connection; pass one as "connection"');
   const row = getConnectionRow(c.get('user').id, connection);
   assertConnectionAccess(c, row.id);
+  if (s.kind === 'websocket') {
+    if (o.arguments !== undefined && (!o.arguments || typeof o.arguments !== 'object' || Array.isArray(o.arguments))) throw badRequest('WebSocket arguments must be an object');
+    return c.json(await executeWebSocket(websocketAccess(c), row.id, { action: 'call', ...s.websocketRequest, arguments: { ...s.websocketRequest.arguments, ...o.arguments } }, c.req.raw.signal, callerFrom(c, 'saved-call', s.name)));
+  }
   if (s.kind === 'mcp') {
     if (o.arguments !== undefined && (!o.arguments || typeof o.arguments !== 'object' || Array.isArray(o.arguments))) throw badRequest('MCP arguments must be an object');
     const input = { ...s.mcpRequest, ...(o.arguments === undefined ? {} : { arguments: { ...s.mcpRequest.arguments, ...o.arguments } }), ...(o.uri === undefined ? {} : { uri: o.uri }) };

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { satisfies, valid, validRange } from 'semver';
 import { mcpOAuth } from '../mcp-auth.ts';
 import { connectionChanged } from '../connection-events.ts';
+import { validateWebSocketCapability } from '../websocket-schema.ts';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { callbackUrl, config } from '../config.ts';
@@ -509,6 +510,10 @@ function validateFields(fields: Field[], where: string) {
 }
 
 function validateService(s: ServiceDefinition) {
+  if (s.websocket) {
+    if (s.kind === 'mcp') throw new Error('WebSocket operations belong to HTTP services');
+    validateWebSocketCapability(s.websocket);
+  }
   if (!s?.id || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(s.id)) throw new Error(`Invalid service id "${s?.id}"`);
   if (s.kind !== undefined && s.kind !== 'http' && s.kind !== 'mcp') throw new Error(`Invalid connection kind for service ${s.id}`);
   if (!s.name) throw new Error(`Service "${s.id}" needs a name`);

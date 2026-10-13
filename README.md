@@ -223,3 +223,9 @@ docker run -d --name switchboard -p 8770:8770 -v switchboard-data:/data ghcr.io/
 Release-please opens a release PR from Conventional Commits (`fix:` bumps patch, `feat:` bumps minor, `feat!:` signals breaking changes). Merge that PR to update versions and changelogs and create the GitHub release. Switchboard's release workflow calls the Docker publisher directly, so releases created with `GITHUB_TOKEN` still publish images. Enable **Allow GitHub Actions to create and approve pull requests** in each active repository's Actions settings. No personal access token secret is needed.
 
 Google, Microsoft, Atlassian and macOS plugins have independent release components within their family repositories; their `plugin.json` versions are updated together with their component package manifests. The community catalog is unversioned and always read from main.
+
+Plugins can also expose WebSocket-backed commands and live subscriptions alongside
+REST. Switchboard manages authentication and sockets and exposes the operations to
+API clients, MCP clients, peers, and the console. Events use bounded in-memory
+buffers and five-minute subscription leases. See the API guide and plugin authoring
+guide for the operation and authentication contracts.

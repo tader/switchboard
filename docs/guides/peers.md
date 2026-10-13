@@ -46,3 +46,17 @@ Both instances require peer protocol 3. Update older Shell command installations
 `SWITCHBOARD_PEER_URL` and `SWITCHBOARD_PEER_TOKEN` bootstrap one outgoing peer once; later changes belong in the UI. Historical satellite environment variables are accepted only as upgrade aliases. Legacy shadow-owned connections are assigned to the oldest active local administrator and remain unshared until explicitly selected.
 
 The `switchboard-plugin-switchboard` integration is retired in favor of Peers. Its records are preserved but unavailable; create a peer and select sharing grants locally on each instance.
+
+## WebSocket operations
+
+Peers advertise WebSocket capabilities for explicitly shared connections. Commands
+and subscriptions work through the same API, MCP tools, and console as local
+connections; provider credentials stay on the owning instance. Each hop applies
+sharing and caller permissions. Older peers without this capability continue to
+support their existing HTTP/MCP operations.
+
+Subscription events are copied through bounded background reads into the local
+buffer. Each hop can report overflow; clients must inspect the returned gap. Peer
+loss interrupts subscriptions and preserves events already retrieved. Stops and
+revocations trigger remote cleanup; when a link is unavailable, remote lease expiry
+releases the upstream resources. Subscriptions must be recreated after interruption.

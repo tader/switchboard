@@ -5,7 +5,7 @@ import { HttpError } from './http.ts';
 
 export const PEER_PROTOCOL = 3;
 export const PEER_MAX_MESSAGE = 2 * 1024 * 1024;
-export const PEER_OPERATIONS = new Set(['call', 'mcp', 'openapi']);
+export const PEER_OPERATIONS = new Set(['call', 'mcp', 'openapi', 'websocket']);
 export const MAX_PEER_HOPS = 8;
 export interface PeerRoute { path: string[]; deadline: number }
 export const peerRoute = new AsyncLocalStorage<PeerRoute>();
