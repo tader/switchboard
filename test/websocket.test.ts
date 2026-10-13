@@ -39,6 +39,7 @@ let base = '';
 let opened = 0;
 let mutations = 0;
 let stopped = 0;
+let latestWatch: { socket: WebSocket; id: number } | undefined;
 upstream.on('upgrade', (req, socket, head) => {
   if (req.url?.includes('header') && req.headers.authorization !== 'Bearer upstream-secret') { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return; }
   wss.handleUpgrade(req, socket, head, ws => {
@@ -57,12 +58,14 @@ upstream.on('upgrade', (req, socket, head) => {
       if (msg.type === 'stop') stopped++;
       ws.send(JSON.stringify({ id: msg.id, type: 'result', result: { value: msg.value ?? 'ok' } }));
       if (msg.type === 'watch') {
+        latestWatch = { socket: ws, id: msg.id };
         let i = 0;
         const send = () => {
           for (let count = 0; count < 50 && i < (msg.count ?? 1); count++, i++) {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ id: msg.id, type: 'event', event: { value: msg.payload === 'oversized' ? 'x'.repeat(256 * 1024) : msg.payload ?? String(i) } }));
           }
-          if (i < (msg.count ?? 1) && ws.readyState === WebSocket.OPEN) setTimeout(send, 2);
+          // Deliberately take longer than the old 150ms assertion window for overflow.
+          if (i < (msg.count ?? 1) && ws.readyState === WebSocket.OPEN) setTimeout(send, 10);
         };
         send();
       }
@@ -87,6 +90,16 @@ async function request(route: string, body?: unknown, secret = full.secret, meth
   return { status: response.status, data: await response.json() as any };
 }
 const root = (id: string) => `/connections/${id}/websocket`;
+
+async function eventually<T>(condition: () => T | Promise<T>, message: string): Promise<NonNullable<T>> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const result = await condition();
+    if (result) return result as NonNullable<T>;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail(`Timed out waiting for ${message}`);
+}
 
 test('real WebSockets: discovery, message/header authentication, refresh, reuse and schema validation', async () => {
   for (const method of ['message', 'header']) {
@@ -130,18 +143,32 @@ test('subscriptions acknowledge, replay cursors, long poll, stop and retain term
   assert.equal((await request(`${endpoint}/subscriptions/${id}/read`, {}, createToken(user.id, 'wrong-handle', [conn.id]).secret)).status, 404);
   assert.equal((await request(`${endpoint}/subscriptions/${id}/read`, { cursor: 100 })).status, 400);
   const prior = stopped; const ended = await request(`${endpoint}/subscriptions/${id}`, undefined, full.secret, 'DELETE'); assert.equal(ended.data.status, 'stopped');
-  await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(stopped, prior + 1);
+  await eventually(() => stopped === prior + 1, 'upstream unsubscribe acknowledgement');
   assert.equal((await request(`${endpoint}/subscriptions/${id}/read`, {})).data.events.length, 4);
   assert.equal((await request(`${endpoint}/subscriptions/${id}`, undefined, full.secret, 'DELETE')).status, 200);
 });
 test('bounded buffers report overflow, oversized events stop collection, and revocation removes handles', async () => {
   const conn = await connect(); const endpoint = root(conn.id);
   const created = await request(`${endpoint}/subscriptions`, { operationId: 'watch', arguments: { count: 1100 } });
-  await new Promise(resolve => setTimeout(resolve, 150));
-  const page = await request(`${endpoint}/subscriptions/${created.data.id}/read`, {});
+  assert.equal(created.status, 200, JSON.stringify(created.data));
+  const page = await eventually(async () => {
+    const result = await request(`${endpoint}/subscriptions/${created.data.id}/read`, {});
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    assert.equal(result.data.status, 'active', JSON.stringify(result.data));
+    return result.data.gap?.to >= 100 ? result : undefined;
+  }, 'all 1,100 events to reach the bounded buffer');
   assert.ok(page.data.gap.to >= 100); assert.equal(page.data.events.length, 100);
   const large = await request(`${endpoint}/subscriptions`, { operationId: 'watch', arguments: { payload: 'x'.repeat(256 * 1024) } });
   assert.equal(large.status, 413);
+  const oversized = await request(`${endpoint}/subscriptions`, { operationId: 'watch', arguments: { count: 0 } });
+  assert.equal(oversized.status, 200, JSON.stringify(oversized.data));
+  assert.ok(latestWatch);
+  latestWatch.socket.send(JSON.stringify({ id: latestWatch.id, type: 'event', event: { value: 'x'.repeat(256 * 1024) } }));
+  await eventually(async () => {
+    const result = await request(`${endpoint}/subscriptions/${oversized.data.id}/read`, {});
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    return result.data.status === 'interrupted';
+  }, 'oversized event to interrupt collection');
   const restricted = createToken(user.id, 'revocable', [conn.id]);
   const lease = await request(`${endpoint}/subscriptions`, { operationId: 'watch', arguments: { count: 0 } }, restricted.secret);
   updateToken(user.id, restricted.token.id, { connectionIds: [] });
@@ -153,7 +180,12 @@ test('bounded buffers report overflow, oversized events stop collection, and rev
 test('credential replacement and connection changes stop sessions and preserve buffered events', async () => {
   const conn = await connect(); const endpoint = root(conn.id);
   const lease = await request(`${endpoint}/subscriptions`, { operationId: 'watch', arguments: { count: 2 } });
-  await new Promise(resolve => setTimeout(resolve, 10)); saveCredentials(conn.id, { token: 'upstream-secret' });
+  await eventually(async () => {
+    const result = await request(`${endpoint}/subscriptions/${lease.data.id}/read`, { waitMs: 1000 });
+    assert.equal(result.status, 200, JSON.stringify(result.data));
+    return result.data.events.length === 2;
+  }, 'both events before replacing credentials');
+  saveCredentials(conn.id, { token: 'upstream-secret' });
   const page = await request(`${endpoint}/subscriptions/${lease.data.id}/read`, {});
   assert.equal(page.data.status, 'interrupted'); assert.equal(page.data.events.length, 2);
   const second = await request(`${endpoint}/subscriptions`, { operationId: 'watch', arguments: { count: 0 } });
@@ -163,8 +195,9 @@ test('cancelled commands are sent once, close their session, and release resourc
   const conn = await connect(); const controller = new AbortController();
   const before = mutations;
   const pending = app.request(`/api${root(conn.id)}/call`, { method: 'POST', headers: { authorization: `Bearer ${full.secret}`, 'content-type': 'application/json' }, body: JSON.stringify({ operationId: 'wait', arguments: {} }), signal: controller.signal });
-  while (mutations === before) await new Promise(resolve => setTimeout(resolve, 5));
-  controller.abort(); assert.equal((await pending).status, 499); assert.equal(mutations, before + 1);
+  try { await eventually(() => mutations > before, 'command to reach upstream'); }
+  finally { controller.abort(); }
+  assert.equal((await pending).status, 499); assert.equal(mutations, before + 1);
   assert.equal((await request(`${root(conn.id)}/call`, { operationId: 'echo/value', arguments: { value: 'after' } })).status, 200);
 });
 test('saved WebSocket commands validate and run; audit records redact arguments and omit results', async () => {
