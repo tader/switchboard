@@ -82,6 +82,39 @@ for (const [path, action] of [['call', 'call'], ['subscriptions', 'subscribe'], 
 }
 api.delete('/connections/:ref/websocket/subscriptions/:id', async c => c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), { action: 'unsubscribe', subscriptionId: c.req.param('id') }, c.req.raw.signal, callerFrom(c, 'call'))));
 
+// Plugin-defined REST facades execute declared WebSocket commands server-side.
+api.all('/connections/:ref/plugin/*', async c => {
+  const access = websocketAccess(c);
+  const row = getConnectionRow(access.user.id, c.req.param('ref')!);
+  access.check(row.id);
+  if (row.peer_id) throw badRequest('Plugin REST endpoints currently require a local connection');
+  const { service } = loadConnection(access.user.id, row.id);
+  const path = '/' + c.req.path.split('/plugin/').slice(1).join('/plugin/');
+  const operations = service.websocket?.operations ?? [];
+  if (path === '/openapi.json' && c.req.method === 'GET') {
+    const paths: Record<string, any> = {};
+    for (const op of operations) if (op.rest) {
+      const item = paths[op.rest.path] ??= {};
+      item[op.rest.method.toLowerCase()] = {
+        operationId: op.id, summary: op.title, description: op.description,
+        ...(op.rest.method === 'GET' ? { parameters: Object.entries(op.inputSchema.properties as Record<string, unknown> ?? {}).map(([name, schema]) => ({ name, in: 'query', schema })) } : { requestBody: { required: true, content: { 'application/json': { schema: op.inputSchema } } } }),
+        responses: { '200': { description: 'Home Assistant WebSocket operation result', content: { 'application/json': { schema: op.outputSchema ?? {} } } } },
+      };
+    }
+    return c.json({ openapi: '3.1.0', info: { title: `${service.name} plugin API`, version: '1.0.0' }, servers: [{ url: `${config.publicUrl}/api/connections/${encodeURIComponent(row.id)}/plugin` }], paths });
+  }
+  const op = operations.find(op => op.rest?.path === path && op.rest.method === c.req.method);
+  if (!op) throw notFound('Plugin API endpoint not found');
+  const args: Record<string, unknown> = c.req.method === 'GET' ? { ...c.req.query() } : await c.req.json();
+  if (c.req.method === 'GET') for (const [key, value] of Object.entries(args)) {
+    const schema = (op.inputSchema.properties as Record<string, any> | undefined)?.[key];
+    if (schema?.type === 'boolean' && (value === 'true' || value === 'false')) args[key] = value === 'true';
+  }
+  const result = await executeWebSocket(access, row.id, { action: 'call', operationId: op.id, arguments: args }, c.req.raw.signal, callerFrom(c, 'call'));
+  if (result.auditId) c.header('x-switchboard-audit-id', result.auditId);
+  return c.json(result.result);
+});
+
 api.post('/connections', requireFullAccess, async (c) => {
   const body = await c.req.json();
   return c.json(await startConnect(c.get('user'), body));

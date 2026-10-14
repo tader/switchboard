@@ -1,4 +1,4 @@
-import { WebSocketConsole } from './WebSocketConsole';
+import { WebSocketConsole, WebSocketOperationReference } from './WebSocketConsole';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
@@ -265,21 +265,29 @@ export function Console() {
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         {side === 'saved' ? (
           <SavedList calls={(saved.data ?? []).filter(s => s.kind !== 'mcp')} connections={usable} currentId={current?.id} onPick={loadSaved} onDelete={deleteSaved} />
-        ) : !connection?.hasOpenapi ? (
-          <p className="p-4 text-[13px] text-zinc-500">{connection?.serviceName} has no API description.</p>
-        ) : description === 'loading' || description === undefined ? (
-          <div className="flex justify-center p-8">
-            <Spinner />
-          </div>
-        ) : description instanceof Error ? (
-          <div className="space-y-2 p-3">
-            <Alert>{description.message}</Alert>
-            <Button size="sm" onClick={() => loadDescription(connection, true)}>
-              Try again
-            </Button>
-          </div>
         ) : (
-          <OperationList description={description} selected={operation} onPick={(op) => loadOperation(op, description)} onRefresh={() => loadDescription(connection, true)} />
+          <>
+            {connection?.hasWebSocket && <WebSocketOperationReference key={connection.id} connectionId={connection.id} onPick={id => {
+              setParams({ connection: connection.id, transport: 'websocket', operation: id }, { replace: true });
+              setSideOpen(false);
+            }} />}
+            {!connection?.hasOpenapi ? (
+              <p className="p-4 text-[13px] text-zinc-500">{connection?.serviceName} has no REST API description.</p>
+            ) : description === 'loading' || description === undefined ? (
+              <div className="flex justify-center p-8">
+                <Spinner />
+              </div>
+            ) : description instanceof Error ? (
+              <div className="space-y-2 p-3">
+                <Alert>{description.message}</Alert>
+                <Button size="sm" onClick={() => loadDescription(connection, true)}>
+                  Try again
+                </Button>
+              </div>
+            ) : (
+              <OperationList description={description} selected={operation} onPick={(op) => loadOperation(op, description)} onRefresh={() => loadDescription(connection, true)} />
+            )}
+          </>
         )}
       </div>
     </div>

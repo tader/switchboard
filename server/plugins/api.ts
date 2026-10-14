@@ -210,6 +210,8 @@ export interface WebSocketOperation {
   inputSchema: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   eventSchema?: Record<string, unknown>;
+  /** Dedicated REST endpoint relative to /api/connections/:ref/plugin. Commands only. */
+  rest?: { method: 'GET' | 'POST' | 'PUT'; path: string };
   readOnlyHint?: boolean;
   idempotentHint?: boolean;
 }
@@ -230,6 +232,8 @@ export interface WebSocketSession {
 }
 
 export interface WebSocketCapability {
+  /** Allow authenticated, unpooled raw frame relay to the fixed endpoint. */
+  proxy?: boolean;
   endpoint: string | ((conn: Connection) => string);
   operations: WebSocketOperation[];
   createSession(args: { channel: WebSocketChannel; connection: Connection; signal: AbortSignal }): WebSocketSession | Promise<WebSocketSession>;

@@ -23,6 +23,7 @@ const { api } = await import('../server/routes/connections.ts');
 const { mcp } = await import('../server/mcp.ts');
 const { HttpError } = await import('../server/http.ts');
 const { connectionChanged } = await import('../server/connection-events.ts');
+const { attachWebSocketProxy } = await import('../server/websocket-proxy.ts');
 const { stopWebSockets } = await import('../server/websocket-transport.ts');
 const { stopWebSocketSubscriptions } = await import('../server/websocket.ts');
 const { validateWebSocketCapability } = await import('../server/websocket-schema.ts');
@@ -33,6 +34,9 @@ const full = createToken(user.id, 'full', null);
 const app = new Hono();
 app.onError((e, c) => c.json({ error: e.message }, e instanceof HttpError ? e.status as any : 500));
 app.route('/api', api); app.route('/mcp', mcp);
+const downstream = http.createServer();
+const stopProxy = attachWebSocketProxy(downstream);
+let proxyBase = '';
 const upstream = http.createServer();
 const wss = new WebSocketServer({ noServer: true });
 let base = '';
@@ -78,8 +82,10 @@ before(async () => {
   await plugins.start();
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  await new Promise<void>(resolve => downstream.listen(0, '127.0.0.1', resolve));
+  proxyBase = `ws://127.0.0.1:${(downstream.address() as AddressInfo).port}`;
 });
-after(async () => { stopWebSocketSubscriptions(); stopWebSockets(); for (const ws of wss.clients) ws.terminate(); wss.close(); upstream.close(); await plugins.stop(); database.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+after(async () => { stopProxy(); downstream.close(); stopWebSocketSubscriptions(); stopWebSockets(); for (const ws of wss.clients) ws.terminate(); wss.close(); upstream.close(); await plugins.stop(); database.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
 async function connect(method = 'message', token = 'upstream-secret') {
   const result = await startConnect(user, { service: 'websocket-test', method, config: { endpoint: base, token } });
   if (result.status !== 'connected') throw new Error('Expected connection');
@@ -274,4 +280,72 @@ test('endpoints and post-authorization host changes are checked before sending c
     assert.equal((await request(`${root(conn.id)}/call`, { operationId: 'echo/value', arguments: { value: 'x' } })).status, 400);
     assert.equal(opened, before);
   } finally { service.websocket!.endpoint = endpoint; service.authMethods.find(m => m.id === 'message')!.authorize = authorize; }
+});
+
+
+test('plugin REST bindings execute server-side WebSocket commands and publish their reference', async () => {
+  const conn = await connect();
+  const endpoint = `/connections/${conn.id}/plugin`;
+  const before = opened;
+  assert.deepEqual((await request(`${endpoint}/echo?value=from-rest`)).data, { value: 'from-rest' });
+  assert.equal(opened, before + 1);
+  assert.equal((await request(`${endpoint}/echo?value=again`)).status, 200);
+  assert.equal(opened, before + 1);
+  assert.equal((await request(`${endpoint}/echo`)).status, 400);
+  assert.equal((await request(`${endpoint}/echo`, { value: 'x' })).status, 404);
+  assert.equal((await request(`${endpoint}/bad`, {}, full.secret, 'PUT')).status, 502);
+  const reference = await request(`${endpoint}/openapi.json`);
+  assert.equal(reference.data.paths['/echo'].get.operationId, 'echo/value');
+  assert.equal(reference.data.paths['/bad'].put.operationId, 'bad');
+  assert.equal((await request(`${endpoint}/echo?value=x`, undefined, createToken(user.id, 'denied-rest', []).secret)).status, 403);
+});
+
+const proxyClient = async (id: string, headers: Record<string, string>) => {
+  const ws = new WebSocket(`${proxyBase}/api${root(id)}/proxy`, { headers });
+  await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  return ws;
+};
+const frame = (ws: WebSocket) => new Promise<any>((resolve, reject) => {
+  ws.once('message', value => resolve(JSON.parse(String(value))));
+  ws.once('error', reject);
+});
+
+test('raw relay authenticates, preserves native frames, and isolates sockets from managed calls', async () => {
+  const conn = await connect('message', 'expired');
+  const first = await proxyClient(conn.id, { authorization: `Bearer ${full.secret}` });
+  const second = await proxyClient(conn.id, { authorization: `Bearer ${full.secret}` });
+  try {
+    const a = frame(first); const b = frame(second);
+    first.send(JSON.stringify({ id: 42, type: 'unregistered-provider-command', value: 'one' }));
+    second.send(JSON.stringify({ id: 42, type: 'unregistered-provider-command', value: 'two' }));
+    assert.deepEqual(await a, { id: 42, type: 'result', result: { value: 'one' } });
+    assert.deepEqual(await b, { id: 42, type: 'result', result: { value: 'two' } });
+    const managed = await request(`${root(conn.id)}/call`, { operationId: 'echo/value', arguments: { value: 'managed' } });
+    assert.equal(managed.data.result.value, 'managed');
+    first.close();
+    const next = frame(second); second.send(JSON.stringify({ id: 43, type: 'anything', value: 'still-open' }));
+    assert.equal((await next).result.value, 'still-open');
+  } finally { first.terminate(); second.terminate(); }
+});
+
+test('raw proxy enforces scoped tokens and same-origin browser cookies, and closes on revocation', async () => {
+  const conn = await connect();
+  await assert.rejects(proxyClient(conn.id, { authorization: `Bearer ${createToken(user.id, 'denied-proxy', []).secret}` }), /403/);
+  await assert.rejects(proxyClient(conn.id, {}), /401/);
+  const cookie = `switchboard_session=${createSession(user.id)}`;
+  await assert.rejects(proxyClient(conn.id, { cookie, origin: 'https://other.example' }), /403/);
+  const browser = await proxyClient(conn.id, { cookie, origin: 'http://switchboard.example' }); browser.terminate();
+  const token = createToken(user.id, 'revoke-proxy', [conn.id]);
+  const client = await proxyClient(conn.id, { authorization: `Bearer ${token.secret}` });
+  const closed = new Promise<void>(resolve => client.once('close', () => resolve()));
+  deleteToken(user.id, token.token.id);
+  await closed;
+});
+
+test('REST binding validation rejects writes exposed as GET, duplicates, and subscriptions', () => {
+  const capability = plugins.service('websocket-test')!.websocket!;
+  const base = capability.operations.find(op => op.id === 'echo/value')!;
+  assert.throws(() => validateWebSocketCapability({ ...capability, operations: [{ ...base, readOnlyHint: false }] }), /REST binding/);
+  assert.throws(() => validateWebSocketCapability({ ...capability, operations: [base, { ...base, id: 'duplicate' }] }), /REST binding/);
+  assert.throws(() => validateWebSocketCapability({ ...capability, operations: [{ ...base, mode: 'subscription' }] }), /REST binding/);
 });

@@ -11,10 +11,17 @@ const validators = new WeakMap<WebSocketOperation, { input: ValidateFunction; ou
 
 export function validateWebSocketCapability(capability: WebSocketCapability) {
   if (!capability || !['string', 'function'].includes(typeof capability.endpoint) || typeof capability.createSession !== 'function' || !Array.isArray(capability.operations) || capability.operations.length > 1000) throw new Error('Invalid WebSocket capability');
+  if (capability.proxy !== undefined && typeof capability.proxy !== 'boolean') throw new Error('Invalid WebSocket proxy capability');
   const ids = new Set<string>();
+  const routes = new Set<string>();
   for (const op of capability.operations) {
     if (!op || typeof op.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$/.test(op.id) || ids.has(op.id) || typeof op.title !== 'string' || !op.title || !['command', 'subscription'].includes(op.mode)) throw new Error('Invalid or duplicate WebSocket operation');
     ids.add(op.id);
+    if (op.rest) {
+      const key = `${op.rest.method} ${op.rest.path}`;
+      if (op.mode !== 'command' || !['GET', 'POST', 'PUT'].includes(op.rest.method) || !/^\/[a-z0-9][a-z0-9/-]*$/.test(op.rest.path) || routes.has(key) || (op.rest.method === 'GET' && op.readOnlyHint !== true)) throw new Error('Invalid WebSocket REST binding');
+      routes.add(key);
+    }
     if (!op.inputSchema || op.inputSchema.type !== 'object') throw new Error(`WebSocket ${op.id} needs an object input schema`);
     if (Buffer.byteLength(JSON.stringify(op)) > WS_LIMITS.arguments) throw new Error('WebSocket metadata exceeded size limit');
     validators.set(op, { input: ajv.compile(op.inputSchema), output: op.outputSchema ? ajv.compile(op.outputSchema) : undefined, event: op.eventSchema ? ajv.compile(op.eventSchema) : undefined });

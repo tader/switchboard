@@ -19,11 +19,12 @@ export const setup: PluginSetup = () => ({ services: [{
     } } : {}),
   })),
   websocket: {
+    proxy: true,
     endpoint: conn => `${conn.config.endpoint}/socket/${conn.methodId}`,
     operations: [
-      { id: 'echo/value', title: 'Echo', mode: 'command', inputSchema: { type: 'object', properties: { value: { type: 'string' }, access_token: { type: 'string' } }, required: ['value'], additionalProperties: false }, outputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] }, readOnlyHint: true },
+      { id: 'echo/value', rest: { method: 'GET', path: '/echo' }, title: 'Echo', mode: 'command', inputSchema: { type: 'object', properties: { value: { type: 'string' }, access_token: { type: 'string' } }, required: ['value'], additionalProperties: false }, outputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] }, readOnlyHint: true },
       { id: 'wait', title: 'Wait', mode: 'command', inputSchema: { type: 'object' } },
-      { id: 'bad', title: 'Invalid result', mode: 'command', inputSchema: { type: 'object' }, outputSchema: { type: 'string' } },
+      { id: 'bad', rest: { method: 'PUT', path: '/bad' }, title: 'Invalid result', mode: 'command', inputSchema: { type: 'object' }, outputSchema: { type: 'string' } },
       { id: 'watch', title: 'Watch', mode: 'subscription', inputSchema: { type: 'object', properties: { count: { type: 'integer', minimum: 0, maximum: 2000 }, payload: { type: 'string' } } }, eventSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } },
     ],
     createSession({ channel, signal }): WebSocketSession {
