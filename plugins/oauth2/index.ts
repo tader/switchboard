@@ -1,4 +1,4 @@
-import type { AccountInfo, AuthMethod, Connection, Field, OutgoingRequest, PluginContext } from '../../server/plugins/api.ts';
+import type { AccountInfo, AuthMethod, Connection, Field, OutgoingRequest, PluginContext, TokenResult } from '../../server/plugins/api.ts';
 
 type Cfg = Record<string, any>;
 type Value<T> = T | ((config: Cfg) => T);
@@ -14,6 +14,7 @@ export interface OAuthCredentials {
 }
 
 export interface OAuthOptions {
+  reusable?: { context?: (config: Cfg) => string; configKeys?: string[]; allowRequest: NonNullable<AuthMethod['reusable']>['allowRequest']; coversScopes?: NonNullable<AuthMethod['reusable']>['coversScopes'] };
   id?: string;
   name?: string;
   description?: string;
@@ -46,7 +47,7 @@ export interface DeviceCodeOptions extends OAuthOptions {
 const val = <T>(v: Value<T> | undefined, cfg: Cfg): T | undefined => (typeof v === 'function' ? (v as (c: Cfg) => T)(cfg) : v);
 
 function scopeString(o: OAuthOptions, cfg: Cfg) {
-  const s = val(o.scopes, cfg) ?? [];
+  const s = [...(val(o.scopes, cfg) ?? []), ...(cfg.__credentialScopes ?? [])];
   return s.filter(Boolean).join(o.scopeSeparator ?? ' ');
 }
 
@@ -75,7 +76,7 @@ export async function tokenRequest(o: OAuthOptions, cfg: Cfg, params: Record<str
     body.set('client_id', clientId);
     if (clientSecret) body.set('client_secret', clientSecret);
   }
-  const res = await fetch(val(o.tokenUrl, cfg)!, { method: 'POST', headers, body, signal: AbortSignal.timeout(30_000) });
+  const res = await fetch(val(o.tokenUrl, cfg)!, { method: 'POST', headers, body, ...(o.reusable ? { redirect: 'error' as const } : {}), signal: AbortSignal.timeout(30_000) }).catch(error => { if (o.reusable) throw new Error('OAuth token request failed'); throw error; });
   const text = await res.text();
   let data: any;
   try {
@@ -83,8 +84,11 @@ export async function tokenRequest(o: OAuthOptions, cfg: Cfg, params: Record<str
   } catch {
     data = Object.fromEntries(new URLSearchParams(text));
   }
-  if (data.error) throw new OAuthError(data.error, data.error_description);
-  if (!res.ok) throw new Error(`Token endpoint responded ${res.status}: ${text.slice(0, 200)}`);
+  if (data.error) {
+    const known = ['invalid_grant','invalid_client','invalid_scope','invalid_request','unauthorized_client','unsupported_grant_type','access_denied','temporarily_unavailable','server_error','authorization_pending','slow_down','expired_token','authorization_declined'];
+    throw new OAuthError(o.reusable && !known.includes(data.error) ? 'oauth_error' : data.error, o.reusable ? undefined : data.error_description);
+  }
+  if (!res.ok) throw new Error(`Token endpoint responded ${res.status}: ${o.reusable ? 'OAuth token request failed' : text.slice(0, 200)}`);
   if (!data.access_token) throw new Error('The token endpoint did not return an access token');
   return data;
 }
@@ -125,6 +129,17 @@ export async function freshCredentials(
 
 function bearerMethodParts(o: OAuthOptions, renew?: (conn: Connection) => () => Promise<OAuthCredentials>) {
   return {
+    reusable: o.reusable ? {
+      configKeys: o.reusable.configKeys ?? [],
+      applyToken: (req: OutgoingRequest, _conn: Connection, token: TokenResult) => { req.headers.set('authorization', `Bearer ${token.accessToken}`); },
+      kind: 'oauth' as const, format: 'oauth2/bearer/v1',
+      context: (cfg: Cfg) => JSON.stringify([val(o.tokenUrl, cfg), val(o.clientId, cfg), val(o.tokenAuth, cfg) ?? 'post', renew ? 'client-credentials' : 'delegated-user', o.reusable?.context?.(cfg)]),
+      requiredScopes: (cfg: Cfg) => val(o.scopes, cfg) ?? [],
+      grantedScopes: (creds: OAuthCredentials) => String(creds.scope ?? '').split(o.scopeSeparator && o.scopeSeparator !== ' ' ? o.scopeSeparator : /\s+/).map(scope => scope.trim()).filter(Boolean),
+      coversScopes: o.reusable.coversScopes,
+      validate: o.identify && (async (conn: Connection) => { const account = await o.identify!(conn.credentials, conn.config, null); if (!account?.id) throw new Error('Provider identity could not be verified'); return account; }),
+      allowRequest: o.reusable.allowRequest,
+    } : undefined,
     async authorize(req: OutgoingRequest, conn: Connection, opts: { force?: boolean }) {
       const { credentials, refreshed } = await freshCredentials(o, conn, opts.force, renew?.(conn));
       req.headers.set('authorization', `Bearer ${credentials.accessToken}`);
@@ -177,7 +192,7 @@ export function authorizationCode(o: AuthorizationCodeOptions): AuthMethod {
       if (!params.code) throw new Error('The provider did not return an authorization code');
       const extra: Record<string, string> = pending?.verifier ? { code_verifier: pending.verifier } : {};
       const data = await tokenRequest(o, config, { grant_type: 'authorization_code', code: params.code, redirect_uri: callbackUrl, ...extra });
-      return connected(o, config, data);
+      return connected(o, config, { ...data, scope: data.scope ?? scopeString(o, config) });
     },
     ...bearerMethodParts(o),
   };
@@ -210,7 +225,10 @@ export function deviceCode(o: DeviceCodeOptions): AuthMethod {
       } catch {
         data = Object.fromEntries(new URLSearchParams(text));
       }
-      if (data.error) throw new OAuthError(data.error, data.error_description);
+      if (data.error) {
+    const known = ['invalid_grant','invalid_client','invalid_scope','invalid_request','unauthorized_client','unsupported_grant_type','access_denied','temporarily_unavailable','server_error','authorization_pending','slow_down','expired_token','authorization_declined'];
+    throw new OAuthError(o.reusable && !known.includes(data.error) ? 'oauth_error' : data.error, o.reusable ? undefined : data.error_description);
+  }
       if (!res.ok || !data.device_code) throw new Error(`Device authorization failed (${res.status})`);
       return {
         device: {
@@ -226,7 +244,7 @@ export function deviceCode(o: DeviceCodeOptions): AuthMethod {
     async poll({ config, pending }) {
       try {
         const data = await tokenRequest(o, config, { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: pending.deviceCode });
-        return connected(o, config, data);
+        return connected(o, config, { ...data, scope: data.scope ?? scopeString(o, config) });
       } catch (e) {
         if (e instanceof OAuthError && e.code === 'authorization_pending') return { wait: true };
         if (e instanceof OAuthError && e.code === 'slow_down') return { wait: true, interval: 10 };
@@ -243,7 +261,8 @@ export function deviceCode(o: DeviceCodeOptions): AuthMethod {
 export function clientCredentials(o: OAuthOptions & { label?: Value<string | undefined> }): AuthMethod {
   const request = async (cfg: Cfg) => {
     const scope = scopeString(o, cfg);
-    return toCredentials(await tokenRequest(o, cfg, { grant_type: 'client_credentials', ...(scope ? { scope } : {}) }));
+    const response = await tokenRequest(o, cfg, { grant_type: 'client_credentials', ...(scope ? { scope } : {}) });
+    return toCredentials({ ...response, scope: response.scope ?? scope });
   };
   return {
     id: o.id ?? 'client-credentials',

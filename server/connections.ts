@@ -1,7 +1,8 @@
+import { assertBinding, assertCompatible, binding, covers, exportCredential, importCredential, getCredential, notifyCredential, privateConfig, replaceCredential, sourceConnection } from './credentials.ts';
 import { callbackUrl } from './config.ts';
 import { connectionChanged, credentialsChanged } from './connection-events.ts';
 import { decrypt, encrypt, randomId, randomToken } from './crypto.ts';
-import { all, now, one, run } from './db.ts';
+import { all, db, now, one, run } from './db.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
 import type { AuthMethod, ConnectArgs, ConnectStep, Connected, Connection, Field, ServiceDefinition } from './plugins/api.ts';
 import { plugins } from './plugins/manager.ts';
@@ -32,20 +33,24 @@ export interface ConnectionView {
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
+  credential?: { id: string; name: string; kind: string; version: number } | null;
+  reusable?: boolean;
   peer: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9._@+-]{0,99}$/;
 
 function rowToConnection(r: any): Connection {
+  const source = r.credential_id ? getCredential(r.user_id, r.credential_id) : undefined;
+  const localConfig = decrypt(r.config_enc) ?? {};
+  const lifecycle = source ? decrypt(source.config_enc) : {};
+  const inheritedConfig = source ? Object.fromEntries(JSON.parse(source.config_keys).map((key: string) => [key, lifecycle[key]])) : {};
+  const method = source ? plugins.service(r.service_id)?.authMethods.find(method => method.id === r.method_id) : undefined;
+  const credentials = decrypt(source ? source.credentials_enc : r.credentials_enc);
   return {
-    id: r.id,
-    kind: r.kind ?? 'http',
-    name: r.name,
-    serviceId: r.service_id,
-    methodId: r.method_id,
-    config: decrypt(r.config_enc) ?? {},
-    credentials: decrypt(r.credentials_enc),
+    id: r.id, kind: r.kind ?? 'http', name: r.name, serviceId: r.service_id, methodId: r.method_id,
+    config: { ...inheritedConfig, ...localConfig },
+    credentials: source && method ? importCredential(method, credentials) : credentials,
     account: r.account_label ? { id: r.account_id ?? undefined, label: r.account_label, avatarUrl: r.account_avatar ?? undefined } : undefined,
   };
 }
@@ -86,6 +91,8 @@ export function toView(r: any): ConnectionView {
   } catch {}
   const unavailable = !service ? 'The plugin providing this service is not active' : !method ? 'This sign-in method is no longer offered' : null;
   return {
+    credential: r.credential_id ? (() => { const source = getCredential(r.user_id, r.credential_id); return { id: source.id, name: source.name, kind: source.kind, version: source.version }; })() : null,
+    reusable: !!method?.reusable && (method.reusable.kind !== 'oauth' || (service?.kind !== 'mcp' && !service?.websocket)),
     readOnly: false,
     id: conn.id,
     kind: r.kind ?? 'http',
@@ -97,8 +104,8 @@ export function toView(r: any): ConnectionView {
     methodName: method?.name ?? conn.methodId,
     account: conn.account ?? null,
     config: publicConfig(method?.fields, conn.config),
-    status: unavailable ? 'unavailable' : r.status,
-    statusMessage: unavailable ?? r.status_message,
+    status: unavailable ? 'unavailable' : r.credential_id && getCredential(r.user_id, r.credential_id).status !== 'ok' ? 'error' : r.status,
+    statusMessage: unavailable ?? (r.credential_id && getCredential(r.user_id, r.credential_id).status !== 'ok' ? 'Shared credential needs reconnection' : r.status_message),
     baseUrl,
     hasOpenapi: !!service?.openapi,
     hasWebSocket: !!service?.websocket,
@@ -126,7 +133,7 @@ export function getConnectionRow(userId: string, ref: string): any {
   return r;
 }
 
-export function loadConnection(userId: string, ref: string) {
+export function loadConnection(userId: string, ref: string, management = false) {
   const row = getConnectionRow(userId, ref);
   if (row.peer_id) throw new HttpError(500, 'Peer connections must be executed through the peer transport');
   const conn = rowToConnection(row);
@@ -134,6 +141,51 @@ export function loadConnection(userId: string, ref: string) {
   if (!service) throw new HttpError(503, `Service "${conn.serviceId}" is not available (its plugin is not active)`);
   const method = findMethod(service, conn.methodId);
   if (!method) throw new HttpError(503, `Sign-in method "${conn.methodId}" is no longer offered by ${service.name}`);
+  if (row.credential_id && !management) assertBinding(row, conn, method);
+  if (row.credential_id && method.reusable?.kind === 'oauth' && !management) {
+    const auth = method;
+    const source = () => { const sourceRow = getCredential(userId, row.credential_id); return { sourceRow, ...sourceConnection(sourceRow) }; };
+    const token: NonNullable<AuthMethod['token']> = async (_conn, opts) => {
+      const current = source();
+      if (!current.method.token) throw badRequest('Shared OAuth provider cannot issue tokens');
+      try {
+        const result = await current.method.token(current.conn, opts);
+        if (result.credentials !== undefined) replaceCredential(current.sourceRow, exportCredential(current.method, result.credentials));
+        return { ...result, credentials: undefined };
+      } catch (error: any) {
+        if (error.code === 'invalid_grant' && run("UPDATE credentials SET status = 'error', status_message = 'OAuth authorization expired or revoked' WHERE id = ? AND version = ?", row.credential_id, current.sourceRow.version).changes) notifyCredential(row.credential_id);
+        if (error instanceof HttpError) throw error;
+        throw new HttpError(502, error.code === 'invalid_grant' ? 'The shared OAuth authorization expired or was revoked; reconnect it' : 'Could not refresh the shared OAuth authorization');
+      }
+    };
+    const shared: AuthMethod = { ...auth, token, async authorize(req, target, opts) {
+      if (!auth.reusable?.allowRequest?.(req, target)) throw new HttpError(403, 'Request exceeds this connection permission boundary');
+      const issued = await token(target, opts);
+      const credentials = importCredential(auth, decrypt(getCredential(userId, row.credential_id).credentials_enc));
+      if (!covers(auth, credentials, target.config)) throw new HttpError(403, 'Refreshed credentials do not preserve this connection permissions');
+      await auth.reusable!.applyToken!(req, { ...target, credentials }, issued);
+      if (!auth.reusable?.allowRequest?.(req, { ...target, credentials })) throw new HttpError(403, 'The provider changed the request outside this connection boundary');
+    } };
+    return { row, conn, service, method: shared };
+  }
+  if (!row.credential_id && method.reusable?.kind === 'oauth') {
+    const auth = method;
+    const enforce = (request: import('./plugins/api.ts').OutgoingRequest, target: Connection, credentials: any) => {
+      const r = auth.reusable!;
+      const required = r.requiredScopes?.(target.config) ?? [];
+      const granted = r.grantedScopes?.(credentials) ?? [];
+      const broader = r.coversScopes ? !r.coversScopes(required, granted) : granted.some(scope => !required.includes(scope));
+      if (broader && !r.allowRequest?.(request, { ...target, credentials })) throw new HttpError(403, 'Request exceeds this connection permission boundary');
+    };
+    const guarded: AuthMethod = { ...auth, async authorize(req, target, opts) {
+      enforce(req, target, target.credentials);
+      const updated = await auth.authorize(req, target, opts);
+      // Retain rotated refresh tokens even when a broader grant makes the requested operation unsafe.
+      if (updated?.credentials !== undefined) saveCredentials(row.id, updated.credentials);
+      enforce(req, target, updated?.credentials ?? target.credentials);
+    } };
+    return { row, conn, service, method: guarded };
+  }
   return { row, conn, service, method };
 }
 
@@ -155,7 +207,7 @@ export async function deleteConnection(userId: string, ref: string) {
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
   try {
-    await method?.revoke?.(conn);
+    if (!row.credential_id) await method?.revoke?.(conn);
   } catch (e: any) {
     console.warn(`revoke failed for ${conn.id}: ${e.message}`);
   }
@@ -164,6 +216,8 @@ export async function deleteConnection(userId: string, ref: string) {
 }
 
 export function saveCredentials(id: string, credentials: unknown) {
+  const linked = one('SELECT credential_id, user_id FROM connections WHERE id = ?', id);
+  if (linked?.credential_id) { replaceCredential(getCredential(linked.user_id, linked.credential_id), exportCredential(loadConnection(linked.user_id, id, true).method, credentials)); return; }
   run(`UPDATE connections SET credentials_enc = ?, status = 'ok', status_message = NULL, updated_at = ? WHERE id = ?`, encrypt(credentials), now(), id);
   credentialsChanged(id);
 }
@@ -181,6 +235,7 @@ export function touch(id: string) {
 const locks = new Map<string, Promise<unknown>>();
 
 export function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  id = one('SELECT credential_id FROM connections WHERE id = ?', id)?.credential_id ?? id;
   const prev = locks.get(id) ?? Promise.resolve();
   const p = prev.then(fn, fn);
   const tail = p.catch(() => {});
@@ -199,7 +254,7 @@ export interface ServiceView {
   icon?: string;
   docsUrl?: string;
   pluginId: string;
-  methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string; redirect: boolean }[];
+  methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string; redirect: boolean; reusable?: boolean }[];
   peer?: { id: string; name: string; online: boolean };
 }
 
@@ -213,7 +268,7 @@ export function listServices(userId?: string): ServiceView[] {
       icon: s.icon,
       docsUrl: s.docsUrl,
       pluginId,
-      methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback })),
+      methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback, reusable: !!m.reusable && (m.reusable.kind !== 'oauth' || (s.kind !== 'mcp' && !s.websocket)) })),
     }))
   return local.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -249,7 +304,7 @@ function validateConfig(method: AuthMethod, input: Record<string, any>, previous
 
 export async function startConnect(
   user: User,
-  input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string; redirectUri?: string },
+  input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string; redirectUri?: string; credentialId?: string; independent?: boolean },
 ): Promise<FlowResult> {
   const existingRow = input.connection ? getConnectionRow(user.id, input.connection) : undefined;
   if (existingRow) connectionChanged(existingRow.id);
@@ -267,7 +322,21 @@ export async function startConnect(
   if (!method) throw badRequest(`Unknown sign-in method "${methodId}"`);
   if (method.unavailable) throw badRequest(method.unavailable);
   const sameMethod = existing && existing.methodId === method.id;
-  const cfg = validateConfig(method, input.config ?? {}, sameMethod ? existing!.config : undefined);
+  const requestedCredential = input.independent ? undefined : input.credentialId ?? existingRow?.credential_id;
+  if (existingRow?.credential_id && input.credentialId && input.credentialId !== existingRow.credential_id) throw badRequest('Make this connection independent before changing its credential');
+  const source = requestedCredential ? getCredential(user.id, requestedCredential) : undefined;
+  if (input.independent && existingRow?.credential_id && method.reusable?.kind !== 'oauth') throw badRequest('Use Make independent for static credentials');
+  const previous = sameMethod ? { ...(source ? decrypt(source.config_enc) : {}), ...existing!.config } : undefined;
+  const inputConfig = { ...(input.config ?? {}) };
+  if (source) for (const key of JSON.parse(source.config_keys)) if (inputConfig[key] === '' || inputConfig[key] === undefined) delete inputConfig[key];
+  const cfg = validateConfig(method, source ? { ...decrypt(source.config_enc), ...importCredential(method, decrypt(source.credentials_enc)), ...inputConfig } : inputConfig, previous);
+  if (source) {
+    const candidate = { ...existing, id: existing?.id ?? '', name: existing?.name ?? '', serviceId, methodId: method.id, config: cfg, credentials: importCredential(method, decrypt(source.credentials_enc)) } as Connection;
+    assertCompatible(source, candidate, method);
+    cfg.__credentialScopes = [...new Set([...(method.reusable?.grantedScopes?.(candidate.credentials) ?? []), ...(method.reusable?.requiredScopes?.(cfg) ?? []), ...all('SELECT id FROM connections WHERE credential_id = ?', source.id).flatMap(row => { const loaded = loadConnection(user.id, row.id, true); return loaded.method.reusable?.requiredScopes?.(loaded.conn.config) ?? []; })])];
+    cfg.__credentialRequest = { id: source.id, version: source.version, reuseOnly: source.status === 'ok' && !!input.credentialId && !existingRow?.credential_id && covers(method, candidate.credentials, cfg) };
+  }
+  if (input.independent) cfg.__credentialRequest = { independent: true };
   if (input.name && !NAME.test(input.name.trim())) throw badRequest('Names may contain letters, digits, ".", "_", "@", "+" and "-"');
   // Checked now so a redirect or device flow does not fail at the very end.
   if (input.name && one('SELECT 1 FROM connections WHERE user_id = ? AND name = ? AND id != ?', user.id, input.name.trim(), existing?.id ?? '')) {
@@ -278,7 +347,8 @@ export async function startConnect(
 
   const flowId = randomToken(24);
   const args: ConnectArgs = { config: cfg, callbackUrl: redirectUri ?? callbackUrl, state: flowId, connection: existing };
-  const step = await callPlugin(() => method.connect(args));
+  const reuseOnly = cfg.__credentialRequest?.reuseOnly;
+  const step = reuseOnly ? { credentials: importCredential(method, decrypt(source!.credentials_enc)), account: await method.reusable!.validate!({ ...existing, id: existing?.id ?? '', name: existing?.name ?? '', serviceId, methodId: method.id, config: cfg, credentials: importCredential(method, decrypt(source!.credentials_enc)) } as Connection) } : await callPlugin(() => method.connect(args));
   return handleStep(user, step, { flowId, service, method, cfg, name: input.name?.trim(), connectionId: existing?.id, redirectUri });
 }
 
@@ -417,8 +487,15 @@ export function cancelFlow(flowId: string, user: User) {
 }
 
 function storeConnection(user: User, f: FlowInfo, result: Connected): ConnectionView {
+  db.exec('BEGIN IMMEDIATE');
+  try { const value = storeConnectionUnchecked(user, f, result); db.exec('COMMIT'); return value; }
+  catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+function storeConnectionUnchecked(user: User, f: FlowInfo, result: Connected): ConnectionView {
   if (!result || result.credentials === undefined) throw badRequest('The plugin did not return credentials');
-  const cfg = result.config ?? f.cfg;
+  const cfg = { ...(result.config ?? f.cfg) };
+  const request = f.cfg.__credentialRequest;
+  delete cfg.__credentialRequest;
   const account = result.account;
   let id = f.connectionId;
   // Signing in again to an account that is already connected the same way updates that connection,
@@ -428,6 +505,19 @@ function storeConnection(user: User, f: FlowInfo, result: Connected): Connection
       'SELECT id FROM connections WHERE user_id = ? AND service_id = ? AND method_id = ? AND account_id = ?',
       user.id, f.service.id, f.method.id, account.id,
     )?.id;
+  }
+  let sharedSource: any;
+  if (request?.id) {
+    sharedSource = getCredential(user.id, request.id);
+    if (sharedSource.version !== request.version) throw new HttpError(409, 'The shared credential changed during sign-in; retry reconnection');
+    if (sharedSource.kind === 'oauth' && sharedSource.account_id && account?.id !== sharedSource.account_id) throw badRequest('Sign in with the existing shared credential account');
+    const candidate = { id: id ?? '', name: '', serviceId: f.service.id, methodId: f.method.id, config: cfg, credentials: result.credentials } as Connection;
+    assertCompatible(sharedSource, candidate, f.method);
+    if (!covers(f.method, result.credentials, cfg)) throw badRequest('Required permissions were not granted');
+    for (const linked of all('SELECT id FROM connections WHERE credential_id = ?', sharedSource.id)) {
+      const consumer = loadConnection(user.id, linked.id, true);
+      if (!covers(consumer.method, result.credentials, consumer.conn.config)) throw badRequest('Required permissions for an existing connection were not granted');
+    }
   }
   const t = now();
   if (id) {
@@ -447,6 +537,10 @@ function storeConnection(user: User, f: FlowInfo, result: Connected): Connection
       id, user.id, f.service.id, f.method.id, name, account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, encrypt(cfg), encrypt(result.credentials), t, t, f.redirectUri ?? null, f.service.kind ?? 'http',
     );
   }
+  if (sharedSource) {
+    if (!request.reuseOnly) replaceCredential(sharedSource, exportCredential(f.method, result.credentials), sharedSource.kind === 'oauth' ? cfg : undefined, sharedSource.kind === 'oauth' ? account : undefined, true);
+    run('UPDATE connections SET credential_id = ?, credentials_enc = NULL, credential_binding_enc = ?, config_enc = ? WHERE id = ?', sharedSource.id, encrypt(binding({ ...rowToConnection(one('SELECT * FROM connections WHERE id = ?', id)), config: cfg }, f.method)), encrypt(privateConfig(cfg, JSON.parse(sharedSource.config_keys))), id);
+  } else if (request?.independent) run('UPDATE connections SET credential_id = NULL, credential_binding_enc = NULL WHERE id = ?', id);
   return toView(one('SELECT * FROM connections WHERE id = ?', id));
 }
 

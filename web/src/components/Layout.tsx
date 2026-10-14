@@ -58,6 +58,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <NavItem to="/connections" icon={<Plug />}>
           Connections
         </NavItem>
+        <NavItem to="/credentials" icon={<KeyRound />}>Credentials</NavItem>
         <NavItem to="/console" icon={<SquareTerminal />}>
           Console
         </NavItem>

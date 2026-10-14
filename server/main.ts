@@ -1,3 +1,4 @@
+import { credentialsApi } from './routes/credentials.ts';
 import { attachWebSocketProxy } from './websocket-proxy.ts';
 import { stopWebSockets } from './websocket-transport.ts';
 import { stopWebSocketSubscriptions } from './websocket.ts';
@@ -64,6 +65,7 @@ app.route('/mcp', mcp);
 app.route('/api/me/token', selfRevoke);
 app.route('/api', account);
 app.route('/api/admin', admin);
+app.route('/api', credentialsApi);
 app.route('/api', api);
 app.route('/proxy', proxy);
 app.route('/oauth', oauth);

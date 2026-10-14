@@ -270,6 +270,21 @@ const migrations: string[] = [
   ALTER TABLE audit_log ADD COLUMN ws_target TEXT;
   ALTER TABLE audit_log ADD COLUMN ws_outcome TEXT;
   `,
+  `
+  CREATE TABLE credentials (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, service_id TEXT NOT NULL, method_id TEXT NOT NULL,
+    format TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('static','oauth')),
+    context_enc TEXT NOT NULL, config_keys TEXT NOT NULL DEFAULT '[]', config_enc TEXT NOT NULL, credentials_enc TEXT NOT NULL,
+    account_id TEXT, account_label TEXT, account_avatar TEXT,
+    status TEXT NOT NULL DEFAULT 'ok', status_message TEXT,
+    version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, name)
+  );
+  ALTER TABLE connections ADD COLUMN credential_id TEXT REFERENCES credentials(id) ON DELETE RESTRICT;
+  ALTER TABLE connections ADD COLUMN credential_binding_enc TEXT;
+  CREATE INDEX connections_credential ON connections(credential_id);
+  `,
 ];
 
 export function initDb() {

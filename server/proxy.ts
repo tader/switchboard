@@ -1,3 +1,4 @@
+import { one } from './db.ts';
 import { HttpError, badRequest } from './http.ts';
 import type { Connection, ServiceDefinition } from './plugins/api.ts';
 import { loadConnection, markError, resolveBaseUrl, saveCredentials, touch, withLock } from './connections.ts';
@@ -237,8 +238,10 @@ async function executeLoaded(loaded: ReturnType<typeof loadConnection>, user: Us
         const result = await auth.authorize(req, fresh, { force });
         if (result && result.credentials !== undefined) saveCredentials(conn.id, result.credentials);
       } catch (e: any) {
-        markError(conn.id, e?.message ?? String(e));
-        throw new HttpError(502, `Could not authenticate with ${service.name}: ${e?.message ?? e}`);
+        if (e instanceof HttpError && [403, 409].includes(e.status)) throw e;
+        const reason = loaded.row.credential_id ? 'Shared credential authentication failed; check or reconnect it' : e?.message ?? String(e);
+        markError(conn.id, reason);
+        throw new HttpError(502, `Could not authenticate with ${service.name}: ${reason}`);
       }
     });
     if (!hostAllowed(req.url.host, allowedHosts(service, conn))) throw badRequest('The plugin changed the request to a host that is not allowed');
@@ -299,6 +302,15 @@ export async function issueToken(user: User, connectionRef: string, force = fals
       durationMs: Date.now() - started,
       error,
     });
+  const scopedCaller = caller?.tokenId && one('SELECT connection_ids FROM api_tokens WHERE id = ?', caller.tokenId)?.connection_ids;
+  const contract = method.reusable;
+  const granted = contract?.grantedScopes?.(conn.credentials) ?? [];
+  const required = contract?.requiredScopes?.(conn.config) ?? [];
+  const broaderGrant = contract?.kind === 'oauth' && (contract.coversScopes ? !contract.coversScopes(required, granted) : granted.some(scope => !required.includes(scope)));
+  if (scopedCaller && (row.credential_id || broaderGrant)) {
+    audit(403, 'Only full-access owners can retrieve shared or broader-grant tokens');
+    throw new HttpError(403, 'Only full-access owners can retrieve shared or broader-grant tokens');
+  }
   if (!method.token) {
     const msg = `${service.name} (${method.name}) does not hand out tokens; use the proxy instead`;
     audit(400, msg);
@@ -309,9 +321,13 @@ export async function issueToken(user: User, connectionRef: string, force = fals
     try {
       const t = await method.token!(fresh, { force });
       if (t.credentials !== undefined) saveCredentials(conn.id, t.credentials);
+      const current = loadConnection(user.id, conn.id).conn;
+      const currentScopes = contract?.grantedScopes?.(current.credentials) ?? [];
+      if (scopedCaller && contract?.kind === 'oauth' && (contract.coversScopes ? !contract.coversScopes(required, currentScopes) : currentScopes.some(scope => !required.includes(scope)))) throw new HttpError(403, 'Only full-access owners can retrieve broader-grant tokens');
       audit(200);
       return { access_token: t.accessToken, token_type: t.tokenType ?? 'Bearer', expires_at: t.expiresAt ?? null };
     } catch (e: any) {
+      if (e instanceof HttpError && e.status === 403) { audit(403, e.message); throw e; }
       markError(conn.id, e?.message ?? String(e));
       const msg = `Could not get a token from ${service.name}: ${e?.message ?? e}`;
       audit(502, msg);
