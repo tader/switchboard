@@ -229,3 +229,7 @@ REST. Switchboard manages authentication and sockets and exposes the operations 
 API clients, MCP clients, peers, and the console. Events use bounded in-memory
 buffers and five-minute subscription leases. See the API guide and plugin authoring
 guide for the operation and authentication contracts.
+
+### Reusable credentials
+
+The **Credentials** page manages named PAT/API-key credentials and compatible OAuth grants used by several connections. Promote an existing stored credential, then select it for another connection; rotate or reconnect once for all links. Supported auth methods also offer **Use existing credentials** during connection setup. See the in-app reusable credentials guide for ownership, OAuth scope boundaries, and management APIs. Existing private connections are unchanged until you opt into sharing.

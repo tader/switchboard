@@ -1,3 +1,4 @@
+import { CredentialPicker, type CredentialCandidate } from '../components/CredentialPicker';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { BookOpen, Code2, ExternalLink, FileKey, History, KeyRound, Laptop, LayoutGrid, List, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal, Trash2, Unlock } from 'lucide-react';
@@ -18,7 +19,7 @@ export function Connections() {
   const [params, setParams] = useSearchParams();
   const connections = useResource(() => api<Connection[]>('/connections'));
   const services = useResource(() => api<Service[]>('/services'));
-  const [connect, setConnect] = useState<{ service?: Service; connection?: Connection } | null>(null);
+  const [connect, setConnect] = useState<{ service?: Service; connection?: Connection; independent?: boolean } | null>(null);
   const [sharing, setSharing] = useState<Connection | null>(null);
   const [rename, setRename] = useState<Connection | null>(null);
   const [scripts, setScripts] = useState<Connection | null>(null);
@@ -89,7 +90,9 @@ export function Connections() {
     { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
     { label: 'Share with peers', icon: <Server />, onSelect: () => setSharing(c) },
     { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c), hidden: c.readOnly },
-    { label: 'Reconnect', icon: <RefreshCw />, onSelect: () => setConnect({ service, connection: c }), hidden: !service || c.readOnly },
+    { label: c.credential?.kind === 'static' ? 'Rotate shared credential' : 'Reconnect', icon: <RefreshCw />, onSelect: () => c.credential?.kind === 'static' ? navigate(`/credentials?credential=${c.credential.id}`) : setConnect({ service, connection: c }), hidden: !service || c.readOnly },
+    { label: 'Manage credentials', icon: <KeyRound />, onSelect: () => navigate(`/credentials?connection=${c.id}`), hidden: c.readOnly || !c.reusable },
+    { label: 'Make independent', icon: <KeyRound />, onSelect: async () => { if (c.credential?.kind === 'oauth') setConnect({ service, connection: c, independent: true }); else { try { await api(`/connections/${c.id}/credential/independent`, { body: {} }); connections.reload(); } catch (e: any) { toast(e.message, 'error'); } } }, hidden: !c.credential || c.readOnly },
     'separator',
     { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true, hidden: c.readOnly },
   ]} />;
@@ -237,7 +240,7 @@ function AuthIndicator({ connection: c, service }: { connection: Connection; ser
     : /token|api.key|header|query|bearer/.test(name) ? KeyRound
     : /none|no auth|unauthenticated/.test(name) ? Unlock
     : /command|shell/.test(name) ? SquareTerminal : Plug;
-  return <span tabIndex={0} role="img" aria-label={`Sign-in: ${c.methodName}`} title={`Sign-in: ${c.methodName}`} className="shrink-0 rounded text-zinc-400 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-zinc-500"><Icon className="size-3.5" aria-hidden="true" /></span>;
+  return <span tabIndex={0} role="img" aria-label={`Sign-in: ${c.methodName}${c.credential ? ` · shared ${c.credential.name}` : ''}`} title={`Sign-in: ${c.methodName}${c.credential ? ` · shared ${c.credential.name}` : ''}`} className="shrink-0 rounded text-zinc-400 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-zinc-500"><Icon className="size-3.5" aria-hidden="true" /></span>;
 }
 
 function ServiceGrid({ services, onPick, filter = '' }: { services: Service[]; onPick: (s: Service) => void; filter?: string }) {
@@ -272,7 +275,7 @@ type Step =
 
 export function ConnectDialog({
   open, onClose, services, initial, onConnected,
-}: { open: boolean; onClose: () => void; services: Service[]; initial: { service?: Service; connection?: Connection }; onConnected: (c: Connection) => void }) {
+}: { open: boolean; onClose: () => void; services: Service[]; initial: { service?: Service; connection?: Connection; independent?: boolean; credentialId?: string }; onConnected: (c: Connection) => void }) {
   const { info } = useSession();
   const [step, setStep] = useState<Step>({ kind: 'pick' });
   const [service, setService] = useState<Service | undefined>();
@@ -283,6 +286,8 @@ export function ConnectDialog({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const reconnecting = initial.connection;
+  const [credentialChoice, setCredentialChoice] = useState<CredentialCandidate | null>(null);
+  const [affected, setAffected] = useState<string[]>([]);
   const targets = useMemo(() => {
     const peers = new Map<string, { id: string; name: string; online: boolean }>();
     for (const s of services) if (s.peer) peers.set(s.peer.id, s.peer);
@@ -301,6 +306,8 @@ export function ConnectDialog({
 
   useEffect(() => {
     if (!open) return;
+    setCredentialChoice(null); setAffected([]);
+    if ((initial.connection?.credential || initial.credentialId)) api<{ connections: { name: string }[] }>(`/credentials/${initial.credentialId ?? initial.connection?.credential?.id}`).then(value => setAffected(value.connections.map(connection => connection.name))).catch(() => {});
     setSearch('');
     setTarget(initial.service?.peer?.id ?? initial.connection?.peer?.id ?? 'local');
     setError('');
@@ -313,6 +320,12 @@ export function ConnectDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  useEffect(() => {
+    if (credentialChoice?.kind !== 'credential') return;
+    const controller = new AbortController();
+    api<{ connections: { name: string }[] }>(`/credentials/${credentialChoice.id}`, { signal: controller.signal }).then(value => setAffected(value.connections.map(connection => connection.name))).catch(() => {});
+    return () => controller.abort();
+  }, [credentialChoice?.id]);
   const method = service?.methods.find((m) => m.id === methodId);
 
   const handle = (r: FlowResult, redirectUri?: string) => {
@@ -329,7 +342,13 @@ export function ConnectDialog({
     setError('');
     const { __name, __redirectUri, ...config } = values;
     try {
-      const body = { service: service.id, method: method.id, config, name: __name || undefined, redirectUri: method.redirect ? __redirectUri || undefined : undefined };
+      let credentialId = initial.credentialId ?? (credentialChoice?.kind === 'credential' ? credentialChoice.id : undefined);
+      if (credentialChoice?.kind === 'connection') {
+        const source = await api<{ id: string }>('/credentials', { body: { connection: credentialChoice.id, name: `${credentialChoice.name} credentials` } });
+        credentialId = source.id;
+      }
+      const body = { independent: initial.independent, credentialId, service: service.id, method: method.id, config, name: __name || undefined, redirectUri: method.redirect ? __redirectUri || undefined : undefined };
+      if (credentialChoice) for (const field of method.fields) if (field.type === 'secret' || field.key === 'username') delete body.config[field.key];
       const r = reconnecting
         ? await api<FlowResult>(`/connections/${reconnecting.id}/reconnect`, { body })
         : await api<FlowResult>('/connections', { body });
@@ -478,7 +497,11 @@ export function ConnectDialog({
               ))}
             </div>
           )}
-          {method && fields.length > 0 && <FieldsForm key={method.id} fields={fields} values={values} onChange={setValues} idPrefix={`${service.id}-${method.id}`} />}
+          {(reconnecting?.credential || initial.credentialId || credentialChoice?.needsConsent) && !initial.independent && <Alert tone="amber">Changes update the shared credential used by: {affected.join(', ') || reconnecting?.credential?.name || credentialChoice?.name || 'the selected credential'}.</Alert>}
+          {initial.independent && <Alert tone="amber">A fresh authorization makes this connection independent. The shared credential remains available to the other connections.</Alert>}
+          {method?.reusable && !reconnecting?.credential && !initial.credentialId && <CredentialPicker connection={reconnecting?.id} service={service.id} method={method.id} config={values} value={credentialChoice} onChange={setCredentialChoice} />}
+          {credentialChoice && <p className="text-xs text-zinc-500">Use {credentialChoice.name} to authenticate to {String(values.site ?? values.baseUrl ?? service.name)}.{credentialChoice.needsConsent ? ' The provider will ask for additional permissions.' : ''}</p>}
+          {method && fields.length > 0 && <FieldsForm key={method.id} fields={credentialChoice ? fields.filter(field => field.type !== 'secret' && field.key !== 'username') : fields} values={values} onChange={setValues} idPrefix={`${service.id}-${method.id}`} />}
           {error && <Alert>{error}</Alert>}
           <div className="flex items-center justify-between gap-2 pt-1">
             {!initial.service ? (

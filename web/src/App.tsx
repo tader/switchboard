@@ -1,3 +1,4 @@
+import { Credentials } from './pages/Credentials';
 import { Suspense, lazy, useEffect, useState } from 'react';
 
 // The guides need a Markdown renderer and syntax highlighting; load them only when opened.
@@ -56,6 +57,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/connections" replace />} />
           <Route path="/connections" element={<Connections />} />
+          <Route path="/credentials" element={<Credentials />} />
           <Route path="/console" element={<Console />} />
           <Route path="/activity" element={<Activity />} />
           <Route

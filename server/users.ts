@@ -97,6 +97,8 @@ export async function deleteUser(id: string) {
   if (!user) throw notFound();
   if (user.role === 'admin' && activeAdminCount(id) === 0) throw badRequest('At least one active administrator is required');
   connectionChanged();
+  run('DELETE FROM connections WHERE user_id = ?', id);
+  run('DELETE FROM credentials WHERE user_id = ?', id);
   run('DELETE FROM users WHERE id = ?', id);
 }
 

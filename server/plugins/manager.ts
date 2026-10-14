@@ -525,6 +525,11 @@ function validateService(s: ServiceDefinition) {
     if (typeof m.connect !== 'function' || typeof m.authorize !== 'function') {
       throw new Error(`Service "${s.id}", method "${m.id}": connect() and authorize() are required`);
     }
+    if (m.reusable) {
+      const r = m.reusable;
+      for (const key of ['prepare','exportCredentials','importCredentials','requiredScopes','coversScopes'] as const) if (r[key] !== undefined && typeof r[key] !== 'function') throw new Error(`Service ${s.id}: invalid reusable hook ${key}`);
+      if (!['static','oauth'].includes(r.kind) || typeof r.format !== 'string' || !r.format || typeof r.context !== 'function' || typeof r.validate !== 'function' || (r.kind === 'oauth' && (typeof r.grantedScopes !== 'function' || typeof r.allowRequest !== 'function' || typeof r.applyToken !== 'function' || typeof m.token !== 'function')) || (r.configKeys !== undefined && (!Array.isArray(r.configKeys) || r.configKeys.some(key => typeof key !== 'string')))) throw new Error(`Service ${s.id}: invalid reusable credential contract`);
+    }
     if (m.fields) validateFields(m.fields, `${s.id}.${m.id}.fields`);
   }
 }

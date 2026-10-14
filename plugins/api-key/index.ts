@@ -33,6 +33,13 @@ function method(o: Options, defaults: { id: string; name: string }, secrets: Fie
       return { credentials, account, config: rest };
     },
     authorize: apply,
+    reusable: o.identify ? { kind: 'static', format: secretKeys.length === 1 ? 'api-key/opaque/v1' : 'api-key/basic/v1',
+    exportCredentials: (credentials: any) => secretKeys.length === 1 ? { secret: credentials[secretKeys[0]] } : credentials,
+    importCredentials: (credentials: any) => secretKeys.length === 1 ? { [secretKeys[0]]: credentials.secret } : credentials, context: () => 'static-secret', prepare: (config, previous) => {
+      const result = Object.fromEntries(secretKeys.map(key => [key, config[key] ?? previous[key]]));
+      if (!secretKeys.some(key => config[key] !== undefined) || Object.values(result).some(value => typeof value !== 'string' || !value.trim())) throw new Error('Replacement secret is required');
+      return result;
+    }, validate: async (conn: Connection) => o.identify!(conn.credentials, conn.config) } as AuthMethod['reusable'] : undefined,
     token: token && (async (conn: Connection) => ({ accessToken: token(conn.credentials), tokenType: 'Bearer' })),
   };
 }

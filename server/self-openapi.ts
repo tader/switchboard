@@ -62,6 +62,20 @@ export function openapiDocument() {
     components: { securitySchemes: { token: { type: 'http', scheme: 'bearer' } } },
     security: [{ token: [] }],
     paths: {
+      '/api/credentials': {
+        get: op('Credentials', 'List reusable credentials owned by the full-access caller'),
+        post: op('Credentials', 'Promote a connection credential without revealing its secret', { requestBody: json({ type: 'object', required: ['connection', 'name'], properties: { connection: { type: 'string' }, name: { type: 'string' } } }) }),
+      },
+      '/api/credentials/candidates': { post: op('Credentials', 'Find compatible credentials or connections for reuse', { requestBody: json({ type: 'object', properties: { connection: { type: 'string' }, service: { type: 'string' }, method: { type: 'string' }, config: { type: 'object' } } }) }) },
+      '/api/credentials/{id}': {
+        get: op('Credentials', 'Inspect metadata, linked services, and rotation field definitions', { parameters: [id('Credential ID')] }),
+        patch: op('Credentials', 'Rename a credential with optimistic version checking', { parameters: [id('Credential ID')], requestBody: json({ type: 'object', required: ['name','version'], properties: { name: { type: 'string' }, version: { type: 'integer' } } }) }),
+        delete: op('Credentials', 'Delete an unused credential; linked credentials cannot be deleted', { parameters: [id('Credential ID')] }),
+      },
+      '/api/credentials/{id}/rotate': { post: op('Credentials', 'Validate and replace a static secret for all linked connections', { parameters: [id('Credential ID')], requestBody: json({ type: 'object', required: ['version','config'], properties: { version: { type: 'integer' }, config: { type: 'object', description: 'Replacement credential fields such as token, key, or password; never returned by the management API.' } } }) }) },
+      '/api/credentials/{id}/revoke': { post: op('Credentials', 'Disable all links and request provider revocation when supported', { parameters: [id('Credential ID')], requestBody: json({ type: 'object', required: ['version'], properties: { version: { type: 'integer' } } }) }) },
+      '/api/connections/{ref}/credential': { post: op('Credentials', 'Link a compatible credential after destination validation', { parameters: [ref], requestBody: json({ type: 'object', properties: { credentialId: { type: 'string' }, sourceConnection: { type: 'string' }, name: { type: 'string' } } }) }) },
+      '/api/connections/{ref}/credential/independent': { post: op('Credentials', 'Make a static connection independent without returning its secret', { parameters: [ref], description: 'OAuth requires a fresh reconnect with independent: true instead of copying a refresh token.' }) },
       '/api/connections/{ref}/websocket/proxy': { get: op('WebSocket', 'Upgrade to an authenticated provider frame relay', { parameters: [ref], description: 'Local connections with proxy support only. Authenticate with a Switchboard bearer token or same-origin session cookie. Provider authentication is performed server-side before frames are relayed.', responses: { '101': { description: 'WebSocket relay established' } } }) },
       '/api/connections/{ref}/plugin/openapi.json': { get: op('Connections', 'OpenAPI reference for plugin REST endpoints backed by WebSocket commands', { parameters: [ref] }) },
       '/api/connections/{ref}/websocket/operations': { get: op('WebSocket', 'Search/list WebSocket operations', { parameters: [ref, { name: 'query', in: 'query', schema: { type: 'string' } }, { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0 } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }] }) },
@@ -108,7 +122,7 @@ export function openapiDocument() {
                 method: { type: 'string', description: 'Sign-in method id; default: the first available' },
                 config: { type: 'object', description: "Values for the method's fields, by key" },
                 name: { type: 'string', description: 'Name scripts use for the connection; default: from the account' },
-                redirectUri: { type: 'string', description: "Redirect URI registered at the provider, if it is not Switchboard's (e.g. http://localhost:8080/callback). The result is then manual: complete it with POST /api/connect/{flow}/complete." },
+                credentialId: { type: 'string', description: 'Reuse this owned credential; additional OAuth consent is requested if needed.' }, independent: { type: 'boolean', description: 'Obtain a fresh OAuth grant for this connection.' }, redirectUri: { type: 'string', description: "Redirect URI registered at the provider, if it is not Switchboard's (e.g. http://localhost:8080/callback). The result is then manual: complete it with POST /api/connect/{flow}/complete." },
               },
             },
             { service: 'github', method: 'token', config: { token: '' } },
@@ -120,7 +134,7 @@ export function openapiDocument() {
         patch: op('Connections', 'Rename a connection', { parameters: [ref], requestBody: json({ type: 'object', properties: { name: { type: 'string', description: 'New name; scripts using the old one stop working' } } }, { name: '' }) }),
         delete: op('Connections', 'Disconnect', { parameters: [ref] }),
       },
-      '/api/connections/{ref}/reconnect': { post: op('Connections', 'Sign in again', { parameters: [ref], requestBody: json({ type: 'object' }, {}) }) },
+      '/api/connections/{ref}/reconnect': { post: op('Connections', 'Sign in again', { parameters: [ref], description: 'Full-access owners only. Shared reconnection updates the credential for every linked service; independent requires a fresh private OAuth grant.', requestBody: json({ type: 'object', properties: { method: { type: 'string' }, config: { type: 'object' }, credentialId: { type: 'string' }, independent: { type: 'boolean' } } }, {}) }) },
       '/api/connections/{ref}/token': {
         get: op('Connections', 'Get a fresh access token for a provider SDK', {
           parameters: [ref, { name: 'force', in: 'query', description: '1 to refresh even if still valid', schema: { type: 'string' } }],

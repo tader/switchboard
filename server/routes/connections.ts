@@ -36,12 +36,13 @@ api.put('/connections/:ref/shares/:peerId', requireFullAccess, async c => c.json
 api.get('/connections/:ref/shares', requireFullAccess, (c) => c.json(connectionShares(c.get('user').id, c.req.param('ref'))));
 api.put('/connections/:ref/shares', requireFullAccess, async (c) => c.json(setConnectionShares(c.get('user').id, c.req.param('ref'), await c.req.json())));
 
-api.get('/connections', (c) => c.json(listConnections(c.get('user').id, c.get('token')?.connectionIds)));
+api.get('/connections', (c) => c.json(listConnections(c.get('user').id, c.get('token')?.connectionIds).map(view => c.get('token')?.connectionIds && view.credential ? { ...view, credential: null, reusable: false, canIssueToken: false } : view)));
 
 api.get('/connections/:ref', (c) => {
   const row = getConnectionRow(c.get('user').id, c.req.param('ref'));
   assertConnectionAccess(c, row.id);
-  return c.json(listConnections(c.get('user').id, [row.id])[0]);
+  const view = listConnections(c.get('user').id, [row.id])[0];
+  return c.json(c.get('token')?.connectionIds && view.credential ? { ...view, credential: null, reusable: false, canIssueToken: false } : view);
 });
 
 // POST keeps argument values out of query strings and requires same-origin cookie requests.

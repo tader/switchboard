@@ -56,6 +56,7 @@ export interface Field {
 }
 
 export interface AuthMethod {
+  reusable?: boolean;
   id: string;
   name: string;
   description?: string;
@@ -79,7 +80,16 @@ export interface Service {
   peer?: { id: string; name: string; online: boolean };
 }
 
+export interface Credential {
+  id: string; name: string; kind: 'static' | 'oauth'; status: string; statusMessage: string | null; version: number;
+  account: { id?: string; label: string } | null;
+  connections: { id: string; name: string; serviceId: string; status: string; statusMessage?: string }[];
+  fields?: Field[]; updatedAt: number;
+}
+
 export interface Connection {
+  credential?: { id: string; name: string; kind: string; version: number } | null;
+  reusable?: boolean;
   icon?: string;
   readOnly: boolean;
   kind: 'http' | 'mcp';
