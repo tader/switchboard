@@ -335,8 +335,10 @@ plugin integration and deployment are outside this change.
   install/pin/development/return-to-latest flows passed. Light/dark/mobile
   screenshots inspected with no page errors or horizontal overflow. Regression
   tests load and update legacy stored source JSON; no schema migration is needed.
-- Release activation: Teams automation starts after its PR is merged. GitHub
-  refused access to Actions permission settings (HTTP 403), so its repository
-  setting allowing Actions to create release PRs could not be verified here.
+- Release activation: Teams automation starts after its PR is merged. The other ten
+  repositories already allow Actions to create release PRs. Teams has that setting
+  disabled; automatic approval review rejected enabling it because GitHub bundles
+  PR creation with permission to approve reviews. This setting still needs explicit
+  user approval before it can be changed.
   Existing plugin release PRs must be merged before their first releases exist.
   No application deployment or plugin release publication was performed.
