@@ -112,7 +112,8 @@ test('plugin releases, installation and updates use a shared GitHub connection w
       return original(process.env.SWITCHBOARD_TEST_GITHUB_ORIGIN + url.pathname + url.search, { ...init, headers });
     };
   `);
-  const port = 40000 + Math.floor(Math.random() * 3000);
+  // Keep both instances outside the existing peer/WebSocket test port ranges.
+  const port = 40000 + Math.floor(Math.random() * 900);
   const consumer = await launch('consumer', port, providerUrl);
   const enrollment = await consumer.call('POST', '/api/admin/peers', { name: 'GitHub owner' });
   assert.equal(enrollment.status, 201, JSON.stringify(enrollment.data));
