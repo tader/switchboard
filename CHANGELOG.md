@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/tader/switchboard/compare/v0.3.0...v0.4.0) (2026-10-15)
+
+
+### Features
+
+* add authenticated WebSocket proxy and plugin REST bindings ([5a60734](https://github.com/tader/switchboard/commit/5a6073442a7b49817a0de2651fa5dba82ad46822))
+* add authenticated WebSocket proxy and plugin REST bindings ([fe73a47](https://github.com/tader/switchboard/commit/fe73a47d88f40d3f4b8ced6d4c966817b8ca7a89))
+* include WebSocket operations in the API reference ([44ccedd](https://github.com/tader/switchboard/commit/44ccedddc49bb5bf5c1bee656ebbaac5ae88ec50))
+* install and update plugins from published releases ([27bd1c4](https://github.com/tader/switchboard/commit/27bd1c464e3db6c1b2eb3e44206369904b9d72ed))
+* share reusable credentials across connections ([14fc8cb](https://github.com/tader/switchboard/commit/14fc8cb47e7df88b811a68550926812d80291859))
+* share reusable credentials across connections ([7bb85bb](https://github.com/tader/switchboard/commit/7bb85bb925491babfc167eb3b41a108e52929d18))
+* track plugin releases with version pins and development branches ([735f719](https://github.com/tader/switchboard/commit/735f71932d114e7a26c84d63b67170cbb6cc12cb))
+
 ## [0.3.0](https://github.com/tader/switchboard/compare/v0.2.0...v0.3.0) (2026-10-13)
 
 
