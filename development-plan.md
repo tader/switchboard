@@ -342,3 +342,23 @@ plugin integration and deployment are outside this change.
   user approval before it can be changed.
   Existing plugin release PRs must be merged before their first releases exist.
   No application deployment or plugin release publication was performed.
+
+
+## Shared peer GitHub access for plugin updates
+
+- [x] Remove local-only assumptions from automatic GitHub selection, explicit
+  selection, and the apply-time permission check. Recognize namespaced peer and
+  relayed GitHub HTTP handles; require current per-user access and availability.
+- [x] Execute GitHub requests through the existing peer proxy. Provider secrets
+  stay on the owning instance, and archive redirects still download directly
+  without forwarding authentication to codeload. Preserve plugin audit labels.
+- [x] Include shared GitHub connections and peer names in the console picker.
+  Keep unavailable, non-GitHub, and MCP connections out of automatic selection.
+- [x] Update the plugin guide, README, and API reference.
+- [x] Validation: all 112 tests, server typecheck, and web build pass. A real
+  two-instance test covers release lookup, automatic installs, remembered updates,
+  apply-time share revocation, offline peers, wrong service types, credential
+  isolation/redaction, and archives larger than the peer response limit.
+- [x] Chrome checks verify local/peer/relayed picker entries, peer labels,
+  filtering, and selected connection IDs in preview requests. Light/dark/mobile
+  screenshots inspected; no page errors or horizontal overflow. No deployment.

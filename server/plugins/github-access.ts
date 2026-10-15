@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import * as tar from 'tar';
 import { config } from '../config.ts';
 import { randomToken } from '../crypto.ts';
-import { listConnections, loadConnection } from '../connections.ts';
+import { getConnectionRow, listConnections, loadConnection, toView, type ConnectionView } from '../connections.ts';
 import { execute } from '../proxy.ts';
 import type { Caller } from '../audit.ts';
 import type { User } from '../users.ts';
@@ -19,7 +19,7 @@ export interface GithubContext {
   githubConnectionId?: string | null;
   preferredConnectionId?: string;
 }
-interface Credential { connectionId?: string; configured?: boolean }
+interface Credential { connectionId?: string; configured?: boolean; peer?: boolean }
 
 export function connectionOption(value: unknown): string | null | undefined {
   if (value === undefined || value === null) return value;
@@ -47,18 +47,38 @@ export function parseRepo(input: string, ref?: string, subpath?: string): RepoRe
   return { repo: s, ref: r, path: p || undefined };
 }
 
+function isGithubConnection(connection: ConnectionView): boolean {
+  return connection.kind === 'http' && (connection.peer
+    ? /^(?:peer\/[A-Za-z0-9_-]+\/)+github$/.test(connection.serviceId)
+    : connection.serviceId === 'github');
+}
+
+/** Validate the acting user's handle without loading credentials from another instance. */
+export function githubConnection(userId: string, ref: string): ConnectionView {
+  const row = getConnectionRow(userId, ref);
+  const connection = toView(row);
+  if (!isGithubConnection(connection)) throw badRequest('Select a GitHub HTTP connection');
+  if (connection.status === 'unavailable') throw new HttpError(503, connection.statusMessage ?? 'The GitHub connection is unavailable');
+  if (!row.peer_id) loadConnection(userId, row.id);
+  return connection;
+}
+
+function retryCredential(error: unknown, credential: Credential, ctx: GithubContext): error is HttpError {
+  return !!credential.connectionId && !ctx.githubConnectionId && error instanceof HttpError
+    && (error.message.startsWith('Could not authenticate with') || (!!credential.peer && [403, 404, 503, 504].includes(error.status)));
+}
+
 function credentials(ctx: GithubContext): Credential[] {
   const requested = connectionOption(ctx.githubConnectionId);
   if (requested) {
     if (!ctx.user) throw badRequest('A signed-in administrator is required to select a GitHub connection');
-    const { row, conn } = loadConnection(ctx.user.id, requested);
-    if (row.peer_id || conn.kind !== 'http' || conn.serviceId !== 'github') throw badRequest('Select a local GitHub connection');
-    return [{ connectionId: conn.id }];
+    const connection = githubConnection(ctx.user.id, requested);
+    return [{ connectionId: connection.id, peer: !!connection.peer }];
   }
-  const connections = ctx.user ? listConnections(ctx.user.id).filter((c) => c.serviceId === 'github' && c.kind === 'http' && !c.peer && c.status !== 'unavailable') : [];
+  const connections = ctx.user ? listConnections(ctx.user.id).filter((c) => isGithubConnection(c) && c.status !== 'unavailable') : [];
   const preferred = requested === null ? undefined : ctx.preferredConnectionId;
   connections.sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  return [{}, ...(config.githubToken ? [{ configured: true }] : []), ...connections.map((c) => ({ connectionId: c.id }))];
+  return [{}, ...(config.githubToken ? [{ configured: true }] : []), ...connections.map((c) => ({ connectionId: c.id, peer: !!c.peer }))];
 }
 
 async function request(url: string, accept: string, credential: Credential, ctx: GithubContext): Promise<Response> {
@@ -95,8 +115,8 @@ export async function resolveCommit(repo: string, ref?: string, ctx: GithubConte
     let res: Response;
     try { res = await resolveWith(repo, ref, credential, ctx); }
     catch (e) {
-      // A broken stored sign-in must not prevent automatic mode trying another account.
-      if (credential.connectionId && !ctx.githubConnectionId && e instanceof HttpError && e.message.startsWith('Could not authenticate with')) { error = e; continue; }
+      // A broken stored sign-in or unavailable peer must not prevent trying another account.
+      if (retryCredential(e, credential, ctx)) { error = e; continue; }
       throw e;
     }
     if (res.ok) return (await res.text()).trim();
@@ -119,7 +139,7 @@ export async function repositoryReleases(input: RepoRef, ctx: GithubContext = {}
       let res: Response;
       try { res = await request(`https://api.github.com/repos/${input.repo}/releases?per_page=100&page=${page}`, 'application/vnd.github+json', credential, ctx); }
       catch (e) {
-        if (credential.connectionId && !ctx.githubConnectionId && e instanceof HttpError && e.message.startsWith('Could not authenticate with')) { error = e; denied = true; break; }
+        if (retryCredential(e, credential, ctx)) { error = e; denied = true; break; }
         throw e;
       }
       if (!res.ok) {
@@ -153,7 +173,7 @@ async function latestReleaseTag(repo: string, ctx: GithubContext): Promise<strin
     let res: Response;
     try { res = await request(`https://api.github.com/repos/${repo}/releases/latest`, 'application/vnd.github+json', credential, ctx); }
     catch (e) {
-      if (credential.connectionId && !ctx.githubConnectionId && e instanceof HttpError && e.message.startsWith('Could not authenticate with')) { error = e; continue; }
+      if (retryCredential(e, credential, ctx)) { error = e; continue; }
       throw e;
     }
     if (res.ok) {
@@ -195,7 +215,7 @@ export async function repositoryArchive(input: RepoRef, ctx: GithubContext = {})
     let resolved: Response;
     try { resolved = await resolveWith(input.repo, input.ref, credential, ctx); }
     catch (e) {
-      if (credential.connectionId && !ctx.githubConnectionId && e instanceof HttpError && e.message.startsWith('Could not authenticate with')) { error = e; continue; }
+      if (retryCredential(e, credential, ctx)) { error = e; continue; }
       throw e;
     }
     if (!resolved.ok) {
@@ -205,7 +225,12 @@ export async function repositoryArchive(input: RepoRef, ctx: GithubContext = {})
       throw error;
     }
     const commit = (await resolved.text()).trim();
-    let archive = await request(`https://api.github.com/repos/${input.repo}/tarball/${commit}`, 'application/vnd.github+json', credential, ctx);
+    let archive: Response;
+    try { archive = await request(`https://api.github.com/repos/${input.repo}/tarball/${commit}`, 'application/vnd.github+json', credential, ctx); }
+    catch (e) {
+      if (retryCredential(e, credential, ctx)) { error = e; continue; }
+      throw e;
+    }
     if (accessFailure(archive)) { error = await githubError(archive, input.repo); continue; }
     if (archive.status === 302) {
       const location = archive.headers.get('location');
