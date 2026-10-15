@@ -21,7 +21,7 @@ export interface GithubSource {
   ref?: string;
   path: string;
   commit: string;
-  /** A preference only: the acting administrator must own this connection. */
+  /** A preference only: the acting administrator must have access to this local connection or shared peer handle. */
   githubConnectionId?: string;
 }
 

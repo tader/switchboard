@@ -63,7 +63,7 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
     setPlan(null); setError(''); setConnectionError(''); setConnections([]);
     const controller = new AbortController();
     api<Connection[]>('/connections', { signal: controller.signal }).then((list) => {
-      setConnections(list.filter((c) => c.serviceId === 'github' && c.kind === 'http' && !c.peer && c.status !== 'unavailable'));
+      setConnections(list.filter((c) => c.kind === 'http' && (c.peer ? /^(?:peer\/[A-Za-z0-9_-]+\/)+github$/.test(c.serviceId) : c.serviceId === 'github') && c.status !== 'unavailable'));
     }, (e) => { if (!controller.signal.aborted) setConnectionError(e.message); });
     return () => controller.abort();
   }, [request]);
@@ -149,11 +149,11 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
           {releaseError && <Alert>{releaseError}</Alert>}
           {channel !== 'branch' && repo.trim() && !loadingReleases && !releaseError && !releases.some((r) => channel === 'release' || !r.prerelease) && <Alert>No {channel === 'latest' ? 'stable ' : ''}releases available. For repositories with separate plugin releases, choose a plugin folder. You can also select a development branch.</Alert>}
         </>}
-        <FormField label="GitHub access" htmlFor="plugin-connection" description="Automatic access tries public access, the configured token, and your local GitHub connections.">
+        <FormField label="GitHub access" htmlFor="plugin-connection" description="Automatic access tries public access, the configured token, and your accessible GitHub connections, including shared peer connections.">
           <Select id="plugin-connection" value={connection} onChange={(e) => setConnection(e.target.value)} disabled={busy}>
             {updating && <option value="remembered">Remembered choices, then automatic</option>}
             <option value="automatic">Automatic</option>
-            {connections.map((c) => <option key={c.id} value={c.id}>{c.name}{c.account?.label ? ` (${c.account.label})` : ''}</option>)}
+            {connections.map((c) => <option key={c.id} value={c.id}>{c.name}{c.peer ? ` (${c.peer.name})` : c.account?.label ? ` (${c.account.label})` : ''}</option>)}
           </Select>
         </FormField>
         {connectionError && <Alert>Could not load the GitHub connection picker: {connectionError}</Alert>}

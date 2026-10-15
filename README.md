@@ -149,7 +149,7 @@ Everything in the web app is available with a token that has full access (tokens
 | `GET/POST /api/calls`, `GET/PUT/DELETE /api/calls/:id`, `POST /api/calls/:id/run` | Saved calls |
 | `GET/POST /api/tokens`, `PATCH/DELETE /api/tokens/:id` | API tokens |
 | `GET /api/admin/plugins`, `GET /api/admin/plugins/:id` (with log) | Admin: plugins |
-| `POST /api/admin/plugins/install` `{repo, ref?, path?, githubConnectionId?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` `{ref?, githubConnectionId?}` | Install/update from GitHub; omit update ref to keep it or use `null` for the default branch. Select your local GitHub connection or use automatic access |
+| `POST /api/admin/plugins/install` `{repo, channel?, ref?, path?, githubConnectionId?}`, `POST /api/admin/plugins/check-updates`, `POST /api/admin/plugins/:id/update` `{channel?, ref?, githubConnectionId?}` | Install/update from published releases, pin a version, or follow a development branch. Updates retain the saved policy. Select a local or shared peer GitHub connection, or use automatic access |
 | `GET /api/admin/plugins/community` | Live community catalog, fetched at runtime |
 | `POST /api/admin/plugins/install/plan`, `POST /api/admin/plugins/update/plan`, `POST /api/admin/plugins/apply` `{planId}` | Preview and apply plugin/dependency changes; [request formats](docs/plugins.md#installation-api) |
 | `POST /api/admin/plugins/:id/reload`, `PATCH /api/admin/plugins/:id` `{enabled}`, `GET/PUT /api/admin/plugins/:id/settings`, `DELETE /api/admin/plugins/:id` | |

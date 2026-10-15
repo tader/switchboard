@@ -13,7 +13,7 @@ import { peerConnection } from './peers.ts';
 import { instanceId, MAX_PEER_HOPS, PEER_OPERATIONS } from './peer-protocol.ts';
 import { HttpError } from './http.ts';
 
-const auditSources = new Set<AuditSource>(['proxy', 'call', 'saved-call', 'console', 'token', 'mcp']);
+const auditSources = new Set<AuditSource>(['proxy', 'call', 'saved-call', 'console', 'token', 'mcp', 'plugin']);
 export function sharedCatalogue(peerId: string, targetInstance?: string) {
   const connections = all(`SELECT c.* FROM connections c JOIN connection_peer_shares sh ON sh.connection_id = c.id
     JOIN users u ON u.id = c.user_id WHERE sh.peer_id = ? AND u.disabled = 0 AND u.peer_shadow = 0 ORDER BY c.id`, peerId).flatMap(row => {

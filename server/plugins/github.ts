@@ -8,7 +8,7 @@ import { HttpError, badRequest } from '../http.ts';
 import type { PluginManifest } from './api.ts';
 import { type GithubSource, installedDir, plugins, upsertRow, validateManifest } from './manager.ts';
 import { communityCatalog, type PluginCatalog } from './catalog.ts';
-import { connectionOption, parseRepo, repositoryArchive, releaseChannel, releaseRef, resolveCommit, type GithubContext, type RepoRef, type RepositoryArchive } from './github-access.ts';
+import { connectionOption, githubConnection, parseRepo, repositoryArchive, releaseChannel, releaseRef, resolveCommit, type GithubContext, type RepoRef, type RepositoryArchive } from './github-access.ts';
 
 export { parseRepo, resolveCommit };
 export type { RepoRef, GithubContext };
@@ -294,8 +294,7 @@ async function applyPlanNow(planId: string, ctx: GithubContext, reload: (ids: st
     // Recheck explicit/successful saved connections before code can be installed.
     for (const c of plan.candidates) if (c.source.githubConnectionId) {
       if (!ctx.user) throw badRequest('The GitHub connection is no longer accessible');
-      const { conn } = await import('../connections.ts').then((m) => m.loadConnection(ctx.user!.id, c.source.githubConnectionId!));
-      if (conn.serviceId !== 'github' || conn.kind !== 'http') throw badRequest('The GitHub connection is no longer accessible');
+      githubConnection(ctx.user.id, c.source.githubConnectionId);
     }
     for (const id of ids) {
       const dest = path.join(installedDir(), id);
