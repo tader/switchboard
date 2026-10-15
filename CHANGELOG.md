@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/tader/switchboard/compare/v0.4.0...v0.4.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* allow shared peer GitHub connections for plugin updates ([8922fab](https://github.com/tader/switchboard/commit/8922fab3bd6ba3a010af31d91466c9645caa8b90))
+* use shared peer GitHub connections for plugin updates ([41a883b](https://github.com/tader/switchboard/commit/41a883b909479efaf12742a235e4896f4fa5d087))
+
 ## [0.4.0](https://github.com/tader/switchboard/compare/v0.3.0...v0.4.0) (2026-10-15)
 
 
