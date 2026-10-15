@@ -11,7 +11,8 @@ import type { Caller } from '../audit.ts';
 import type { User } from '../users.ts';
 import { HttpError, badRequest } from '../http.ts';
 
-export interface RepoRef { repo: string; ref?: string; path?: string }
+export type ReleaseChannel = 'latest' | 'release' | 'branch';
+export interface RepoRef { repo: string; ref?: string; path?: string; channel?: ReleaseChannel }
 export interface GithubContext {
   user?: User;
   caller?: Caller;
@@ -104,6 +105,85 @@ export async function resolveCommit(repo: string, ref?: string, ctx: GithubConte
     if (!retry) throw error;
   }
   throw error ?? badRequest('No usable GitHub credentials');
+}
+
+export interface PluginRelease { tag: string; name: string; prerelease: boolean; publishedAt: string; url: string }
+
+/** Published releases only; never infer a release from a branch or an unassociated tag. */
+export async function repositoryReleases(input: RepoRef, ctx: GithubContext = {}): Promise<PluginRelease[]> {
+  let error: Error | undefined;
+  for (const credential of credentials(ctx)) {
+    const releases: PluginRelease[] = [];
+    let denied = false;
+    for (let page = 1; ; page++) {
+      let res: Response;
+      try { res = await request(`https://api.github.com/repos/${input.repo}/releases?per_page=100&page=${page}`, 'application/vnd.github+json', credential, ctx); }
+      catch (e) {
+        if (credential.connectionId && !ctx.githubConnectionId && e instanceof HttpError && e.message.startsWith('Could not authenticate with')) { error = e; denied = true; break; }
+        throw e;
+      }
+      if (!res.ok) {
+        const retry = accessFailure(res);
+        error = await githubError(res, input.repo);
+        if (!retry) throw error;
+        denied = true; break;
+      }
+      const items = await res.json();
+      if (!Array.isArray(items)) throw badRequest('GitHub returned an invalid release list');
+      for (const r of items) if (!r.draft && r.published_at && typeof r.tag_name === 'string') {
+        releases.push({ tag: r.tag_name, name: r.name || r.tag_name, prerelease: !!r.prerelease, publishedAt: r.published_at, url: `https://github.com/${input.repo}/releases/tag/${encodeURIComponent(r.tag_name)}` });
+      }
+      if (items.length < 100) break;
+      if (page === 100) throw badRequest('Too many releases to list; choose a repository with fewer releases');
+    }
+    if (denied) continue;
+    // release-please supports both repository-wide v1.2.3 and component-v1.2.3 tags.
+    const component = input.path?.split('/').at(-1);
+    const scoped = component ? releases.filter((r) => r.tag.startsWith(`${component}-v`)) : [];
+    const result = scoped.length ? scoped : releases.filter((r) => !/^[a-z][a-z0-9-]*-v\d/.test(r.tag));
+    return result;
+  }
+  throw error ?? badRequest('No usable GitHub credentials');
+}
+
+/** Honor GitHub's designated latest release for repositories with one release stream. */
+async function latestReleaseTag(repo: string, ctx: GithubContext): Promise<string> {
+  let error: Error | undefined;
+  for (const credential of credentials(ctx)) {
+    let res: Response;
+    try { res = await request(`https://api.github.com/repos/${repo}/releases/latest`, 'application/vnd.github+json', credential, ctx); }
+    catch (e) {
+      if (credential.connectionId && !ctx.githubConnectionId && e instanceof HttpError && e.message.startsWith('Could not authenticate with')) { error = e; continue; }
+      throw e;
+    }
+    if (res.ok) {
+      const release = await res.json();
+      if (release.draft || release.prerelease || !release.published_at || typeof release.tag_name !== 'string') throw badRequest('GitHub returned an invalid latest release');
+      return release.tag_name;
+    }
+    const retry = accessFailure(res);
+    error = await githubError(res, repo);
+    if (!retry) throw error;
+  }
+  throw error ?? badRequest('No usable GitHub credentials');
+}
+
+export function releaseChannel(input: RepoRef): ReleaseChannel {
+  return input.channel ?? (input.ref ? 'branch' : 'latest');
+}
+
+/** Resolve the selected policy to a published tag, leaving the policy intact. */
+export async function releaseRef(input: RepoRef, ctx: GithubContext = {}): Promise<RepoRef> {
+  const channel = releaseChannel(input);
+  if (channel === 'branch') return { ...input, channel };
+  const releases = await repositoryReleases(input, ctx);
+  let release = channel === 'release' ? releases.find((r) => r.tag === input.ref) : releases.find((r) => !r.prerelease);
+  if (channel === 'latest' && release && !/^[a-z][a-z0-9-]*-v\d/.test(release.tag)) {
+    const tag = await latestReleaseTag(input.repo, ctx);
+    release = releases.find((r) => r.tag === tag && !r.prerelease);
+  }
+  if (!release) throw badRequest(channel === 'release' ? 'The selected version is not a published release for this plugin' : 'No stable release is published for this plugin. Choose a development branch explicitly.');
+  return { ...input, channel, ref: release.tag };
 }
 
 export interface RepositoryArchive { dir: string; commit: string; githubConnectionId?: string; access: GithubContext }

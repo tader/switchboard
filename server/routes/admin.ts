@@ -3,7 +3,7 @@ import { type Env, requireAdmin, requireUser } from '../auth.ts';
 import { badRequest } from '../http.ts';
 import { applyPlan, checkUpdates, install, parseRepo, previewInstall, previewUpdates, uninstall, update, updateOptions, type GithubContext } from '../plugins/github.ts';
 import { communityCatalog } from '../plugins/catalog.ts';
-import { connectionOption } from '../plugins/github-access.ts';
+import { connectionOption, repositoryReleases } from '../plugins/github-access.ts';
 import { callerFrom } from '../audit.ts';
 import { type PluginRecord, pluginIcon, plugins } from '../plugins/manager.ts';
 import { type Role, createInvite, createUser, deleteUser, getUser, listUsers, pendingInvites, updateUser } from '../users.ts';
@@ -49,9 +49,16 @@ admin.get('/plugins/community', async (c) => {
   return c.json(await communityCatalog());
 });
 
+admin.post('/plugins/releases', async (c) => {
+  const { repo, path, githubConnectionId, pluginId } = await pluginRequest(c);
+  const source = pluginId ? plugins.get(pluginId).source : undefined;
+  const input = parseRepo(repo ?? source?.repo, undefined, path ?? source?.path);
+  return c.json(await repositoryReleases(input, { ...githubContext(c, githubConnectionId), preferredConnectionId: source?.githubConnectionId }));
+});
+
 admin.post('/plugins/install/plan', async (c) => {
-  const { repo, ref, path, githubConnectionId, expectedId } = await pluginRequest(c);
-  return c.json(await previewInstall(parseRepo(repo, ref, path), githubContext(c, githubConnectionId), expectedId));
+  const { repo, ref, path, channel, githubConnectionId, expectedId } = await pluginRequest(c);
+  return c.json(await previewInstall({ repo, ref, path, channel }, githubContext(c, githubConnectionId), expectedId));
 });
 
 admin.post('/plugins/update/plan', async (c) => {
@@ -71,9 +78,9 @@ admin.get('/plugins/:id', (c) => {
 });
 
 admin.post('/plugins/install', async (c) => {
-  const { repo, ref, path, githubConnectionId } = await pluginRequest(c);
+  const { repo, ref, path, channel, githubConnectionId } = await pluginRequest(c);
   if (!repo) throw badRequest('repo is required');
-  const ids = await install(parseRepo(repo, ref, path), githubContext(c, githubConnectionId));
+  const ids = await install({ repo, ref, path, channel }, githubContext(c, githubConnectionId));
   return c.json(ids.map((id) => view(plugins.get(id))));
 });
 

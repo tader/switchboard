@@ -8,11 +8,11 @@ import { HttpError, badRequest } from '../http.ts';
 import type { PluginManifest } from './api.ts';
 import { type GithubSource, installedDir, plugins, upsertRow, validateManifest } from './manager.ts';
 import { communityCatalog, type PluginCatalog } from './catalog.ts';
-import { connectionOption, parseRepo, repositoryArchive, resolveCommit, type GithubContext, type RepoRef, type RepositoryArchive } from './github-access.ts';
+import { connectionOption, parseRepo, repositoryArchive, releaseChannel, releaseRef, resolveCommit, type GithubContext, type RepoRef, type RepositoryArchive } from './github-access.ts';
 
 export { parseRepo, resolveCommit };
 export type { RepoRef, GithubContext };
-export interface UpdateOptions { ref?: string | null; githubConnectionId?: string | null }
+export interface UpdateOptions { channel?: 'latest' | 'release' | 'branch'; ref?: string | null; githubConnectionId?: string | null }
 export interface UpdateRequest extends UpdateOptions { id: string }
 export interface PlanChange {
   id: string; name: string; fromVersion: string | null; version: string;
@@ -87,7 +87,7 @@ function candidate(archive: RepositoryArchive, input: RepoRef, rel: string, expl
     validateManifest(manifest);
   } catch (e: any) { throw badRequest(`${input.repo}/${rel || 'plugin.json'}: ${e.message}`); }
   if (expectedId && manifest.id !== expectedId) throw badRequest(`The plugin at ${input.repo}/${rel} now has id "${manifest.id}"; expected "${expectedId}"`);
-  return { manifest, archive, rel, explicit, source: { type: 'github', repo: input.repo, ref: input.ref, path: rel.split(path.sep).join('/'), commit: archive.commit, githubConnectionId: archive.githubConnectionId } };
+  return { manifest, archive, rel, explicit, source: { type: 'github', repo: input.repo, ref: input.ref, channel: releaseChannel(input), path: rel.split(path.sep).join('/'), commit: archive.commit, githubConnectionId: archive.githubConnectionId } };
 }
 
 function compatible(manifest: PluginManifest, range?: string): boolean {
@@ -96,14 +96,23 @@ function compatible(manifest: PluginManifest, range?: string): boolean {
 
 export function updateOptions(input: unknown): UpdateOptions {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw badRequest('Expected an object with an optional ref');
-  const { ref, githubConnectionId } = input as { ref?: unknown; githubConnectionId?: unknown };
+  const { ref, channel, githubConnectionId } = input as { ref?: unknown; channel?: unknown; githubConnectionId?: unknown };
+  if (channel !== undefined && !['latest', 'release', 'branch'].includes(channel as string)) throw badRequest('channel must be latest, release or branch');
+  if (channel === 'release' && (typeof ref !== 'string' || !ref.trim())) throw badRequest('A release tag is required');
+  if (channel === 'latest' && ref != null) throw badRequest('The latest release channel does not accept a ref');
   if (ref !== undefined && ref !== null && (typeof ref !== 'string' || !ref.trim() || /[\x00-\x20\x7f]/.test(ref.trim()))) throw badRequest('ref must be a nonempty branch, tag or commit, or null for the default branch');
   const option = connectionOption(githubConnectionId);
-  return { ref: typeof ref === 'string' ? ref.trim() : ref, ...(option !== undefined ? { githubConnectionId: option } : {}) };
+  return { ...(channel ? { channel: channel as UpdateOptions['channel'] } : {}), ref: typeof ref === 'string' ? ref.trim() : ref, ...(option !== undefined ? { githubConnectionId: option } : {}) };
+}
+
+function installOptions(input: RepoRef): RepoRef {
+  const parsed = parseRepo(input.repo, input.ref, input.path);
+  const options = updateOptions({ ...input, ref: input.channel === 'latest' ? input.ref : parsed.ref });
+  return { ...parsed, ...(options.channel ? { channel: options.channel } : {}) };
 }
 
 export async function previewInstall(input: RepoRef, ctx: GithubContext = {}, expectedId?: string): Promise<PluginPlan> {
-  const parsed = parseRepo(input.repo, input.ref, input.path);
+  const parsed = installOptions(input);
   if (expectedId !== undefined && (typeof expectedId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(expectedId))) throw badRequest('Invalid expected plugin id');
   return buildPlan({ input: parsed, expectedId }, [], ctx);
 }
@@ -117,11 +126,16 @@ async function buildPlanNow(installation: { input: RepoRef; expectedId?: string 
   const before = snapshot();
   const archives: RepositoryArchive[] = [];
   const fetched = new Map<string, Promise<RepositoryArchive>>();
+  const resolvedInputs = new WeakMap<RepositoryArchive, RepoRef>();
   const selected = new Map<string, Candidate>();
   let catalog: PluginCatalog | undefined;
   const fetchArchive = async (input: RepoRef, access = ctx) => {
-    const key = JSON.stringify([input.repo, input.ref, access.githubConnectionId, access.preferredConnectionId]);
-    if (!fetched.has(key)) fetched.set(key, repositoryArchive(input, access).then((a) => { archives.push(a); return a; }));
+    const key = JSON.stringify([input.repo, input.ref, input.path, input.channel, access.githubConnectionId, access.preferredConnectionId]);
+    if (!fetched.has(key)) fetched.set(key, (async () => {
+      const resolved = await releaseRef(input, access);
+      const a = await repositoryArchive(resolved, access);
+      resolvedInputs.set(a, resolved); archives.push(a); return a;
+    })());
     return fetched.get(key)!;
   };
   const add = (c: Candidate) => {
@@ -135,16 +149,22 @@ async function buildPlanNow(installation: { input: RepoRef; expectedId?: string 
       const a = await fetchArchive(input);
       const rels = findPlugins(a.dir, input.path);
       if (expectedId && rels.length !== 1) throw badRequest('A community listing must identify one plugin folder');
-      for (const rel of rels) add(candidate(a, input, rel, true, expectedId));
+      for (const rel of rels) add(candidate(a, resolvedInputs.get(a)!, rel, true, expectedId));
     }
     for (const r of updates) {
       const p = plugins.get(r.id);
       const s = p.source;
       if (s?.type !== 'github') throw badRequest('Only plugins installed from GitHub can be updated');
-      const input = { repo: s.repo, ref: r.ref === undefined ? s.ref : r.ref ?? undefined, path: s.path };
+      const policy = r.channel ?? (r.ref !== undefined ? 'branch' : releaseChannel(s));
+      const pin = r.channel === undefined && r.ref === undefined && policy === 'release';
+      // An existing pin follows its installed SHA, even if somebody moves the tag.
+      const ref = pin ? s.commit : r.channel !== undefined ? r.ref ?? undefined : r.ref === undefined ? s.ref : r.ref ?? undefined;
+      const input: RepoRef = { repo: s.repo, channel: pin ? 'branch' : policy, ref: policy === 'latest' ? undefined : ref, path: s.path };
       const a = await fetchArchive(input, { ...ctx, githubConnectionId: r.githubConnectionId === undefined ? ctx.githubConnectionId : r.githubConnectionId, preferredConnectionId: s.githubConnectionId });
       if (!fs.existsSync(path.join(a.dir, s.path, 'plugin.json'))) throw badRequest(`The repository no longer contains ${s.path || 'plugin.json'}`);
-      add(candidate(a, input, s.path, true, p.id));
+      const c = candidate(a, resolvedInputs.get(a)!, s.path, true, p.id);
+      if (pin) { c.source.channel = 'release'; c.source.ref = s.ref; }
+      add(c);
     }
     const visiting = new Set<string>();
     const done = new Set<string>();
@@ -161,9 +181,10 @@ async function buildPlanNow(installation: { input: RepoRef; expectedId?: string 
           if (installed) {
             const s = installed.source;
             if (!s) throw badRequest(`${manifest.id} requires ${id} ${range}; ${installed.manifest.version} is installed. ${installed.origin === 'builtin' ? 'Upgrade Switchboard' : 'Update the locally installed dependency'} first.`);
-            const input = { repo: s.repo, ref: s.ref, path: s.path };
+            if (releaseChannel(s) === 'release') throw badRequest(`Dependency ${id} is pinned to ${s.ref}; select a compatible release explicitly first`);
+            const input = { repo: s.repo, ref: s.ref, path: s.path, channel: releaseChannel(s) };
             const a = await fetchArchive(input, { ...(parent?.archive.access ?? ctx), preferredConnectionId: s.githubConnectionId });
-            dep = candidate(a, input, s.path, false, id);
+            dep = candidate(a, resolvedInputs.get(a)!, s.path, false, id);
             if (valid(installed.manifest.version) && valid(dep.manifest.version) && lt(dep.manifest.version, installed.manifest.version)) throw badRequest(`Dependency ${id} would be downgraded; choose a compatible tracked ref first`);
           } else {
             // A dependency may be another folder in the requested repository.
@@ -172,7 +193,15 @@ async function buildPlanNow(installation: { input: RepoRef; expectedId?: string 
                 try { return JSON.parse(fs.readFileSync(path.join(parent.archive.dir, rel, 'plugin.json'), 'utf8')).id === id; } catch { return false; }
               });
               if (matches.length > 1) throw badRequest(`Multiple folders provide dependency ${id}`);
-              if (matches.length) dep = candidate(parent.archive, parent.source, matches[0], false, id);
+              if (matches.length) {
+                const rel = matches[0];
+                if (releaseChannel(parent.source) !== 'branch' && /^[a-z][a-z0-9-]*-v\d/.test(parent.source.ref ?? '')) {
+                  // A component's tag does not release its sibling folders.
+                  const input: RepoRef = { repo: parent.source.repo, path: rel.split(path.sep).join('/'), channel: 'latest' };
+                  const a = await fetchArchive(input, parent.archive.access);
+                  dep = candidate(a, resolvedInputs.get(a)!, rel, false, id);
+                } else dep = candidate(parent.archive, parent.source, rel, false, id);
+              }
             }
             if (!dep) {
               catalog ??= await communityCatalog();
@@ -182,7 +211,7 @@ async function buildPlanNow(installation: { input: RepoRef; expectedId?: string 
               const a = await fetchArchive(input, parent?.archive.access ?? ctx);
               const rels = findPlugins(a.dir, input.path);
               if (rels.length !== 1) throw badRequest(`Catalog dependency ${id} must identify one plugin folder`);
-              dep = candidate(a, input, rels[0], false, id);
+              dep = candidate(a, resolvedInputs.get(a)!, rels[0], false, id);
             }
           }
           done.delete(id);
@@ -315,7 +344,7 @@ function requireReview(plan: PluginPlan) {
 
 export async function install(input: RepoRef, ctx: GithubContext = {}): Promise<string[]> {
   return plugins.mutate(async (reload) => {
-    const plan = await buildPlanNow({ input: parseRepo(input.repo, input.ref, input.path) }, [], ctx);
+    const plan = await buildPlanNow({ input: installOptions(input) }, [], ctx);
     requireReview(plan);
     return (await applyPlanNow(plan.planId, ctx, reload)).ids;
   });
@@ -334,9 +363,13 @@ export async function checkUpdates(ctx: GithubContext = {}) {
   const latest = new Map<string, Promise<string>>();
   return Promise.all(installed.map(async (p) => {
     const s = p.source!;
-    const key = JSON.stringify([s.repo, s.ref, s.githubConnectionId, ctx.githubConnectionId]);
+    const key = JSON.stringify([s.repo, s.ref, s.path, s.channel, s.githubConnectionId, ctx.githubConnectionId]);
     try {
-      if (!latest.has(key)) latest.set(key, resolveCommit(s.repo, s.ref, { ...ctx, preferredConnectionId: s.githubConnectionId }));
+      if (!latest.has(key)) {
+        const access = { ...ctx, preferredConnectionId: s.githubConnectionId };
+        latest.set(key, releaseChannel(s) === 'release' ? Promise.resolve(s.commit)
+          : releaseRef(s, access).then((input) => resolveCommit(s.repo, input.ref, access)));
+      }
       const commit = await latest.get(key)!;
       return { id: p.id, ref: s.ref ?? null, current: s.commit, latest: commit, updateAvailable: commit !== s.commit };
     } catch (e: any) { return { id: p.id, ref: s.ref ?? null, current: s.commit, error: e.message, updateAvailable: false }; }

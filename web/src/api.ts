@@ -215,7 +215,7 @@ export interface PluginInfo {
   dependents: string[];
   origin: 'builtin' | 'installed';
   overridesBuiltin: boolean;
-  source?: { type: 'github'; repo: string; ref?: string; path: string; commit: string; githubConnectionId?: string };
+  source?: { channel?: 'latest' | 'release' | 'branch'; type: 'github'; repo: string; ref?: string; path: string; commit: string; githubConnectionId?: string };
   enabled: boolean;
   status: 'active' | 'error' | 'disabled' | 'blocked';
   error?: string;

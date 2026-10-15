@@ -314,3 +314,31 @@ subscriptions are available through API/MCP, peers, and the console, including s
 commands and redacted activity. All 85 tests, server typecheck, and web build passed;
 the previous-HEAD database upgrade and Chrome UI flows were verified. Home Assistant
 plugin integration and deployment are outside this change.
+
+## Plugin release policies
+
+- [x] Audit all 11 maintained plugin repositories. Ten already have successful
+  release-please workflows with synchronized package/plugin manifests; Teams now
+  has a companion PR adding the same workflow and root release configuration.
+  The catalog remains unversioned; the archived plugin repository is unchanged.
+- [x] Default new installations and existing unqualified sources to stable
+  published releases. Honor GitHub's designated latest for repository releases;
+  scope release-please component tags to their plugin folders. Require an explicit
+  development choice when no stable release exists.
+- [x] Add published release discovery, pagination, an older/prerelease picker,
+  immutable release pins, and explicit development branch tracking. Preserve
+  existing explicit refs and private-repository access behavior.
+- [x] Resolve sibling component dependencies from their own releases, retain
+  pinned dependency constraints, and keep reviewed commits fixed during apply.
+- [x] Update self OpenAPI, the plugin guide, and source labels in the console.
+- [x] Validation: 111 tests, server typecheck, production web build, and Chrome
+  install/pin/development/return-to-latest flows passed. Light/dark/mobile
+  screenshots inspected with no page errors or horizontal overflow. Regression
+  tests load and update legacy stored source JSON; no schema migration is needed.
+- Release activation: Teams automation starts after its PR is merged. The other ten
+  repositories already allow Actions to create release PRs. Teams has that setting
+  disabled; automatic approval review rejected enabling it because GitHub bundles
+  PR creation with permission to approve reviews. This setting still needs explicit
+  user approval before it can be changed.
+  Existing plugin release PRs must be merged before their first releases exist.
+  No application deployment or plugin release publication was performed.

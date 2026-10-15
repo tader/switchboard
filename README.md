@@ -224,6 +224,8 @@ Release-please opens a release PR from Conventional Commits (`fix:` bumps patch,
 
 Google, Microsoft, Atlassian and macOS plugins have independent release components within their family repositories; their `plugin.json` versions are updated together with their component package manifests. The community catalog is unversioned and always read from main.
 
+Plugin installations default to the latest stable GitHub release. In **Plugins → Version & updates…**, pin any published release (including prereleases) or explicitly follow a development branch. Pinned versions stay fixed during bulk updates. See the [plugin guide](docs/plugins.md) for release policies and API calls.
+
 Plugins can also expose WebSocket-backed commands and live subscriptions alongside
 REST. Switchboard manages authentication and sockets and exposes the operations to
 API clients, MCP clients, peers, and the console. Events use bounded in-memory

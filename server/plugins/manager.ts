@@ -16,6 +16,7 @@ export type PluginStatus = 'active' | 'error' | 'disabled' | 'blocked';
 
 export interface GithubSource {
   type: 'github';
+  channel?: 'latest' | 'release' | 'branch';
   repo: string;
   ref?: string;
   path: string;

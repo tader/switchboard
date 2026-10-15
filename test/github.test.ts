@@ -51,10 +51,12 @@ before(async () => {
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = String(input);
     if (url === 'https://raw.githubusercontent.com/tader/switchboard-plugins/main/plugins.json') return Response.json({ schemaVersion: 1, plugins: [] });
+    if (url.endsWith('/releases/latest')) return Response.json({ tag_name: `v-${commit}`, published_at: '2026-01-01T00:00:00Z' });
+    if (url.startsWith('https://api.github.com/repos/owner/repo/releases?')) return Response.json([{ tag_name: `v-${commit}`, published_at: '2026-01-01T00:00:00Z' }]);
     if (url.startsWith('https://api.github.com/repos/owner/repo/commits/')) {
       const ref = decodeURIComponent(url.split('/commits/')[1]);
       resolved.push(ref);
-      const sha = ref === 'HEAD' ? commit : refs[ref];
+      const sha = ref === 'HEAD' ? commit : ref.startsWith('v-') ? ref.slice(2) : refs[ref];
       return sha ? new Response(sha) : new Response('Not found', { status: 404 });
     }
     const m = url.match(/^https:\/\/api\.github\.com\/repos\/owner\/repo\/tarball\/(\w+)$/);
@@ -107,7 +109,7 @@ test('install every plugin in a repository, update and uninstall', async (t) => 
   await t.test('switch refs, follow future updates, and return to the default branch', async () => {
     const switched = await gh.update('hello', { ref: ' feature/new ' });
     assert.equal(switched.ref, 'feature/new');
-    assert.equal(switched.fromRef, null);
+    assert.equal(switched.fromRef, 'v-bbb222');
     assert.equal(plugins.service('hello')?.name, 'Hello 3.0.0');
     assert.equal(resolved.at(-1), 'feature/new');
     refs['feature/new'] = 'bbb222';
