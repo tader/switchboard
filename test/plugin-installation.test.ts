@@ -15,7 +15,8 @@ fs.mkdirSync(process.env.SWITCHBOARD_DATA_DIR, { recursive: true });
 const realFetch = globalThis.fetch;
 const catalogUrl = 'https://api.github.com/repos/tader/switchboard-plugins/contents/plugins.json?ref=main';
 interface Fixture { id: string; version?: string; dependencies?: string[]; dependencyVersions?: Record<string, string>; broken?: boolean; atRoot?: boolean }
-interface Repo { refs: Map<string, string>; files: Map<string, Buffer>; allowed?: string[]; redirect?: string }
+interface Release { tag_name: string; published_at: string; draft?: boolean; prerelease?: boolean }
+interface Repo { latest?: string; releases: Release[]; refs: Map<string, string>; files: Map<string, Buffer>; allowed?: string[]; redirect?: string }
 const repos = new Map<string, Repo>();
 const seen: { url: string; authorization: string | null }[] = [];
 let counter = 0;
@@ -26,7 +27,7 @@ let bob: User;
 let aliceToken: string;
 let bobToken: string;
 
-async function fixture(repo: string, fixtures: Fixture[], ref = 'HEAD', allowed?: string[]) {
+async function fixture(repo: string, fixtures: Fixture[], ref = 'HEAD', allowed?: string[], publish = true) {
   const sha = (++counter).toString(16).padStart(40, '0');
   const root = path.join(tmp, sha, 'archive-root');
   for (const p of fixtures) {
@@ -37,8 +38,13 @@ async function fixture(repo: string, fixtures: Fixture[], ref = 'HEAD', allowed?
   }
   const out = path.join(tmp, `${sha}.tgz`);
   await tar.c({ gzip: true, file: out, cwd: path.dirname(root) }, ['archive-root']);
-  const spec = repos.get(repo) ?? { refs: new Map(), files: new Map(), allowed };
+  const spec = repos.get(repo) ?? { refs: new Map(), files: new Map(), allowed, releases: [] };
   spec.refs.set(ref, sha);
+  if (ref === 'HEAD' && publish) {
+    const tag_name = `v${fixtures[0].version ?? '1.0.0'}`;
+    spec.refs.set(tag_name, sha);
+    spec.releases = [{ tag_name, published_at: '2026-01-01T00:00:00Z' }, ...spec.releases.filter((r) => r.tag_name !== tag_name)];
+  }
   spec.refs.set(sha, sha);
   spec.files.set(sha, fs.readFileSync(out));
   repos.set(repo, spec);
@@ -52,11 +58,12 @@ before(async () => {
     seen.push({ url, authorization });
     if (url === catalogUrl) return Response.json(catalogStatus === 200 ? catalog : { error: 'offline' }, { status: catalogStatus });
     if (url === 'https://api.github.com/user') return Response.json({ id: authorization, login: authorization?.slice(7), avatar_url: '' });
-    const m = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/(commits|tarball)\/(.+)$/);
+    const m = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/(commits|tarball|releases)(?:\/(.+)|\?.+)$/);
     if (m) {
       const spec = repos.get(m[1]);
       if (!spec) return new Response('', { status: 404 });
       if (spec.allowed && !spec.allowed.includes(authorization ?? '')) return new Response('', { status: authorization ? 401 : 404 });
+      if (m[2] === 'releases') return Response.json(m[3] === 'latest' ? spec.releases.find((r) => spec.latest ? r.tag_name === spec.latest : !r.prerelease && !r.draft) : spec.releases);
       const sha = spec.refs.get(decodeURIComponent(m[3]));
       if (!sha) return new Response('', { status: 404 });
       if (m[2] === 'commits') return new Response(sha);
@@ -322,11 +329,18 @@ test('catalog freshness, validation, bounded responses and admin API routes', as
   assert.equal((await call('/plugins/community', ordinarySecret)).status, 403);
   assert.equal((await call('/plugins/community', limitedSecret)).status, 403);
   await fixture('owner/api-new', [{ id: 'api-new' }]);
-  for (const endpoint of ['/plugins/install/plan', '/plugins/update/plan', '/plugins/apply', '/plugins/install']) {
+  assert.equal((await call('/plugins/releases', ordinarySecret, { repo: 'owner/api-new' })).status, 403);
+  assert.equal((await call('/plugins/releases', limitedSecret, { repo: 'owner/api-new' })).status, 403);
+  const listed = await call('/plugins/releases', adminSecret, { repo: 'owner/api-new' });
+  assert.equal(listed.status, 200);
+  assert.equal(((await listed.json()) as any)[0].tag, 'v1.0.0');
+  assert.equal((await call('/plugins/install/plan', adminSecret, { repo: 'owner/api-new', channel: 'invalid' })).status, 400);
+  for (const endpoint of ['/plugins/releases', '/plugins/install/plan', '/plugins/update/plan', '/plugins/apply', '/plugins/install']) {
     assert.equal((await call(endpoint, adminSecret, null)).status, 400, endpoint);
     assert.equal((await call(endpoint, adminSecret, [])).status, 400, endpoint);
   }
   assert.equal((await call('/plugins/update/plan', adminSecret, { updates: [] })).status, 400);
+  assert.equal((await call('/plugins/install/plan', adminSecret, { repo: 'https://github.com/owner/api-new/tree/main/plugins/api-new', channel: 'latest' })).status, 200, 'latest policy overrides the branch embedded in a folder URL');
   const preview = await (await call('/plugins/install/plan', adminSecret, { repo: 'owner/api-new' })).json() as any;
   assert(preview.planId);
   const applied = await call('/plugins/apply', adminSecret, { planId: preview.planId });
@@ -337,4 +351,139 @@ test('catalog freshness, validation, bounded responses and admin API routes', as
   const audit = one('SELECT request_headers FROM audit_log WHERE source = ? AND connection_id = ? ORDER BY id DESC LIMIT 1', 'plugin', aliceToken);
   assert(audit);
   assert(!audit.request_headers.includes('alice-good'), 'plugin requests are audited with credentials masked');
+});
+
+test('release channels exclude unpublished code, pin immutably, and opt into development', async () => {
+  const gh = await import('../server/plugins/github.ts');
+  const access = await import('../server/plugins/github-access.ts');
+  const { plugins } = await import('../server/plugins/manager.ts');
+  const repo = 'owner/release-policy';
+  const stable = await fixture(repo, [{ id: 'release-policy', version: '1.0.0' }]);
+  const unpublished = await fixture(repo, [{ id: 'release-policy', version: '2.0.0' }], 'HEAD', undefined, false);
+  const spec = repos.get(repo)!;
+  spec.releases.unshift({ tag_name: 'draft', published_at: '2026-02-01', draft: true }, { tag_name: 'v2.0.0-beta.1', published_at: '2026-02-01', prerelease: true });
+  spec.refs.set('v2.0.0-beta.1', unpublished);
+  await gh.install({ repo });
+  assert.equal(plugins.get('release-policy').source?.commit, stable);
+  assert.equal(plugins.get('release-policy').source?.channel, 'latest');
+  assert.equal((await gh.checkUpdates()).find((u) => u.id === 'release-policy')?.updateAvailable, false);
+  assert.equal((await access.repositoryReleases({ repo })).some((r) => r.tag === 'draft'), false);
+  await gh.update('release-policy', { channel: 'release', ref: 'v1.0.0' });
+  const next = await fixture(repo, [{ id: 'release-policy', version: '1.1.0' }]);
+  spec.refs.set('v1.0.0', next); // Even a retargeted tag cannot move an installed pin.
+  assert.equal((await gh.checkUpdates()).find((u) => u.id === 'release-policy')?.updateAvailable, false);
+  await gh.update('release-policy');
+  assert.equal(plugins.get('release-policy').source?.commit, stable);
+  assert.equal(plugins.get('release-policy').source?.ref, 'v1.0.0');
+  await plugins.reload(['release-policy']);
+  assert.equal(plugins.get('release-policy').source?.channel, 'release');
+  await gh.update('release-policy', { channel: 'release', ref: 'v2.0.0-beta.1' });
+  assert.equal(plugins.get('release-policy').source?.commit, unpublished, 'prereleases can be pinned explicitly');
+  await gh.update('release-policy', { channel: 'latest' });
+  assert.equal(plugins.get('release-policy').source?.commit, next);
+  await fixture(repo, [{ id: 'release-policy', version: '9.0.0' }], 'feature/dev', undefined, false);
+  await gh.update('release-policy', { channel: 'branch', ref: 'feature/dev' });
+  assert.equal(plugins.get('release-policy').manifest.version, '9.0.0');
+  await gh.update('release-policy', { channel: 'branch' });
+  assert.equal(plugins.get('release-policy').source?.ref, undefined, 'branch mode without a ref follows HEAD');
+  await gh.update('release-policy', { channel: 'latest' });
+  assert.equal(plugins.get('release-policy').manifest.version, '1.1.0');
+  await assert.rejects(gh.update('release-policy', { channel: 'release', ref: 'feature/dev' }), /published release/);
+  for (const input of [{ channel: 'invalid' }, { channel: 'release' }, { channel: 'latest', ref: 'main' }]) assert.throws(() => gh.updateOptions(input));
+  await fixture('owner/no-release', [{ id: 'no-release' }], 'HEAD', undefined, false);
+  await assert.rejects(gh.install({ repo: 'owner/no-release' }), /No stable release/);
+  await gh.install({ repo: 'owner/no-release', channel: 'branch' });
+  assert.equal(plugins.get('no-release').source?.channel, 'branch');
+});
+
+test('component releases are scoped to the selected plugin folder', async () => {
+  const { releaseRef, repositoryReleases } = await import('../server/plugins/github-access.ts');
+  await fixture('owner/components', [{ id: 'one' }, { id: 'two' }]);
+  repos.get('owner/components')!.releases = [
+    { tag_name: 'two-v9.0.0', published_at: '2026-02-01' },
+    { tag_name: 'one-v1.0.0', published_at: '2026-01-01' },
+  ];
+  const input = { repo: 'owner/components', path: 'plugins/one' };
+  assert.deepEqual((await repositoryReleases(input)).map((r) => r.tag), ['one-v1.0.0']);
+  assert.equal((await releaseRef(input)).ref, 'one-v1.0.0');
+  await assert.rejects(releaseRef({ ...input, channel: 'release', ref: 'two-v9.0.0' }), /published release/);
+  await assert.rejects(releaseRef({ repo: input.repo }), /No stable release/);
+});
+
+test('a component release cannot publish unreleased sibling dependencies', async () => {
+  const gh = await import('../server/plugins/github.ts');
+  const { plugins } = await import('../server/plugins/manager.ts');
+  const repo = 'owner/component-deps';
+  const helper = await fixture(repo, [{ id: 'component-helper', version: '1.0.0' }]);
+  const app = await fixture(repo, [
+    { id: 'component-app', version: '1.0.0', dependencies: ['component-helper'], dependencyVersions: { 'component-helper': '^1.0.0' } },
+    { id: 'component-helper', version: '9.0.0' },
+  ]);
+  const spec = repos.get(repo)!;
+  spec.refs.set('component-app-v1.0.0', app);
+  spec.refs.set('component-helper-v1.0.0', helper);
+  spec.releases = [
+    { tag_name: 'component-app-v1.0.0', published_at: '2026-02-01' },
+    { tag_name: 'component-helper-v1.0.0', published_at: '2026-01-01' },
+  ];
+  await gh.install({ repo, path: 'plugins/component-app' });
+  assert.equal(plugins.get('component-helper').manifest.version, '1.0.0');
+  assert.equal(plugins.get('component-helper').source?.ref, 'component-helper-v1.0.0');
+  await gh.update('component-helper', { channel: 'release', ref: 'component-helper-v1.0.0' });
+  const next = await fixture(repo, [{ id: 'component-app', version: '2.0.0', dependencies: ['component-helper'], dependencyVersions: { 'component-helper': '^2.0.0' } }]);
+  spec.refs.set('component-app-v2.0.0', next);
+  spec.releases.unshift({ tag_name: 'component-app-v2.0.0', published_at: '2026-03-01' });
+  await assert.rejects(gh.previewUpdates([{ id: 'component-app' }]), /pinned/);
+  assert.equal(plugins.get('component-app').manifest.version, '1.0.0');
+});
+
+test('release lists paginate, retaining older versions for pins', async () => {
+  const access = await import('../server/plugins/github-access.ts');
+  const before = globalThis.fetch;
+  const pages: number[] = [];
+  globalThis.fetch = (async (input: any) => {
+    const url = new URL(String(input));
+    assert.equal(url.pathname, '/repos/owner/paginated/releases');
+    const page = Number(url.searchParams.get('page')); pages.push(page);
+    return Response.json(page === 1 ? Array.from({ length: 100 }, (_, n) => ({ tag_name: `v2.${n}.0`, published_at: '2026-01-01' })) : [{ tag_name: 'v1.0.0', published_at: '2025-01-01' }]);
+  }) as typeof fetch;
+  try {
+    const releases = await access.repositoryReleases({ repo: 'owner/paginated' });
+    assert.equal(releases.length, 101);
+    assert.equal(releases.at(-1)?.tag, 'v1.0.0');
+    assert.deepEqual(pages, [1, 2]);
+  } finally { globalThis.fetch = before; }
+});
+
+test('GitHub designated latest wins over newer backport releases', async () => {
+  const { releaseRef } = await import('../server/plugins/github-access.ts');
+  const repo = 'owner/designated-latest';
+  await fixture(repo, [{ id: 'designated-latest', version: '2.0.0' }]);
+  await fixture(repo, [{ id: 'designated-latest', version: '1.9.1' }]);
+  repos.get(repo)!.latest = 'v2.0.0';
+  assert.equal((await releaseRef({ repo })).ref, 'v2.0.0');
+});
+
+test('legacy stored sources use releases by default and retain explicit development refs', async () => {
+  const gh = await import('../server/plugins/github.ts');
+  const { plugins } = await import('../server/plugins/manager.ts');
+  const { run } = await import('../server/db.ts');
+  const repo = 'owner/legacy-policy';
+  const released = await fixture(repo, [{ id: 'legacy-policy', version: '1.0.0' }]);
+  await gh.install({ repo });
+  const source = { ...plugins.get('legacy-policy').source! };
+  delete source.channel; delete source.ref;
+  run('UPDATE plugins SET source = ? WHERE id = ?', JSON.stringify(source), 'legacy-policy');
+  await plugins.reload(['legacy-policy']);
+  await fixture(repo, [{ id: 'legacy-policy', version: '9.0.0' }], 'HEAD', undefined, false);
+  await gh.update('legacy-policy');
+  assert.equal(plugins.get('legacy-policy').source?.commit, released);
+  assert.equal(plugins.get('legacy-policy').source?.channel, 'latest');
+  source.ref = 'feature/legacy';
+  const dev = await fixture(repo, [{ id: 'legacy-policy', version: '3.0.0' }], source.ref);
+  run('UPDATE plugins SET source = ? WHERE id = ?', JSON.stringify(source), 'legacy-policy');
+  await plugins.reload(['legacy-policy']);
+  await gh.update('legacy-policy');
+  assert.equal(plugins.get('legacy-policy').source?.commit, dev);
+  assert.equal(plugins.get('legacy-policy').source?.channel, 'branch');
 });

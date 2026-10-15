@@ -195,16 +195,25 @@ export function openapiDocument() {
       '/api/tokens/{id}': { delete: op('Tokens', 'Revoke an API token', { parameters: [id('Token id')] }) },
       '/api/admin/plugins': { get: op('Admin', 'List plugins') },
       '/api/admin/plugins/community': { get: op('Admin', 'Fetch the live community plugin catalog', { description: 'Fetches the current public catalog on each request. Listings are not bundled with Switchboard.' }) },
+      '/api/admin/plugins/releases': { post: op('Admin', 'List published plugin releases', {
+        requestBody: json({ type: 'object', properties: {
+          repo: { type: 'string', description: 'owner/repo; optional when pluginId identifies an installed plugin' },
+          path: { type: 'string', description: 'Plugin folder; scopes release-please component tags' },
+          pluginId: { type: 'string', description: 'Installed plugin whose source and remembered access should be used' },
+          githubConnectionId: { type: 'string', nullable: true, description: 'Local GitHub connection; null for automatic access' },
+        } }),
+        description: 'Returns tag, name, prerelease, publishedAt and url. Includes prereleases for explicit pinning, excludes drafts, and paginates GitHub results. Default latest tracking excludes prereleases. Repositories with component releases require a plugin folder.',
+      }) },
       '/api/admin/plugins/install/plan': { post: op('Admin', 'Preview an installation and its dependencies', {
         requestBody: json({ type: 'object', required: ['repo'], properties: {
-          repo: { type: 'string' }, ref: { type: 'string' }, path: { type: 'string' }, expectedId: { type: 'string', description: 'Optional expected id for a single-plugin listing' },
+          repo: { type: 'string' }, channel: { type: 'string', enum: ['latest', 'release', 'branch'], description: 'latest follows stable published releases (install default); release pins ref to a published release; branch follows a development ref. Omit on update to keep the saved policy.' }, ref: { type: 'string' }, path: { type: 'string' }, expectedId: { type: 'string', description: 'Optional expected id for a single-plugin listing' },
           githubConnectionId: { type: 'string', nullable: true, description: 'A local GitHub connection owned by the administrator; null or omitted selects automatically' },
         } }, { repo: 'owner/repo' }),
         description: 'Returns planId, expiresAt, changes, affectedDependents and requiresReview. No plugin code executes. Plans are administrator-bound and expire after ten minutes.',
       }) },
       '/api/admin/plugins/update/plan': { post: op('Admin', 'Preview coordinated plugin updates', {
         requestBody: json({ type: 'object', required: ['updates'], properties: { updates: { type: 'array', minItems: 1, maxItems: 100, items: {
-          type: 'object', required: ['id'], properties: { id: { type: 'string' }, ref: { type: 'string', nullable: true, description: 'Omit to keep the tracked ref; null follows the default branch' }, githubConnectionId: { type: 'string', nullable: true, description: 'Omit to prefer the remembered connection; null requests automatic selection' } },
+          type: 'object', required: ['id'], properties: { id: { type: 'string' }, channel: { type: 'string', enum: ['latest', 'release', 'branch'], description: 'latest follows stable published releases (install default); release pins ref to a published release; branch follows a development ref. Omit on update to keep the saved policy.' }, ref: { type: 'string', nullable: true, description: 'Release tag for release; branch name for branch. Legacy ref without channel opts into development; null follows the default branch.' }, githubConnectionId: { type: 'string', nullable: true, description: 'Omit to prefer the remembered connection; null requests automatic selection' } },
         } } } }, { updates: [{ id: 'example' }] }),
         description: 'Preview one or multiple updates together, including shared dependency upgrades and compatibility checks.',
       }) },
@@ -219,7 +228,8 @@ export function openapiDocument() {
               required: ['repo'],
               properties: {
                 repo: { type: 'string', description: 'owner/repo or a github.com URL, also to a folder' },
-                ref: { type: 'string', description: 'Branch, tag or commit; default: the default branch' },
+                channel: { type: 'string', enum: ['latest', 'release', 'branch'], description: 'latest follows stable published releases (install default); release pins ref to a published release; branch follows a development ref. Omit on update to keep the saved policy.' },
+                ref: { type: 'string', description: 'Required published release tag for release; optional branch/tag/commit for branch. Omit with latest.' },
                 path: { type: 'string', description: 'Folder in the repository' },
                 githubConnectionId: { type: 'string', nullable: true, description: 'Local GitHub connection owned by the administrator; omit or null for automatic selection' },
               },
@@ -232,7 +242,8 @@ export function openapiDocument() {
       '/api/admin/plugins/{id}/update': { post: op('Admin', 'Update a plugin', {
         parameters: [id('Plugin id')],
         requestBody: { ...json({ type: 'object', properties: {
-          ref: { type: 'string', nullable: true, minLength: 1, description: 'Branch, tag or commit. Omit to keep the tracked ref; null follows the repository default branch. Remembered for future updates.' },
+          channel: { type: 'string', enum: ['latest', 'release', 'branch'], description: 'latest follows stable published releases (install default); release pins ref to a published release; branch follows a development ref. Omit on update to keep the saved policy.' },
+          ref: { type: 'string', nullable: true, minLength: 1, description: 'Release tag for release; branch name or null for branch. Omit both channel and ref to keep the saved policy. Legacy ref without channel selects development.' },
           githubConnectionId: { type: 'string', nullable: true, description: 'Select a local GitHub connection; omit to prefer the remembered connection, or null for automatic selection' },
         } }), required: false },
       }) },

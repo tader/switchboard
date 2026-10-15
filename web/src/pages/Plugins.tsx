@@ -7,7 +7,7 @@ import {
   Alert, Badge, Button, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, ServiceIcon, Spinner, Switch, Table, Tabs, useConfirm, useToast,
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
-import { CommunityPlugins, PluginChangeDialog, type PluginChangeRequest } from '../components/PluginChanges';
+import { CommunityPlugins, PluginChangeDialog, pluginSourceLabel, type PluginChangeRequest } from '../components/PluginChanges';
 
 type UpdateInfo = { id: string; ref: string | null; current: string; latest?: string; updateAvailable: boolean; error?: string };
 
@@ -121,7 +121,7 @@ export function Plugins() {
                 </div></div></td>
                 <td className="hidden font-mono text-xs text-zinc-500 sm:table-cell">{p.version}</td>
                 <td><Badge tone={st.tone}>{st.label}</Badge>{upd?.updateAvailable && <div className="mt-1"><Badge tone="indigo">Update</Badge></div>}</td>
-                <td className="hidden lg:table-cell">{p.source ? <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="block min-w-0 hover:text-indigo-600 dark:hover:text-indigo-400" title={`${p.source.repo}/${p.source.path}`}><span className="block truncate text-xs">{p.source.repo}{p.source.path && `/${p.source.path}`}</span><span className="block truncate text-xs text-zinc-500">{p.source.ref ?? 'Default branch'} <span className="font-mono">@{p.source.commit.slice(0, 7)}</span></span></a> : <span className="text-xs text-zinc-500">Built in</span>}</td>
+                <td className="hidden lg:table-cell">{p.source ? <a href={`https://github.com/${p.source.repo}/tree/${p.source.commit}/${p.source.path}`} target="_blank" rel="noreferrer" className="block min-w-0 hover:text-indigo-600 dark:hover:text-indigo-400" title={`${p.source.repo}/${p.source.path}`}><span className="block truncate text-xs">{p.source.repo}{p.source.path && `/${p.source.path}`}</span><span className="block truncate text-xs text-zinc-500">{pluginSourceLabel(p.source)} <span className="font-mono">@{p.source.commit.slice(0, 7)}</span></span></a> : <span className="text-xs text-zinc-500">Built in</span>}</td>
                 <td><div className="flex items-center justify-end gap-1">
 
                     {busy === p.id && <Spinner className="mr-1" />}
@@ -157,7 +157,7 @@ export function Plugins() {
                           hidden: !p.source,
                           onSelect: () => setChangeRequest({ kind: 'update', plugins: [p] }),
                         },
-                        { label: 'Update from…', icon: <GitBranch />, hidden: !p.source, onSelect: () => setChangeRequest({ kind: 'update', plugins: [p], editRef: true }) },
+                        { label: 'Version & updates…', icon: <GitBranch />, hidden: !p.source, onSelect: () => setChangeRequest({ kind: 'update', plugins: [p], editRef: true }) },
                         { label: 'Reload', icon: <RefreshCw />, onSelect: () => run(p.id, () => api(`/admin/plugins/${p.id}/reload`, { method: 'POST' }), `${p.name} reloaded`) },
                         { label: 'Log', icon: <ScrollText />, onSelect: () => setLogs(p) },
                         ...(p.origin === 'installed'
@@ -195,7 +195,7 @@ export function Plugins() {
           <p className="text-zinc-500">{details.description}</p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
             <dt className="text-zinc-500">Version</dt><dd>{details.version}</dd>
-            <dt className="text-zinc-500">Source</dt><dd className="break-all">{details.source ? <a href={`https://github.com/${details.source.repo}/tree/${details.source.commit}/${details.source.path}`} target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400">{details.source.repo}/{details.source.path} · {details.source.ref ?? 'Default branch'} @{details.source.commit.slice(0, 7)}</a> : 'Built in'}{details.overridesBuiltin && ' · Replaces the built-in version'}</dd>
+            <dt className="text-zinc-500">Source</dt><dd className="break-all">{details.source ? <a href={`https://github.com/${details.source.repo}/tree/${details.source.commit}/${details.source.path}`} target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400">{details.source.repo}/{details.source.path} · {pluginSourceLabel(details.source)} @{details.source.commit.slice(0, 7)}</a> : 'Built in'}{details.overridesBuiltin && ' · Replaces the built-in version'}</dd>
             <dt className="text-zinc-500">Uses</dt><dd>{details.dependencies.length ? details.dependencies.map(d => <span key={d} className={cx('mr-2', byId.get(d)?.status !== 'active' && 'text-rose-600 dark:text-rose-400')}>{d}{details.dependencyVersions?.[d] && ` ${details.dependencyVersions[d]}`}</span>) : 'None'}</dd>
             <dt className="text-zinc-500">Provides</dt><dd>{details.services.map(s => s.name).join(', ') || 'No services'}</dd>
           </dl>
