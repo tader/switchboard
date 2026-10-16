@@ -1,8 +1,9 @@
+import { useViewState, matchesSearch } from '../components/ListControls';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRight, BookOpen } from 'lucide-react';
 import { api } from '../api';
-import { Alert, Empty, Spinner } from '../components/ui';
+import { Alert, Empty, Input, Spinner } from '../components/ui';
 import { copy, cx, useResource } from '../lib';
 import { renderMarkdown } from '../markdown';
 
@@ -17,6 +18,7 @@ export interface DocInfo {
 
 export function Docs() {
   const loc = useLocation();
+  const [view, setView] = useViewState('docs', { q: '' });
   const navigate = useNavigate();
   const list = useResource(() => api<DocInfo[]>('/docs'));
   const id = decodeURIComponent(loc.pathname.replace(/^\/docs\/?/, '')) || list.data?.[0]?.id;
@@ -95,9 +97,9 @@ export function Docs() {
 
   const sections = useMemo(() => {
     const m = new Map<string, DocInfo[]>();
-    for (const d of list.data ?? []) m.set(d.section, [...(m.get(d.section) ?? []), d]);
+    for (const d of (list.data ?? []).filter(d => matchesSearch(view.q, d.title, d.sourceName, d.section))) m.set(d.section, [...(m.get(d.section) ?? []), d]);
     return [...m.entries()];
-  }, [list.data]);
+  }, [list.data, view.q]);
   const index = list.data?.findIndex((d) => d.id === id) ?? -1;
   const prev = index > 0 ? list.data![index - 1] : undefined;
   const next = index >= 0 && list.data && index < list.data.length - 1 ? list.data[index + 1] : undefined;
@@ -108,6 +110,8 @@ export function Docs() {
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
       <nav className="shrink-0 lg:sticky lg:top-0 lg:w-52 lg:self-start" aria-label="Guides">
+        <Input aria-label="Search guides" placeholder="Search guides…" value={view.q} onChange={e => setView({ q: e.target.value })} className="mb-4" />
+        {!sections.length && <p className="px-2.5 text-xs text-zinc-500">No matching guides.</p>}
         {sections.map(([section, docs]) => (
           <div key={section} className="mb-5">
             <div className="mb-1.5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{section}</div>

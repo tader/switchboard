@@ -45,7 +45,7 @@ Back up the data dir. Without `secret.key` (or `SWITCHBOARD_SECRET_KEY`) stored 
 
 Connect two Switchboard instances under **Peers**. On a reachable instance, add an incoming peer and copy its device token. On the other, add an outgoing peer using that URL and token. One WebSocket supports sharing and execution in both directions, including machines behind a firewall.
 
-On each instance, connection owners select what to share in the **Connections → Sharing** matrix. Connections are rows; all peers, incoming and outgoing, are columns. Each peer receives an independent selection. Nothing is shared by default. Local administrators choose which local users can use received connections.
+On each instance, connection owners select what to share in the **Peers → Sharing** matrix. Connections are rows; all peers, incoming and outgoing, are columns. Each peer receives an independent selection. Nothing is shared by default. Local administrators choose which local users can use received connections.
 
 Received connections are read-only handles: peers can execute shared HTTP and MCP connections and inspect OpenAPI descriptions, but cannot create, rename, reconnect or delete connections on another instance. Credentials remain on the origin. Audit records identify the local owner, authenticated peer and claimed requesting user. Revocation cancels active requests. Offline calls fail immediately with `503` and `peer_offline`.
 
@@ -123,7 +123,7 @@ Credentials are only attached to the hosts a service allows (for Gmail `gmail.go
 
 ### MCP
 
-Connect upstream MCP servers from the Connections page using OAuth, bearer tokens, API-key headers or no authentication. The console provides Tools, Resources and Prompts with rich results and saved requests. Connections can switch between the original grouped cards (Normal) and a compact table or a peer sharing matrix, with the choice remembered in the browser. Both views are searchable; plugins use a compact searchable table.
+Connect upstream MCP servers from the Connections page using OAuth, bearer tokens, API-key headers or no authentication. The console provides Tools, Resources and Prompts with rich results and saved requests. Connections can switch between the original grouped cards (Normal) and a compact table, with the choice remembered in the browser. Both views have search, filtering and sorting. Manage sharing in Peers → Sharing or from a connection’s menu. Plugins use compact searchable tables.
 
 `https://switchboard.example.com/mcp` is an MCP server (Streamable HTTP; protocol 2026-07-28, and the `initialize`-based 2025-03-26 to 2025-11-25 for older clients). Its tools: `list_connections`, `search_operations` and `get_operation` (from the service's API reference), structured `call_operation`, lower-level `call`, `list_saved_calls`, and `run_saved_call`. MCP connections add `search_mcp_tools`, `get_mcp_tool`, `call_mcp_tool`, resource/prompt tools and native resources, templates, prompts and completions namespaced by immutable connection ID. They act as the token's user, only on the token's connections, and show up in Activity as source *MCP*.
 

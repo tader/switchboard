@@ -1,8 +1,9 @@
+import { ListToolbar, ListFeedback, SortHeader, useList } from '../components/ListControls';
 import { useEffect, useState } from 'react';
 import { Ban, CheckCircle2, Link2, MoreHorizontal, Shield, ShieldOff, Trash2, UserPlus } from 'lucide-react';
 import { api, type AdminUser } from '../api';
 import { useSession } from '../auth';
-import { Alert, Avatar, Badge, Button, Card, CopyField, Dialog, FormField, IconButton, Input, Menu, PageHeader, Select, Spinner, useConfirm, useToast } from '../components/ui';
+import { Alert, Avatar, Badge, Button, CopyField, Dialog, FormField, IconButton, Input, Menu, PageHeader, Select, Table, useConfirm, useToast } from '../components/ui';
 import { ago, useResource } from '../lib';
 
 export function Users() {
@@ -13,6 +14,8 @@ export function Users() {
   const [adding, setAdding] = useState(false);
   const [link, setLink] = useState<{ username: string; url: string; expiresAt: number; isNew: boolean } | null>(null);
 
+  const status = (u: AdminUser) => u.disabled ? 'disabled' : !u.hasPassword ? 'invited' : 'active';
+  const list = useList('users', users.data ?? [], { search: u => [u.username], sorts: { name: u => u.username, role: u => u.role, status, joined: u => u.createdAt, connections: u => u.connections }, filters: { role: '', status: '' }, filter: (u, f) => (!f.role || u.role === f.role) && (!f.status || status(u) === f.status) });
   const patch = async (u: AdminUser, body: Partial<AdminUser>, done: string) => {
     try {
       await api(`/admin/users/${u.id}`, { method: 'PATCH', body });
@@ -60,32 +63,19 @@ export function Users() {
           </Button>
         }
       />
-      {users.loading && !users.data ? (
-        <div className="flex justify-center py-20">
-          <Spinner className="size-5" />
-        </div>
-      ) : (
-        <Card className="overflow-hidden">
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {users.data?.map((u) => (
-              <li key={u.id} className="flex items-center gap-3 px-4 py-3">
-                <Avatar label={u.username} className="size-8" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{u.username}</span>
-                    {u.id === me.id && <span className="text-xs text-zinc-400">You</span>}
-                    {u.role === 'admin' && <Badge tone="indigo">Admin</Badge>}
-                    {u.disabled && <Badge tone="red">Disabled</Badge>}
-                    {!u.disabled && !u.hasPassword && <Badge tone="amber">Invited</Badge>}
-                  </div>
-                  <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                    {u.connections} connection{u.connections === 1 ? '' : 's'} · Joined {ago(u.createdAt).toLowerCase()}
-                    {u.inviteExpiresAt && ` · Link expires ${ago(u.inviteExpiresAt).toLowerCase()}`}
-                  </div>
-                </div>
-                <Menu
+      <div className="space-y-3">
+        <ListToolbar list={list} label="users" sorts={[{ value: 'name', label: 'Name' }, { value: 'role', label: 'Role' }, { value: 'status', label: 'Status' }, { value: 'joined', label: 'Joined' }, { value: 'connections', label: 'Connections' }]}>
+          <Select aria-label="User role" value={list.state.role} onChange={e => list.set({ role: e.target.value })} className="w-36"><option value="">Any role</option><option value="admin">Admin</option><option value="user">Member</option></Select>
+          <Select aria-label="User status" value={list.state.status} onChange={e => list.set({ status: e.target.value })} className="w-36"><option value="">Any status</option><option value="active">Active</option><option value="invited">Invited</option><option value="disabled">Disabled</option></Select>
+        </ListToolbar>
+        <ListFeedback loading={users.loading && !users.data} error={users.error} empty={!list.visible.length} filtered={list.filtered} label="users" retry={users.reload} reset={list.reset} />
+        {!!list.visible.length && <Table label="Users"><thead><tr><SortHeader list={list} field="name">User</SortHeader><SortHeader list={list} field="role" className="w-24">Role</SortHeader><SortHeader list={list} field="status" className="w-24">Status</SortHeader><SortHeader list={list} field="connections" className="hidden w-28 md:table-cell">Connections</SortHeader><SortHeader list={list} field="joined" className="hidden w-28 sm:table-cell">Joined</SortHeader><th className="w-11"><span className="sr-only">Actions</span></th></tr></thead>
+          <tbody>{list.visible.map(u => <tr key={u.id}>
+            <td><div className="flex min-w-0 items-center gap-2.5"><Avatar label={u.username} /><span className="truncate font-medium">{u.username}</span>{u.id === me.id && <span className="text-xs text-zinc-400">You</span>}</div>{u.inviteExpiresAt && !u.hasPassword && <div className="mt-1 text-xs text-zinc-500">{u.inviteExpiresAt <= Date.now() ? 'Invite expired' : `Invite expires ${ago(u.inviteExpiresAt).toLowerCase()}`}</div>}</td>
+            <td><Badge tone={u.role === 'admin' ? 'indigo' : 'neutral'}>{u.role === 'admin' ? 'Admin' : 'Member'}</Badge></td><td><Badge tone={u.disabled ? 'red' : !u.hasPassword ? 'amber' : 'green'}>{u.disabled ? 'Disabled' : !u.hasPassword ? 'Invited' : 'Active'}</Badge></td><td className="hidden tabular-nums text-zinc-500 md:table-cell">{u.connections}</td><td className="hidden text-xs text-zinc-500 sm:table-cell" title={new Date(u.createdAt).toLocaleString()}>{ago(u.createdAt)}</td>
+            <td>                <Menu
                   trigger={(p) => (
-                    <IconButton label="Actions" {...p}>
+                    <IconButton label={`Actions for ${u.username}`} {...p}>
                       <MoreHorizontal className="size-4" />
                     </IconButton>
                   )}
@@ -106,12 +96,10 @@ export function Users() {
                     'separator',
                     { label: 'Delete', icon: <Trash2 />, danger: true, hidden: u.id === me.id, onSelect: () => remove(u) },
                   ]}
-                />
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+                /></td></tr>)}</tbody>
+        </Table>}
+      </div>
+
       <AddUserDialog
         open={adding}
         onClose={() => setAdding(false)}

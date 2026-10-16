@@ -30,7 +30,15 @@ api.get('/services', (c) => {
 api.get('/docs', (c) => c.json(listDocs(c.get('user').role === 'admin')));
 api.get('/docs/*', (c) => c.json(getDoc(decodeURIComponent(c.req.path.replace(/^\/api\/docs\//, '')), c.get('user').role === 'admin')));
 
-api.get('/peers', requireFullAccess, (c) => c.json(listPeers().map(({ id, name, url, disabled, state, direction, remoteInstanceId }) => ({ id, name, url, disabled, state, direction, remoteInstanceId }))));
+api.get('/peers', requireFullAccess, (c) => {
+  const userId = c.get('user').id;
+  const shares = sharingMatrix(userId).shares;
+  return c.json(listPeers().map(({ id, name, url, disabled, state, direction, remoteInstanceId, lastSeenAt, connections, userIds }) => ({
+    id, name, url, disabled, state, direction, remoteInstanceId, lastSeenAt,
+    sharedConnections: shares.filter(share => share.peer_id === id).length,
+    receivedConnections: !disabled && userIds.includes(userId) ? connections.length : 0,
+  })));
+});
 api.get('/connection-shares', requireFullAccess, c => c.json(sharingMatrix(c.get('user').id)));
 api.put('/connections/:ref/shares/:peerId', requireFullAccess, async c => c.json(setConnectionPeerShare(c.get('user').id, c.req.param('ref'), c.req.param('peerId'), (await c.req.json()).shared)));
 api.get('/connections/:ref/shares', requireFullAccess, (c) => c.json(connectionShares(c.get('user').id, c.req.param('ref'))));
@@ -71,7 +79,13 @@ api.get('/connections/:ref/websocket/operations', async c => c.json(await execut
   action: 'operations', query: c.req.query('query'), limit: c.req.query('limit') === undefined ? undefined : Number(c.req.query('limit')),
   offset: c.req.query('offset') === undefined ? undefined : Number(c.req.query('offset')),
 }, c.req.raw.signal, callerFrom(c, 'call'))));
-// Operation ids may contain slashes, so the console uses an encoded path component.
+// Keep operation ids in JSON: hosted proxies may reject encoded path slashes.
+api.post('/connections/:ref/websocket/operations/get', async c => {
+  const body = await c.req.json();
+  if (!body || typeof body.operationId !== 'string' || !body.operationId) throw badRequest('operationId is required');
+  return c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), { action: 'operation', operationId: body.operationId }, c.req.raw.signal, callerFrom(c, 'call')));
+});
+// Legacy lookup remains available; use the JSON lookup when a proxy rejects encoded slashes.
 api.get('/connections/:ref/websocket/operations/:operationId', async c => c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), { action: 'operation', operationId: c.req.param('operationId') }, c.req.raw.signal, callerFrom(c, 'call'))));
 api.get('/connections/:ref/websocket/subscriptions', async c => c.json(await executeWebSocket(websocketAccess(c), c.req.param('ref'), { action: 'subscriptions' }, c.req.raw.signal, callerFrom(c, 'call'))));
 for (const [path, action] of [['call', 'call'], ['subscriptions', 'subscribe'], ['subscriptions/:id/read', 'read']] as const) {

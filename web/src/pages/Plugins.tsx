@@ -1,10 +1,11 @@
+import { ListToolbar, ListFeedback, SortHeader, useList, useViewState } from '../components/ListControls';
 import { useEffect, useState } from 'react';
 import { ArrowUpCircle, Download, GitBranch, MoreHorizontal, Puzzle, RefreshCw, ScrollText, Settings2, Trash2 } from 'lucide-react';
 import { api, type Field, type PluginInfo } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
-  Alert, Badge, Button, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, ServiceIcon, Spinner, Switch, Table, Tabs, useConfirm, useToast,
+  Alert, Badge, Button, CopyField, Dialog, Empty, FormField, IconButton, Menu, PageHeader, ServiceIcon, Spinner, Switch, Select, Table, Tabs, useConfirm, useToast,
 } from '../components/ui';
 import { ago, cx, useResource } from '../lib';
 import { CommunityPlugins, PluginChangeDialog, pluginSourceLabel, type PluginChangeRequest } from '../components/PluginChanges';
@@ -22,9 +23,11 @@ export function Plugins() {
   const toast = useToast();
   const confirm = useConfirm();
   const plugins = useResource(() => api<PluginInfo[]>('/admin/plugins'));
-  const [filter, setFilter] = useState('');
+
   const [details, setDetails] = useState<PluginInfo | null>(null);
-  const [tab, setTab] = useState<'installed' | 'community'>('installed');
+  const [view, setView] = useViewState('plugins', { tab: 'installed' });
+  const tab = view.tab === 'community' ? 'community' : 'installed';
+  const setTab = (tab: 'installed' | 'community') => setView({ tab });
   const [changeRequest, setChangeRequest] = useState<PluginChangeRequest | null>(null);
   const [settings, setSettings] = useState<PluginInfo | null>(null);
   const [logs, setLogs] = useState<PluginInfo | null>(null);
@@ -67,6 +70,12 @@ export function Plugins() {
     const checked = updates[plugin.id];
     return plugin.source && checked?.current === plugin.source.commit && checked.ref === (plugin.source.ref ?? null) ? checked : undefined;
   };
+  const list = useList('plugins-installed', plugins.data ?? [], {
+    search: p => [p.name, p.description, p.id, p.services.map(s => s.name).join(' ')],
+    sorts: { name: p => p.name, status: p => p.status, source: p => p.source?.repo ?? 'Built in' },
+    filters: { status: '', origin: '', updates: '' },
+    filter: (p, f) => (!f.status || p.status === f.status) && (!f.origin || p.origin === f.origin) && (!f.updates || !!updateFor(p)?.updateAvailable),
+  });
   const availableUpdates = (plugins.data ?? []).filter(p => updateFor(p)?.updateAvailable);
   const updateAll = () => {
     if (!busy && !checking && availableUpdates.length) setChangeRequest({ kind: 'update', plugins: availableUpdates });
@@ -93,23 +102,29 @@ export function Plugins() {
       />
       {updateErrors.length > 0 && <Alert><ul className="space-y-1">{updateErrors.map((error, i) => <li key={i}>{error}</li>)}</ul></Alert>}
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'installed', label: 'Installed' }, { value: 'community', label: 'Community' }]} className="mb-4" />
+      {plugins.error && <Alert>{plugins.error.message}<Button size="sm" variant="ghost" onClick={plugins.reload}>Try again</Button></Alert>}
       {tab === 'community' ? <CommunityPlugins installed={plugins.data ?? []} onInstall={(initial) => setChangeRequest({ kind: 'install', initial })} /> : plugins.loading && !plugins.data ? (
         <div className="flex justify-center py-20">
           <Spinner className="size-5" />
         </div>
-      ) : !plugins.data?.length ? (
+      ) : plugins.error && !plugins.data ? null : !plugins.data?.length ? (
         <Empty icon={<Puzzle className="size-5" />} title="No plugins" action={<Button variant="primary" onClick={() => setChangeRequest({ kind: 'install' })}>Install from GitHub</Button>} />
       ) : (
         <div className="space-y-3">
-          <div className="flex items-center gap-3"><Input aria-label="Search plugins" placeholder="Search plugins…" value={filter} onChange={e => setFilter(e.target.value)} className="max-w-sm" /><span className="shrink-0 text-xs text-zinc-500">{plugins.data.filter(p => `${p.name} ${p.description ?? ''} ${p.id} ${p.services.map(s => s.name).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())).length} of {plugins.data.length}</span></div>
-          <Table label="Plugins"><thead><tr>
-            <th scope="col">Plugin</th>
+          <ListToolbar list={list} label="plugins" sorts={[{ value: 'name', label: 'Name' }, { value: 'status', label: 'Status' }, { value: 'source', label: 'Source' }]}>
+            <Select aria-label="Plugin status" value={list.state.status} onChange={e => list.set({ status: e.target.value })} className="w-36"><option value="">Any status</option>{Object.entries(STATUS).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</Select>
+            <Select aria-label="Plugin origin" value={list.state.origin} onChange={e => list.set({ origin: e.target.value })} className="w-36"><option value="">Any source</option><option value="builtin">Built in</option><option value="installed">Installed</option></Select>
+            <Select aria-label="Plugin updates" value={list.state.updates} onChange={e => list.set({ updates: e.target.value })} className="w-40"><option value="">All updates</option><option value="available">Update available</option></Select>
+          </ListToolbar>
+          <ListFeedback empty={!list.visible.length} filtered={list.filtered} label="plugins" retry={plugins.reload} reset={list.reset} />
+          {!!list.visible.length && <Table label="Plugins"><thead><tr>
+            <SortHeader list={list} field="name">Plugin</SortHeader>
             <th scope="col" className="hidden w-20 sm:table-cell">Version</th>
-            <th scope="col" className="w-24">Status</th>
-            <th scope="col" className="hidden w-[28%] lg:table-cell">Source</th>
+            <SortHeader list={list} field="status" className="w-24">Status</SortHeader>
+            <SortHeader list={list} field="source" className="hidden w-[28%] lg:table-cell">Source</SortHeader>
             <th scope="col" className="w-24 sm:w-32"><span className="sr-only">Actions</span></th>
           </tr></thead><tbody>
-          {plugins.data.filter(p => `${p.name} ${p.description ?? ''} ${p.id} ${p.services.map(s => s.name).join(' ')}`.toLowerCase().includes(filter.trim().toLowerCase())).map((p) => {
+          {list.visible.map((p) => {
             const st = STATUS[p.status];
             const upd = updateFor(p);
             return (
@@ -187,7 +202,7 @@ export function Plugins() {
               </tr>
             );
           })}
-          </tbody></Table>
+          </tbody></Table>}
         </div>
       )}
       <Dialog open={!!details} onClose={() => setDetails(null)} title={details?.name ?? 'Plugin'}>

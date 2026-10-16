@@ -69,9 +69,10 @@ export function App() {
             }
           />
           <Route path="/tokens" element={<Tokens />} />
+          <Route path="/peers" element={<Peers />} />
+          <Route path="/admin/peers" element={<Navigate to={`/peers${loc.search}`} replace />} />
           {admin && <Route path="/admin/plugins" element={<Plugins />} />}
           {admin && <Route path="/admin/users" element={<Users />} />}
-          {admin && <Route path="/admin/peers" element={<Peers />} />}
           <Route path="*" element={<Navigate to="/connections" replace />} />
         </Routes>
       </Layout>

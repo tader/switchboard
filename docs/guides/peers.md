@@ -13,7 +13,7 @@ Connect two Switchboard instances once. Both can share selected connections and 
 1. On a reachable instance, open **Peers → Add peer**, choose **Accept a connection from the other machine**, and copy the URL and device token.
 2. On the other instance, add a peer, choose **Connect to the other machine**, and enter that URL and token.
 3. On each instance, choose which local users may use connections received from this peer. The local peer owner is always included.
-4. Each connection owner opens **Connections → Sharing** and selects cells in the matrix to share their connections with peers.
+4. Each connection owner opens **Peers → Sharing** and selects cells in the matrix to share their connections with peers.
 
 Incoming and outgoing describe how the network session is established. Permissions and sharing work identically in both directions. Nothing is shared by default. Provider credentials and settings stay on the instance that owns the original connection.
 

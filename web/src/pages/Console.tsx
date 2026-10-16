@@ -43,7 +43,18 @@ export function Console() {
   const wanted = params.get('connection');
   const connection = usable.find((c) => c.id === wanted || c.name === wanted) ?? usable[0];
   const connectionId = connection?.id ?? '';
-  const setConnection = (id: string) => setParams((p) => ({ ...Object.fromEntries(p), connection: id }), { replace: true });
+  const setConnection = (id: string) => {
+    const target = usable.find(c => c.id === id);
+    const next = new URLSearchParams({ connection: id });
+    if (target?.hasWebSocket && params.get('transport') === 'websocket') next.set('transport', 'websocket');
+    setParams(next, { replace: true }); setSideOpen(false);
+  };
+  const workspace = connection?.kind === 'mcp' ? 'mcp' : connection?.hasWebSocket && params.get('transport') === 'websocket' ? 'websocket' : 'http';
+  const switchWorkspace = (transport: string) => {
+    const next = new URLSearchParams(params); next.set('transport', transport);
+    setParams(next, { replace: true });
+  };
+  const [mcpSidebar, setMcpSidebar] = useState<HTMLDivElement | null>(null);
 
   const [draft, setDraft] = useState<Draft>(emptyDraft);
   const [current, setCurrent] = useState<SavedCall | null>(null);
@@ -51,11 +62,23 @@ export function Console() {
   const [tab, setTab] = useState<'params' | 'headers' | 'body'>('params');
   const [side, setSide] = useState<'saved' | 'api'>('saved');
   const [sideOpen, setSideOpen] = useState(false);
+  useEffect(() => {
+    if (!sideOpen) return;
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setSideOpen(false); };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [sideOpen]);
   const [response, setResponse] = useState<CallResult | null>(null);
   const [callError, setCallError] = useState('');
   const [sending, setSending] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const abort = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setDraft(emptyDraft()); setCurrent(null); setOperation(null); setResponse(null); setCallError(''); setSending(false);
+    abort.current?.abort();
+    return () => { abort.current?.abort(); };
+  }, [connectionId]);
 
   // API description of the selected connection
   const [descriptions, setDescriptions] = useState<Record<string, ApiDescription | Error | 'loading'>>({});
@@ -78,27 +101,29 @@ export function Console() {
   // Load a saved call from the URL (?saved=)
   const savedParam = params.get('saved');
   useEffect(() => {
-    if (!savedParam || !saved.data) return;
+    if (!savedParam || !saved.data || !connections.data) return;
     const s = saved.data.find((x) => x.id === savedParam);
     if (s) loadSaved(s);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedParam, saved.data]);
+  }, [savedParam, saved.data, connectionId]);
 
   const loadSaved = (s: SavedCall) => {
-    if (s.kind === 'websocket') { if (s.connectionId) setParams({ connection: s.connectionId, saved: s.id, transport: 'websocket' }, { replace: true }); return; }
-    if (s.kind === 'mcp') { if (s.connectionId) setParams({ connection: s.connectionId, saved: s.id }, { replace: true }); return; }
+    if (s.kind === 'websocket') { setSideOpen(false); if (s.connectionId) setParams({ connection: s.connectionId, saved: s.id, transport: 'websocket' }, { replace: true }); return; }
+    if (s.kind === 'mcp') { setSideOpen(false); if (s.connectionId) setParams({ connection: s.connectionId, saved: s.id }, { replace: true }); return; }
     setDraft({ method: s.method, url: s.url, pathParams: s.pathParams, query: s.query, headers: s.headers, body: s.body });
     setCurrent(s);
     setOperation(null);
     setResponse(null);
     setCallError('');
     setSideOpen(false);
-    if (s.connectionId && s.connectionId !== connectionId && usable.some((c) => c.id === s.connectionId)) setConnection(s.connectionId);
+    const next = new URLSearchParams({ connection: s.connectionId ?? connectionId, saved: s.id, transport: 'http' });
+    if (params.toString() !== next.toString()) setParams(next, { replace: true });
   };
 
   const description = connection ? descriptions[connection.id] : undefined;
 
   const loadOperation = (op: Operation, desc: ApiDescription) => {
+    const next = new URLSearchParams(params); next.set('transport', 'http'); next.delete('operation'); next.delete('saved'); setParams(next, { replace: true });
     const base = (connection?.baseUrl ?? '').replace(/\/+$/, '');
     const server = desc.server.replace(/\/+$/, '');
     const prefix = base && server.startsWith(base) ? server.slice(base.length) : server;
@@ -132,14 +157,14 @@ export function Console() {
         body: { connection: connection.id, method: draft.method, url: draft.url, pathParams, query: draft.query, headers: draft.headers, body: draft.body },
         signal: ctrl.signal,
       });
-      setResponse(r);
+      if (!ctrl.signal.aborted) setResponse(r);
     } catch (e: any) {
       if (e.name !== 'AbortError') {
         setCallError(e.message);
         setResponse(null);
       }
     } finally {
-      setSending(false);
+      if (abort.current === ctrl) setSending(false);
     }
   };
 
@@ -209,15 +234,14 @@ export function Console() {
   }
 
   const service = services.data?.find((s) => s.id === connection?.serviceId);
-  if (connection?.kind === 'mcp') return <McpConsole key={connection.id} connection={connection} connections={usable} onConnection={setConnection} />;
-  if (connection?.hasWebSocket && params.get('transport') === 'websocket') return <WebSocketConsole key={connection.id} connection={connection} connections={usable} onConnection={setConnection} onHttp={() => setParams({ connection: connection.id }, { replace: true })} />;
+
   const groups = new Map<string, Connection[]>();
   for (const c of usable) groups.set(c.serviceName, [...(groups.get(c.serviceName) ?? []), c]);
 
   const sidebar = (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-zinc-200 p-3 dark:border-zinc-800">
-        {connection?.hasWebSocket && <Button className="mb-2 w-full" onClick={() => setParams({ connection: connection.id, transport: 'websocket' }, { replace: true })}>WebSocket operations</Button>}
+        <IconButton label="Close browser" className="mb-2 ml-auto flex lg:hidden" onClick={() => setSideOpen(false)}><X className="size-4" /></IconButton>
         <Menu
           block
           align="start"
@@ -263,15 +287,16 @@ export function Console() {
         ]}
       />
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+        <div ref={setMcpSidebar} className={side === 'api' && workspace === 'mcp' ? 'p-3' : 'hidden'} />
         {side === 'saved' ? (
-          <SavedList calls={(saved.data ?? []).filter(s => s.kind !== 'mcp')} connections={usable} currentId={current?.id} onPick={loadSaved} onDelete={deleteSaved} />
+          <SavedList calls={saved.data ?? []} connections={usable} currentId={params.get('saved') ?? current?.id} onPick={loadSaved} onDelete={deleteSaved} />
         ) : (
           <>
-            {connection?.hasWebSocket && <WebSocketOperationReference key={connection.id} connectionId={connection.id} onPick={id => {
+            {connection?.hasWebSocket && <WebSocketOperationReference key={connection.id} connectionId={connection.id} selected={workspace === 'websocket' ? params.get('operation') : null} proxyAllowed={!connection.peer} onProxy={() => { setParams({ connection: connection.id, transport: 'websocket', wsMode: 'proxy' }, { replace: true }); setSideOpen(false); }} onPick={id => {
               setParams({ connection: connection.id, transport: 'websocket', operation: id }, { replace: true });
               setSideOpen(false);
             }} />}
-            {!connection?.hasOpenapi ? (
+            {connection?.kind === 'mcp' ? null : !connection?.hasOpenapi ? (
               <p className="p-4 text-[13px] text-zinc-500">{connection?.serviceName} has no REST API description.</p>
             ) : description === 'loading' || description === undefined ? (
               <div className="flex justify-center p-8">
@@ -295,22 +320,22 @@ export function Console() {
 
   return (
     <div className="flex h-full min-h-0">
-      <aside className="hidden w-80 shrink-0 border-r border-zinc-200 bg-zinc-50/60 lg:block dark:border-zinc-800 dark:bg-zinc-900/30">{sidebar}</aside>
-      {sideOpen && (
-        <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-zinc-950/40" onClick={() => setSideOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-[min(20rem,90vw)] animate-pop bg-zinc-50 shadow-xl dark:bg-zinc-900">{sidebar}</aside>
-        </div>
-      )}
-
+      {sideOpen && <div className="fixed inset-0 z-40 bg-zinc-950/40 lg:hidden" onClick={() => setSideOpen(false)} />}
+      <aside aria-label="Console browser" className={cx('w-80 shrink-0 border-r border-zinc-200 bg-zinc-50 lg:static lg:block dark:border-zinc-800 dark:bg-zinc-900', sideOpen ? 'fixed inset-y-0 left-0 z-50 block max-w-[90vw]' : 'hidden')}>{sidebar}</aside>
       <section className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-12 shrink-0 items-center gap-3 border-b border-zinc-200 px-3 py-2 sm:px-4 dark:border-zinc-800">
+          <IconButton label="Browse" className="lg:hidden" onClick={() => setSideOpen(true)}><PanelLeft className="size-4" /></IconButton>
+          <h1 className="text-[13px] font-semibold">Console</h1>
+          {connection.hasWebSocket && <Tabs className="ml-auto border-0" value={workspace === 'websocket' ? 'websocket' : 'http'} onChange={switchWorkspace} tabs={[{ value: 'http', label: 'HTTP' }, { value: 'websocket', label: 'WebSocket' }]} />}
+          {workspace === 'mcp' && <Badge tone="indigo">MCP</Badge>}
+        </div>
+        {connection.kind === 'mcp' && <div className="min-h-0 flex-1 overflow-y-auto"><McpConsole key={connection.id} connection={connection} sidebarTarget={mcpSidebar} onPick={() => setSideOpen(false)} onSaved={saved.reload} /></div>}
+        {connection.hasWebSocket && <div className={cx('min-h-0 flex-1 overflow-y-auto', workspace !== 'websocket' && 'hidden')}><WebSocketConsole key={connection.id} connection={connection} onSaved={saved.reload} /></div>}
+        <div className={cx('flex min-h-0 flex-1 flex-col', workspace !== 'http' && 'hidden')}>
         {/* request line */}
         <div className="border-b border-zinc-200 p-3 sm:p-4 dark:border-zinc-800">
           <div className="mb-2.5 flex min-h-7 items-center gap-2">
-            <IconButton label="Browse" className="lg:hidden" onClick={() => setSideOpen(true)}>
-              <PanelLeft className="size-4" />
-            </IconButton>
-            <h1 className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-600 dark:text-zinc-300">
+            <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-600 dark:text-zinc-300">
               {current ? (
                 <span className="flex items-center gap-1.5">
                   <Star className="size-3.5 fill-amber-400 text-amber-400" />
@@ -321,7 +346,7 @@ export function Console() {
               ) : (
                 'New request'
               )}
-            </h1>
+            </h2>
             <Button size="sm" variant="ghost" icon={<FileCode2 className="size-3.5" />} onClick={() => copy(curl()).then(() => toast('Copied as curl'))}>
               Copy as curl
             </Button>
@@ -463,6 +488,7 @@ export function Console() {
             <ResponseView response={response} error={callError} sending={sending} />
           </div>
         </div>
+        </div>
       </section>
 
       <SaveDialog
@@ -517,7 +543,7 @@ function SavedList({
                 currentId === s.id ? 'bg-indigo-50 dark:bg-indigo-500/10' : 'hover:bg-zinc-100 dark:hover:bg-zinc-800/60',
               )}
             >
-              <MethodTag method={s.method} className="mt-0.5" />
+              <MethodTag method={s.kind === 'websocket' ? 'WS' : s.kind === 'mcp' ? 'MCP' : s.method} className="mt-0.5" />
               <span className="min-w-0">
                 <span className="block truncate text-[13px]">{s.name}</span>
                 <span className="block truncate font-mono text-[11px] text-zinc-500">{conn?.name ?? 'No connection'}</span>

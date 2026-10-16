@@ -164,7 +164,7 @@ Plugins run in Switchboard process with full access. Only install plugins you tr
 
 ## Peers
 
-`ctx.peer` is true when this instance has at least one configured peer, incoming or outgoing. It replaces the former satellite flag. A peer describes a relationship between two Switchboard instances; both can explicitly share local connections through **Connections → Sharing**. Plugins configure connections only on their local instance.
+`ctx.peer` is true when this instance has at least one configured peer, incoming or outgoing. It replaces the former satellite flag. A peer describes a relationship between two Switchboard instances; both can explicitly share local connections through **Peers → Sharing**. Plugins configure connections only on their local instance.
 
 The former `switchboard` plugin is retired and cannot be enabled. Its existing connection records and credentials remain stored, but unavailable. Configure Peers and choose sharing grants explicitly instead.
 

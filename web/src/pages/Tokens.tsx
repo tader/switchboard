@@ -1,9 +1,10 @@
+import { ListToolbar, ListFeedback, SortHeader, useList } from '../components/ListControls';
 import { useEffect, useState } from 'react';
-import { History, KeyRound, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
+import { History, Info, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import { api, type ApiToken, type Connection } from '../api';
 import { useSession } from '../auth';
-import { Alert, Badge, Button, Card, CopyField, Dialog, Empty, FormField, IconButton, Input, Menu, PageHeader, Select, Spinner, useConfirm, useToast } from '../components/ui';
+import { Alert, Badge, Button, Card, CopyField, Dialog, FormField, IconButton, Input, Menu, PageHeader, Select, Table, useConfirm, useToast } from '../components/ui';
 import { ago, useResource } from '../lib';
 import { AccessPicker } from '../components/AccessPicker';
 
@@ -16,9 +17,16 @@ export function Tokens() {
   const [editing, setEditing] = useState<ApiToken | 'new' | null>(null);
   const [created, setCreated] = useState<{ token: ApiToken; secret: string } | null>(null);
 
+  const list = useList('tokens', tokens.data ?? [], {
+    search: t => [t.name, t.prefix, t.clientName],
+    sorts: { used: t => t.lastUsedAt, name: t => t.name, created: t => t.createdAt, expiry: t => t.expiresAt },
+    defaultSort: 'used', defaultOrder: 'desc', filters: { status: '', audience: '', access: '' },
+    filter: (t, f) => (!f.status || (t.expiresAt != null && t.expiresAt <= Date.now() ? 'expired' : 'active') === f.status)
+      && (!f.audience || (t.audience === 'mcp' ? 'mcp' : 'api') === f.audience) && (!f.access || (t.connectionIds ? 'selected' : 'all') === f.access),
+  });
   const revoke = async (t: ApiToken) => {
     if (!(await confirm({ title: `Revoke “${t.name}”?`, message: 'Scripts using this token will stop working immediately.', confirm: 'Revoke', danger: true }))) return;
-    await api(`/tokens/${t.id}`, { method: 'DELETE' });
+    try { await api(`/tokens/${t.id}`, { method: 'DELETE' }); } catch (e: any) { toast(e.message, 'error'); return; }
     tokens.setData((d) => d?.filter((x) => x.id !== t.id));
     toast('Token revoked');
   };
@@ -38,78 +46,27 @@ export function Tokens() {
         }
       />
       <McpBox />
-      {tokens.loading && !tokens.data ? (
-        <div className="flex justify-center py-20">
-          <Spinner className="size-5" />
-        </div>
-      ) : !tokens.data?.length ? (
-        <Empty
-          icon={<KeyRound className="size-5" />}
-          title="No tokens yet"
-          action={
-            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>
-              New token
-            </Button>
-          }
-        >
-          Create one token per script or agent, so you can limit and revoke each separately.
-        </Empty>
-      ) : (
-        <Card className="overflow-hidden">
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {tokens.data.map((t) => {
-              const expired = t.expiresAt && t.expiresAt < Date.now();
-              return (
-                <li key={t.id} className="flex items-center gap-3 px-4 py-3">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                    <KeyRound className="size-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{t.name}</span>
-                      <code className="font-mono text-[11.5px] text-zinc-400">{t.prefix}…</code>
-                      {t.audience === 'mcp' && <Badge tone="indigo">MCP only</Badge>}
-                      {expired && <Badge tone="red">Expired</Badge>}
-                    </div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-                      {t.connectionIds ? (
-                        t.connectionIds.map((id) => (
-                          <code key={id} className="rounded bg-zinc-100 px-1.5 py-px font-mono text-[11px] dark:bg-zinc-800">
-                            {connName(id)}
-                          </code>
-                        ))
-                      ) : (
-                        <span>All connections</span>
-                      )}
-                      <span>·</span>
-                      <span>{t.lastUsedAt ? `Used ${ago(t.lastUsedAt).toLowerCase()}` : 'Never used'}</span>
-                      {t.expiresAt && !expired && (
-                        <>
-                          <span>·</span>
-                          <span>Expires {ago(t.expiresAt).toLowerCase()}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <Menu
-                    trigger={(p) => (
-                      <IconButton label="Actions" {...p}>
-                        <MoreHorizontal className="size-4" />
-                      </IconButton>
-                    )}
-                    items={[
-                      { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?client=${t.id}`) },
-                      { label: 'Edit', icon: <Pencil />, onSelect: () => setEditing(t) },
-                      'separator',
-                      { label: 'Revoke', icon: <Trash2 />, danger: true, onSelect: () => revoke(t) },
-                    ]}
-                  />
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
-      )}
+      <div className="space-y-3">
+        <ListToolbar list={list} label="tokens" sorts={[{ value: 'used', label: 'Last used' }, { value: 'name', label: 'Name' }, { value: 'created', label: 'Created' }, { value: 'expiry', label: 'Expiry' }]}>
+          <Select aria-label="Token status" value={list.state.status} onChange={e => list.set({ status: e.target.value })} className="w-36"><option value="">Any status</option><option value="active">Active</option><option value="expired">Expired</option></Select>
+          <Select aria-label="Token type" value={list.state.audience} onChange={e => list.set({ audience: e.target.value })} className="w-36"><option value="">Any type</option><option value="api">API</option><option value="mcp">MCP only</option></Select>
+          <Select aria-label="Token access" value={list.state.access} onChange={e => list.set({ access: e.target.value })} className="w-40"><option value="">Any access</option><option value="all">All connections</option><option value="selected">Selected connections</option></Select>
+        </ListToolbar>
+        <ListFeedback loading={tokens.loading && !tokens.data} error={tokens.error} empty={!list.visible.length} filtered={list.filtered} label="tokens" retry={tokens.reload} reset={list.reset} />
+        {!!list.visible.length && <Table label="API tokens"><thead><tr>
+          <SortHeader list={list} field="name">Token</SortHeader><th className="w-20">Status</th><th className="hidden w-24 sm:table-cell">Type</th><th className="hidden w-[22%] lg:table-cell">Access</th><SortHeader list={list} field="used" className="w-28">Last used</SortHeader><SortHeader list={list} field="expiry" className="hidden w-28 md:table-cell">Expires</SortHeader><th className="w-11"><span className="sr-only">Actions</span></th>
+        </tr></thead><tbody>{list.visible.map(t => {
+          const expired = t.expiresAt != null && t.expiresAt <= Date.now();
+          return <tr key={t.id}><td><div className="truncate font-medium" title={t.name}>{t.name}</div><code className="text-[11px] text-zinc-500">{t.prefix}…</code><div className="sr-only">Created {new Date(t.createdAt).toLocaleString()}</div></td>
+            <td><Badge tone={expired ? 'red' : 'green'}>{expired ? 'Expired' : 'Active'}</Badge></td><td className="hidden sm:table-cell"><Badge tone={t.audience === 'mcp' ? 'indigo' : 'neutral'}>{t.audience === 'mcp' ? 'MCP only' : 'API'}</Badge></td>
+            <td className="hidden lg:table-cell"><span className="block truncate text-xs text-zinc-500" title={t.connectionIds?.map(connName).join(', ')}>{t.connectionIds ? t.connectionIds.map(connName).join(', ') || 'No connections' : 'All connections'}</span></td>
+            <td className="whitespace-nowrap text-xs tabular-nums text-zinc-500" title={t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : undefined}>{ago(t.lastUsedAt)}</td><td className="hidden text-xs tabular-nums text-zinc-500 md:table-cell" title={t.expiresAt ? new Date(t.expiresAt).toLocaleString() : undefined}>{t.expiresAt ? ago(t.expiresAt) : 'Never'}</td>
+            <td><Menu trigger={p => <IconButton label={`Actions for ${t.name}`} {...p}><MoreHorizontal className="size-4" /></IconButton>} items={[
+              { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?client=${t.id}`) }, { label: 'Edit', icon: <Pencil />, onSelect: () => setEditing(t) }, 'separator', { label: 'Revoke', icon: <Trash2 />, danger: true, onSelect: () => revoke(t) },
+            ]} /></td></tr>;
+        })}</tbody></Table>}
+        {!tokens.data?.length && !tokens.loading && !tokens.error && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEditing('new')}>New token</Button>}
+      </div>
 
       <TokenDialog
         token={editing}
@@ -232,14 +189,12 @@ function McpBox() {
     <Card className="mb-5 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-[13px] font-semibold">MCP server</h2>
+          <h2 className="flex items-center gap-1.5 text-[13px] font-semibold">MCP server <Link to="/docs/guides/mcp" aria-label="MCP documentation" title="MCP documentation" className="inline-flex size-7 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-indigo-600 dark:hover:bg-zinc-800 dark:hover:text-indigo-400"><Info className="size-4" /></Link></h2>
         </div>
       </div>
       <div className="mt-3 space-y-2">
         <CopyField value={url} />
-        <Link to="/docs/guides/mcp" className="inline-block text-[13px] font-medium text-indigo-600 hover:underline dark:text-indigo-400">
-          MCP documentation
-        </Link>
+
       </div>
     </Card>
   );

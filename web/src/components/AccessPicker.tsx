@@ -1,11 +1,15 @@
+import { useState } from 'react';
+import { matchesSearch } from '../list-state';
 import type { Connection } from '../api';
 import { cx } from '../lib';
-import { Alert, Checkbox } from './ui';
+import { Alert, Checkbox, Input } from './ui';
 
 /** Chooses between access to all connections or to selected ones. */
 export function AccessPicker({
   connections, limited, setLimited, selected, setSelected,
 }: { connections: Connection[]; limited: boolean; setLimited: (v: boolean) => void; selected: string[]; setSelected: (v: string[]) => void }) {
+  const [query, setQuery] = useState('');
+  const visible = connections.filter(c => matchesSearch(query, c.name, c.serviceName, c.account?.label));
   return (
   <div className="space-y-2">
     <div className="text-[13px] font-medium">Access</div>
@@ -28,10 +32,11 @@ export function AccessPicker({
         </button>
       ))}
     </div>
+    {limited && connections.length > 0 && <Input aria-label="Search available connections" placeholder="Search connections…" value={query} onChange={e => setQuery(e.target.value)} />}
     {limited &&
       (connections.length ? (
         <div className="scrollbar-thin max-h-56 overflow-y-auto rounded-lg ring-1 ring-zinc-200 dark:ring-zinc-800">
-          {connections.map((c, i) => (
+          {visible.map((c, i) => (
             <label key={c.id} className={cx('flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/50', i > 0 && 'border-t border-zinc-100 dark:border-zinc-800')}>
               <Checkbox checked={selected.includes(c.id)} onChange={(v) => setSelected(v ? [...selected, c.id] : selected.filter((x) => x !== c.id))} />
               <span className="min-w-0 flex-1">
@@ -42,6 +47,7 @@ export function AccessPicker({
               </span>
             </label>
           ))}
+          {!visible.length && <p className="p-3 text-xs text-zinc-500">No connections match your search.</p>}
         </div>
       ) : (
         <Alert tone="amber">You have no connections yet.</Alert>

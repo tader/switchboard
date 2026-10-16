@@ -1,7 +1,8 @@
+import { ListToolbar, ListFeedback, SortHeader, useList } from './ListControls';
 import { useEffect, useState } from 'react';
-import { Download, Puzzle, RefreshCw } from 'lucide-react';
+import { Download, RefreshCw } from 'lucide-react';
 import { api, type CommunityPlugin, type Connection, type PluginCatalog, type PluginInfo, type PluginPlan } from '../api';
-import { Alert, Badge, Button, Dialog, Empty, FormField, Input, Select, Spinner, Table, ServiceIcon } from './ui';
+import { Alert, Badge, Button, Dialog, FormField, Input, Select, Spinner, Table, ServiceIcon } from './ui';
 
 export type PluginChangeRequest =
   | { kind: 'install'; initial?: CommunityPlugin }
@@ -9,7 +10,7 @@ export type PluginChangeRequest =
 
 export function CommunityPlugins({ installed, onInstall }: { installed: PluginInfo[]; onInstall: (listing: CommunityPlugin) => void }) {
   const [catalog, setCatalog] = useState<PluginCatalog | null>(null);
-  const [filter, setFilter] = useState('');
+  const [details, setDetails] = useState<CommunityPlugin | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const load = async (signal?: AbortSignal) => {
@@ -20,23 +21,23 @@ export function CommunityPlugins({ installed, onInstall }: { installed: PluginIn
     finally { if (!signal?.aborted) setLoading(false); }
   };
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, []);
-  const visible = catalog?.plugins.filter((p) => `${p.id} ${p.name} ${p.description} ${p.repo}`.toLowerCase().includes(filter.trim().toLowerCase())) ?? [];
-  return <div className="space-y-4">
-    <div className="flex items-center gap-3">
-      <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search community plugins…" aria-label="Search community plugins" className="max-w-sm" />
+  const installation = (p: CommunityPlugin) => { const present = installed.find(i => i.id === p.id); return present?.origin === 'installed' ? 'installed' : present ? 'builtin' : 'available'; };
+  const list = useList('plugins-community', catalog?.plugins ?? [], { search: p => [p.id, p.name, p.description, p.repo], sorts: { name: p => p.name, source: p => p.repo, status: installation }, filters: { status: '', source: '' }, filter: (p, f) => (!f.status || installation(p) === f.status) && (!f.source || p.repo === f.source) });
+  return <div className="space-y-3">
+    <ListToolbar list={list} label="community plugins" placeholder="Search plugins…" sorts={[{ value: 'name', label: 'Name' }, { value: 'source', label: 'Source' }, { value: 'status', label: 'Status' }]}>
+      <Select aria-label="Community installation state" value={list.state.status} onChange={e => list.set({ status: e.target.value })} className="w-40"><option value="">Any status</option><option value="available">Not installed</option><option value="installed">Installed</option><option value="builtin">Built in only</option></Select>
+      <Select aria-label="Community repository" value={list.state.source} onChange={e => list.set({ source: e.target.value })} className="w-44"><option value="">All repositories</option>{[...new Set(catalog?.plugins.map(p => p.repo))].sort().map(repo => <option key={repo} value={repo}>{repo}</option>)}</Select>
       <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void load()}>Refresh</Button>
-    </div>
-    {error && <Alert>{error} <Button size="sm" disabled={loading} onClick={() => void load()}>Retry</Button></Alert>}
-    {loading && !catalog ? <div className="flex justify-center py-12"><Spinner /></div> : !visible.length && !error ? <Empty icon={<Puzzle className="size-5" />} title={filter ? 'No matching plugins' : 'No community plugins yet'} /> : catalog && <Table label="Community plugins" layout="auto">
-      <thead><tr><th scope="col">Plugin</th><th scope="col" className="w-px whitespace-nowrap"><span className="sr-only">Install</span></th></tr></thead>
-      <tbody>{visible.map((p) => {
-        const present = installed.find((i) => i.id === p.id);
-        return <tr key={p.id}>
-          <td><div className="flex min-w-0 items-start gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0"><div className="font-semibold">{p.name}</div><p className="mt-1 text-xs text-zinc-500">{p.description}</p><a className="mt-1 block break-all text-xs text-indigo-600 dark:text-indigo-400" href={`https://github.com/${p.repo}`} target="_blank" rel="noreferrer">{p.repo}</a></div></div></td>
-          <td className="w-px whitespace-nowrap text-right">{present?.origin === 'installed' ? <Badge>Installed</Badge> : <Button size="sm" icon={<Download className="size-3.5" />} onClick={() => onInstall(p)}>{present ? 'Install external version' : 'Install'}</Button>}</td>
-        </tr>;
-      })}</tbody>
+    </ListToolbar>
+    <ListFeedback loading={loading && !catalog} error={error ? new Error(error) : undefined} empty={!list.visible.length} filtered={list.filtered} label="community plugins" retry={() => void load()} reset={list.reset} />
+    {!!list.visible.length && <Table label="Community plugins"><thead><tr><SortHeader list={list} field="name">Plugin</SortHeader><SortHeader list={list} field="status" className="w-28">Status</SortHeader><SortHeader list={list} field="source" className="hidden w-[28%] lg:table-cell">Source</SortHeader><th className="w-24 sm:w-32"><span className="sr-only">Actions</span></th></tr></thead>
+      <tbody>{list.visible.map(p => { const state = installation(p); return <tr key={p.id}>
+        <td><div className="flex min-w-0 items-center gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0"><button type="button" onClick={() => setDetails(p)} className="block max-w-full truncate text-left font-semibold hover:text-indigo-600 dark:hover:text-indigo-400" title={p.name}>{p.name}</button><div className="truncate text-xs text-zinc-500" title={p.description}>{p.description}</div></div></div></td>
+        <td><Badge tone={state === 'installed' ? 'green' : 'neutral'}>{state === 'installed' ? 'Installed' : state === 'builtin' ? 'Built in' : 'Available'}</Badge></td><td className="hidden lg:table-cell"><a className="block truncate text-xs text-zinc-500 hover:text-indigo-600 dark:hover:text-indigo-400" href={`https://github.com/${p.repo}`} target="_blank" rel="noreferrer" title={p.repo}>{p.repo}</a></td>
+        <td className="text-right">{state !== 'installed' && <Button size="sm" icon={<Download className="size-3.5" />} title={state === 'builtin' ? 'Install external version' : undefined} onClick={() => onInstall(p)}>Install</Button>}</td>
+      </tr>; })}</tbody>
     </Table>}
+    <Dialog open={!!details} onClose={() => setDetails(null)} title={details?.name ?? 'Plugin'}>{details && <div className="space-y-3 text-[13px]"><p className="text-zinc-500">{details.description}</p><a href={`https://github.com/${details.repo}`} target="_blank" rel="noreferrer" className="break-all text-indigo-600 dark:text-indigo-400">{details.repo}</a><div className="flex justify-end"><Button onClick={() => setDetails(null)}>Done</Button></div></div>}</Dialog>
   </div>;
 }
 
