@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/tader/switchboard/compare/v0.4.1...v0.5.0) (2026-10-16)
+
+
+### Features
+
+* polish management views and unify protocol consoles ([eb21dd6](https://github.com/tader/switchboard/commit/eb21dd68bedd1c3028c29781e222b12e121f0d24))
+
 ## [0.4.1](https://github.com/tader/switchboard/compare/v0.4.0...v0.4.1) (2026-10-15)
 
 
