@@ -1,3 +1,5 @@
+import { provideCredentials } from './credential-providers.ts';
+import { one } from './db.ts';
 import { executeWebSocket } from './websocket.ts';
 import { peerWebsocketAccess } from './websocket-access.ts';
 import { toView, loadConnection } from './connections.ts';
@@ -26,6 +28,7 @@ export function sharedCatalogue(peerId: string, targetInstance?: string) {
     if (route.length > MAX_PEER_HOPS || new Set(route).size !== route.length || (targetInstance && route.includes(targetInstance))) return [];
     return [{ id: row.id, name: c.name, serviceId: c.serviceId, serviceName: c.serviceName, kind: c.kind,
       icon: row.peer_id ? peerConnection(row.user_id, row.peer_id, row.remote_connection_id).icon : plugins.service(c.serviceId)?.icon,
+      credentialProvider: !row.peer_id && one('SELECT 1 FROM connection_credential_shares WHERE connection_id = ? AND peer_id = ?', row.id, peerId) ? (() => { const method = loadConnection(row.user_id, row.id, true).method; return method.credentialProvider ? { format: method.credentialProvider.format } : undefined; })() : undefined,
       hasOpenapi: c.hasOpenapi, hasWebSocket: c.hasWebSocket, status: c.status, route }];
   });
   return { instanceId: instanceId(), connections };
@@ -48,6 +51,10 @@ export async function handleSharedRequest(peerId: string, peerUserId: string, op
   const row = sharedConnection(peerId, payload.connection);
   const user = getUser(row.user_id)!;
   const caller = peerCaller(peerId, peerUserId, payload.caller);
+  if (operation === 'credentials') {
+    if (row.peer_id || !one('SELECT 1 FROM connection_credential_shares WHERE connection_id = ? AND peer_id = ?', row.id, peerId)) throw new HttpError(403, 'Authentication is not shared with this peer');
+    return provideCredentials(user.id, row.id, payload.format, payload.forceAuthentication === true, signal);
+  }
   if (operation === 'websocket') return executeWebSocket(peerWebsocketAccess(user, peerId, peerUserId, caller.tokenId!), row.id, payload.input, signal, caller);
   if (operation === 'mcp') return executeMcp(user, row.id, payload.input, signal, caller);
   if (operation === 'openapi') {

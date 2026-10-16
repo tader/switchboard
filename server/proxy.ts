@@ -235,10 +235,10 @@ async function executeLoaded(loaded: ReturnType<typeof loadConnection>, user: Us
       // Re-read inside the lock: another request may just have refreshed the credentials.
       const fresh = loadConnection(user.id, conn.id).conn;
       try {
-        const result = await auth.authorize(req, fresh, { force });
+        const result = await auth.authorize(req, fresh, { force, signal });
         if (result && result.credentials !== undefined) saveCredentials(conn.id, result.credentials);
       } catch (e: any) {
-        if (e instanceof HttpError && [403, 409].includes(e.status)) throw e;
+        if (e instanceof HttpError && ([403, 409].includes(e.status) || auth.credentialConsumer && [503, 504].includes(e.status))) throw e;
         const reason = loaded.row.credential_id ? 'Shared credential authentication failed; check or reconnect it' : e?.message ?? String(e);
         markError(conn.id, reason);
         throw new HttpError(502, `Could not authenticate with ${service.name}: ${reason}`);

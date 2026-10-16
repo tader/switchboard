@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronRight, X } from 'lucide-react';
+import { api } from '../api';
 import type { Field, Pair } from '../api';
 import { cx } from '../lib';
 import { Checkbox, FormField, Input, SecretInput, Select, Switch, Textarea } from './ui';
@@ -12,6 +13,17 @@ export function initialValues(fields: Field[], current: Record<string, any> = {}
     else v[f.key] = f.type === 'boolean' ? false : '';
   }
   return v;
+}
+
+function AuthenticationSource({ id, format, value, required, onChange }: { id: string; format: string; value: string; required?: boolean; onChange(value: string): void }) {
+  const [choices, setChoices] = useState<{id:string;name:string;peer?:string}[]>([]);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    api<typeof choices>(`/credentials/providers?format=${encodeURIComponent(format)}`, {signal:controller.signal}).then(setChoices).catch(() => { if (!controller.signal.aborted) setError('Authentication sources could not be loaded'); });
+    return () => controller.abort();
+  }, [format]);
+  return <><Select id={id} value={value} required={required} onChange={e => onChange(e.target.value)}><option value="">Choose an authentication connection</option>{choices.map(choice => <option key={choice.id} value={choice.id}>{choice.name}{choice.peer ? ' · peer' : ' · this device'}</option>)}</Select>{error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}{!error && !choices.length && <p className="mt-1 text-xs text-zinc-500">Connect an authentication source locally or explicitly share authentication from a peer.</p>}</>;
 }
 
 /**
@@ -33,6 +45,9 @@ export function FieldsForm({
     const keep = f.type === 'secret' && secretsSet.includes(f.key);
     let control;
     switch (f.type) {
+      case 'credential-source':
+        control = <AuthenticationSource id={id} format={f.credentialFormat ?? ''} value={value} required={f.required} onChange={v => set(f.key, v)} />;
+        break;
       case 'secret':
         control = <SecretInput id={id} value={value} placeholder={keep ? 'Saved — leave empty to keep' : f.placeholder} required={f.required && !keep} onChange={(e) => set(f.key, e.target.value)} />;
         break;

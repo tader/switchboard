@@ -23,11 +23,13 @@ export interface PluginManifest {
 export interface Field {
   key: string;
   label: string;
-  type?: 'text' | 'secret' | 'url' | 'textarea' | 'select' | 'boolean';
+  type?: 'text' | 'secret' | 'url' | 'textarea' | 'select' | 'boolean' | 'credential-source';
   description?: string;
   placeholder?: string;
   required?: boolean;
   default?: string | boolean;
+  /** Compatible format for a credential-source picker. */
+  credentialFormat?: string;
   options?: { value: string; label: string }[];
   /** Shown under "Advanced" in forms. */
   advanced?: boolean;
@@ -58,6 +60,8 @@ export interface PluginContext {
   peer: boolean;
   /** Core MCP OAuth discovery and encrypted connect-flow integration. */
   mcp: { oauth(): AuthMethod };
+  /** Backend-only, bound to the acting user and consumer source selection. */
+  credentials?: { obtain(ref: string, options: { format: string; forceAuthentication?: boolean; signal?: AbortSignal }): Promise<CredentialBundle> };
 }
 
 export interface PluginInstance {
@@ -166,7 +170,15 @@ export interface ReusableCredentials {
   allowRequest?(req: OutgoingRequest, conn: Connection): boolean;
 }
 
+export interface CredentialBundle { format: string; bundle: any; account: AccountInfo }
+export interface CredentialProvider {
+  format: string;
+  provide(conn: Connection, opts: { forceAuthentication: boolean; signal?: AbortSignal; persistCredentials(credentials: any): void | Promise<void> }): Promise<Omit<CredentialBundle, 'format'> & { credentials?: any }>;
+}
 export interface AuthMethod {
+  /** Sharing API access never implies sharing credentials. Providers require an explicit peer credential grant. */
+  credentialProvider?: CredentialProvider;
+  credentialConsumer?: { format: string; field: string };
   reusable?: ReusableCredentials;
   /** Unique within the service, e.g. "oauth", "device", "token". */
   id: string;
@@ -185,13 +197,13 @@ export interface AuthMethod {
    * Adds credentials to an outgoing request. `force` is set when a previous attempt got a 401,
    * so cached tokens should be refreshed. Return new credentials to persist them.
    */
-  authorize(req: OutgoingRequest, conn: Connection, opts: { force?: boolean; signal?: AbortSignal }): Promise<void | { credentials?: any }> | void | { credentials?: any };
+  authorize(req: OutgoingRequest, conn: Connection, opts: { force?: boolean; signal?: AbortSignal; persistCredentials?: (credentials: any) => void | Promise<void> }): Promise<void | { credentials?: any }> | void | { credentials?: any };
   /** Message authentication before the operation session starts. For a definitive
    * rejection throw an Error with code='WEBSOCKET_AUTH_REJECTED'; core retries once
    * with force=true. Never include credentials in error messages. */
   authenticateWebSocket?(channel: WebSocketChannel, conn: Connection, opts: { force: boolean; signal: AbortSignal }): Promise<void | { credentials?: any }>;
   /** Hands out a usable bearer token, for scripts that use a provider SDK directly. */
-  token?(conn: Connection, opts: { force?: boolean; signal?: AbortSignal }): Promise<TokenResult>;
+  token?(conn: Connection, opts: { force?: boolean; signal?: AbortSignal; persistCredentials?: (credentials: any) => void | Promise<void> }): Promise<TokenResult>;
   /** Called when the connection is deleted. */
   revoke?(conn: Connection): Promise<void>;
 }

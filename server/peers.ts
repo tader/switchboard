@@ -14,6 +14,7 @@ const MAX_MESSAGE = PEER_MAX_MESSAGE;
 
 export interface PeerConnection {
   id: string; name: string; serviceId: string; serviceName: string; kind: 'http' | 'mcp';
+  credentialProvider?: { format: string };
   icon?: string; hasOpenapi: boolean; hasWebSocket?: boolean; status: 'ok' | 'error' | 'unavailable'; route: string[];
 }
 
@@ -187,6 +188,7 @@ export function validatePeerCatalog(value: any): { instanceId: string; connectio
     if (!Array.isArray(c.route) || !c.route.length || c.route.length > MAX_PEER_HOPS || c.route.some((id: any) => typeof id !== 'string' || !id || id.length > 100) || new Set(c.route).size !== c.route.length || c.route.includes(instanceId()) || c.route.at(-1) !== value.instanceId) throw new Error('Peer route contains a loop');
     seen.add(c.id);
     return { id: c.id, name: c.name.slice(0, 100), serviceId: c.serviceId, serviceName: c.serviceName.slice(0, 100), kind: c.kind, status: c.status,
+      credentialProvider: c.credentialProvider && c.route.length === 1 && typeof c.credentialProvider.format === 'string' && /^[a-zA-Z0-9/._-]{1,100}$/.test(c.credentialProvider.format) ? { format: c.credentialProvider.format } : undefined,
       hasOpenapi: !!c.hasOpenapi, hasWebSocket: c.hasWebSocket === true, icon: typeof c.icon === 'string' && c.icon.length <= 100_000 ? c.icon : undefined, route: [...c.route] };
   });
   return { instanceId: value.instanceId, connections };
@@ -360,6 +362,7 @@ export async function requestPeer<T>(peerId: string, userId: string, operation: 
   const remote = (payload as any)?.connection;
   if (typeof remote !== 'string') throw badRequest('A shared connection id is required');
   const descriptor = peerConnection(userId, peerId, remote);
+  if (operation === 'credentials' && (!descriptor.credentialProvider || descriptor.route.length !== 1)) throw new HttpError(403, 'Peer authentication source is unavailable');
   if (descriptor.status !== 'ok') throw new HttpError(503, 'The shared connection is unavailable on its peer');
   if (signal?.aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
   if (!userCanUsePeer(userId, peerId)) throw new HttpError(403, 'You cannot use this peer');

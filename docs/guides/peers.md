@@ -15,13 +15,21 @@ Connect two Switchboard instances once. Both can share selected connections and 
 3. On each instance, choose which local users may use connections received from this peer. The local peer owner is always included.
 4. Each connection owner opens **Peers → Sharing** and selects cells in the matrix to share their connections with peers.
 
-Incoming and outgoing describe how the network session is established. Permissions and sharing work identically in both directions. Nothing is shared by default. Provider credentials and settings stay on the instance that owns the original connection.
+Incoming and outgoing describe how the network session is established. Permissions and sharing work identically in both directions. Nothing is shared by default. Ordinary sharing keeps provider credentials and settings on the instance that owns the original connection. Authentication providers have a separate, explicit credential-sharing grant, described below.
 
 ## Sharing matrix
 
 Rows are your connections; columns are all configured peers, including incoming and outgoing peers. Check a cell to share, or clear it to revoke. Changes save immediately. Search connections and peers independently. Offline peers retain their sharing selections. Received connections show their origin and can be explicitly shared onward; cells that would create a cycle are blocked.
 
-Only local owners can change their connections and sharing grants. A peer can invoke explicitly shared HTTP or MCP connections and inspect their OpenAPI descriptions. It cannot create, rename, reconnect or delete a connection on another instance, or retrieve raw provider credentials.
+Only local owners can change their connections and sharing grants. A peer can invoke explicitly shared HTTP or MCP connections and inspect their OpenAPI descriptions. It cannot create, rename, reconnect or delete a connection on another instance, or retrieve raw provider credentials through ordinary sharing.
+
+## Authentication sources
+
+Some plugins provide authentication that another local connection can consume. On the source connection, first share it with the destination peer, then enable **Share authentication → Allow authentication on [peer]**. This additional grant allows that peer's backend to receive and store refresh-capable credentials. Ordinary sharing alone never enables credential transfer.
+
+On the destination, create a local service connection and select the received authentication source. The service calls its provider directly and can refresh its cached credentials while the source device is offline. If renewal requires a fresh browser sign-in, sign in to the authentication connection on its original device, then retry. Token lifetimes and provider policy still apply.
+
+Only direct peers support authentication transfer; it cannot be forwarded through a chain. Removing either sharing grant stops future transfers. Once the destination receives the change, linked consumers stop using their cached credentials. Removing a grant cannot recall credentials already stored on an offline peer; use the provider's session revocation controls when needed. Both instances must support authentication providers for the selector and grant to appear. Credentials are never returned to the web app or exposed through the regular token API for an authentication source.
 
 ## Access and activity
 
