@@ -28,7 +28,7 @@ const view = (p: PluginRecord) => ({
   status: p.status,
   error: p.error,
   hasSettings: !!p.manifest.settings?.length,
-  services: p.services.map((s) => ({ id: s.id, name: s.name, methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, unavailable: m.unavailable })) })),
+  services: p.services.map((s) => ({ id: s.id, name: s.name, methods: s.authMethods.filter((m) => !m.hidden).map((m) => ({ id: m.id, name: m.name, unavailable: m.unavailable })) })),
   icon: pluginIcon(p),
   loadedAt: p.loadedAt,
 });
