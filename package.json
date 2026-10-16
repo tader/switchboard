@@ -2,7 +2,7 @@
   "name": "switchboard",
   "private": true,
   "type": "module",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/main.ts",
     "dev": "node --disable-warning=ExperimentalWarning --watch-path=server server/main.ts",
