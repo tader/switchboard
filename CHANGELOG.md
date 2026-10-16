@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0](https://github.com/tader/switchboard/compare/v0.5.0...v0.6.0) (2026-10-16)
+
+
+### Features
+
+* batch install community plugins and manage curated lists ([a01c293](https://github.com/tader/switchboard/commit/a01c29388aea97e09732cecf09a55d973abaace0))
+* share authentication sources with local and peer connections ([2d3607a](https://github.com/tader/switchboard/commit/2d3607a1b8b8e5dc2d063e5c94346c769d35b06b))
+* share authentication sources with local and peer consumers ([ec16817](https://github.com/tader/switchboard/commit/ec168176e88ae080d1f74e0d765fea166fb15256))
+
 ## [0.5.0](https://github.com/tader/switchboard/compare/v0.4.1...v0.5.0) (2026-10-16)
 
 
