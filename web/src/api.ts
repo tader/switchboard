@@ -46,11 +46,12 @@ export interface User {
 export interface Field {
   key: string;
   label: string;
-  type?: 'text' | 'secret' | 'url' | 'textarea' | 'select' | 'boolean';
+  type?: 'text' | 'secret' | 'url' | 'textarea' | 'select' | 'boolean' | 'credential-source';
   description?: string;
   placeholder?: string;
   required?: boolean;
   default?: string | boolean;
+  credentialFormat?: string;
   options?: { value: string; label: string }[];
   advanced?: boolean;
 }
@@ -88,6 +89,7 @@ export interface Credential {
 }
 
 export interface Connection {
+  credentialProvider?: boolean;
   credential?: { id: string; name: string; kind: string; version: number } | null;
   reusable?: boolean;
   icon?: string;

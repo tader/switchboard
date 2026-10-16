@@ -285,6 +285,13 @@ const migrations: string[] = [
   ALTER TABLE connections ADD COLUMN credential_binding_enc TEXT;
   CREATE INDEX connections_credential ON connections(credential_id);
   `,
+  `
+  CREATE TABLE connection_credential_shares (
+    connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    peer_id TEXT NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+    PRIMARY KEY(connection_id, peer_id)
+  );
+  `,
 ];
 
 export function initDb() {

@@ -1,3 +1,4 @@
+import { credentialProviders } from '../credential-providers.ts';
 import { plugins } from '../plugins/manager.ts';
 import { Hono, type Context } from 'hono';
 import { requireUser, requireFullAccess, type Env } from '../auth.ts';
@@ -21,6 +22,7 @@ for (const path of ['/credentials', '/credentials/*', '/connections/:ref/credent
   finally { if (!['GET','HEAD'].includes(c.req.method)) record({ userId: c.get('user').id, caller: callerFrom(c, 'plugin'), method: 'CREDENTIAL', url: c.req.path, status: status ?? c.res.status }); }
 });
 credentialsApi.get('/credentials', c => c.json(listCredentials(c.get('user').id)));
+credentialsApi.get('/credentials/providers', c => c.json(credentialProviders(c.get('user').id, c.req.query('format') ?? '')));
 credentialsApi.get('/credentials/:id', c => {
   const row = getCredential(c.get('user').id, c.req.param('id'));
   let fields: any[] = [];

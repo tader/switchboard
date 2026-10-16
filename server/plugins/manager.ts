@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { obtainCredentials } from '../credential-providers.ts';
 import { satisfies, valid, validRange } from 'semver';
 import { mcpOAuth } from '../mcp-auth.ts';
 import { connectionChanged } from '../connection-events.ts';
@@ -305,6 +306,7 @@ class PluginManager {
       dataDir,
       peer: hasConfiguredPeers(),
       mcp: { oauth: mcpOAuth },
+      credentials: { obtain: obtainCredentials },
     };
   }
 
@@ -526,6 +528,9 @@ function validateService(s: ServiceDefinition) {
     if (typeof m.connect !== 'function' || typeof m.authorize !== 'function') {
       throw new Error(`Service "${s.id}", method "${m.id}": connect() and authorize() are required`);
     }
+    if (m.credentialProvider && m.credentialConsumer) throw new Error(`Service ${s.id}: authentication providers cannot depend on another authentication source`);
+    if (m.credentialProvider && (!/^[a-zA-Z0-9/._-]{1,100}$/.test(m.credentialProvider.format) || typeof m.credentialProvider.provide !== 'function')) throw new Error(`Service ${s.id}: invalid credential provider`);
+    if (m.credentialConsumer && (!/^[a-zA-Z0-9/._-]{1,100}$/.test(m.credentialConsumer.format) || !m.fields?.some(f => f.key === m.credentialConsumer!.field && f.type === 'credential-source' && f.credentialFormat === m.credentialConsumer!.format))) throw new Error(`Service ${s.id}: invalid credential consumer`);
     if (m.reusable) {
       const r = m.reusable;
       for (const key of ['prepare','exportCredentials','importCredentials','requiredScopes','coversScopes'] as const) if (r[key] !== undefined && typeof r[key] !== 'function') throw new Error(`Service ${s.id}: invalid reusable hook ${key}`);

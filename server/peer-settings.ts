@@ -1,3 +1,4 @@
+import { loadConnection } from './connections.ts';
 import * as peerAccess from './peers.ts';
 import { config } from './config.ts';
 import { encrypt, decrypt, randomId } from './crypto.ts';
@@ -42,7 +43,7 @@ export function validPeerUrl(raw: unknown) {
 export function peerToken(row: any): string { return decrypt(row.token_enc); }
 export function connectionShares(userId: string, ref: string) {
   const row = ownedConnection(userId, ref);
-  return { peerIds: all<{ peer_id: string }>('SELECT peer_id FROM connection_peer_shares WHERE connection_id = ? ORDER BY peer_id', row.id).map(r => r.peer_id) };
+  return { credentialPeerIds: all<{ peer_id: string }>('SELECT peer_id FROM connection_credential_shares WHERE connection_id = ? ORDER BY peer_id', row.id).map(r => r.peer_id), peerIds: all<{ peer_id: string }>('SELECT peer_id FROM connection_peer_shares WHERE connection_id = ? ORDER BY peer_id', row.id).map(r => r.peer_id) };
 }
 function ownedConnection(userId: string, ref: string) {
   const row = one('SELECT * FROM connections WHERE user_id = ? AND (id = ? OR name = ?)', userId, ref, ref);
@@ -52,6 +53,12 @@ export function setConnectionShares(userId: string, ref: string, input: unknown)
   const row = ownedConnection(userId, ref); const ids = (input as any)?.peerIds;
   if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string') || ids.length > 100) throw badRequest('peerIds must be an array of peer ids');
   const unique = [...new Set<string>(ids)];
+  const credentialIds = (input as any)?.credentialPeerIds;
+  if (credentialIds !== undefined && (!Array.isArray(credentialIds) || credentialIds.some((id: unknown) => typeof id !== 'string' || !unique.includes(id)))) throw badRequest('Authentication peers must also have connection access');
+  if (credentialIds?.length) {
+    const { method } = loadConnection(userId, row.id, true);
+    if (row.peer_id || !method.credentialProvider) throw badRequest('Only a local authentication provider can share credentials');
+  }
   for (const id of unique) {
     const peer = one('SELECT * FROM peers WHERE id = ? AND removed = 0', id);
     if (!peer) throw badRequest('Unknown peer');
@@ -63,6 +70,11 @@ export function setConnectionShares(userId: string, ref: string, input: unknown)
   }
   db.exec('BEGIN');
   try {
+    if (credentialIds !== undefined) {
+      run('DELETE FROM connection_credential_shares WHERE connection_id = ?', row.id);
+      for (const id of new Set<string>(credentialIds)) run('INSERT INTO connection_credential_shares(peer_id, connection_id) VALUES (?, ?)', id, row.id);
+    }
+    for (const grant of all<{peer_id:string}>('SELECT peer_id FROM connection_credential_shares WHERE connection_id = ?', row.id)) if (!unique.includes(grant.peer_id)) run('DELETE FROM connection_credential_shares WHERE connection_id = ? AND peer_id = ?', row.id, grant.peer_id);
     run('DELETE FROM connection_peer_shares WHERE connection_id = ?', row.id);
     for (const id of unique) run('INSERT INTO connection_peer_shares (peer_id, connection_id) VALUES (?, ?)', id, row.id);
     db.exec('COMMIT');
