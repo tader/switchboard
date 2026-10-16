@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/tader/switchboard/compare/v0.6.1...v0.7.0) (2026-10-16)
+
+
+### Features
+
+* hide legacy sign-in choices without breaking connections ([177366d](https://github.com/tader/switchboard/commit/177366dd824b2b1aebbddc7fed7a2e1bf0a3c52e))
+* retain legacy auth handlers without offering them in setup ([771c9e9](https://github.com/tader/switchboard/commit/771c9e976da2fd7df7a4b38f6bea0b2a63157c1d))
+
 ## [0.6.1](https://github.com/tader/switchboard/compare/v0.6.0...v0.6.1) (2026-10-16)
 
 
