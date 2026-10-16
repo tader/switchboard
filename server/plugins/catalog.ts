@@ -1,6 +1,6 @@
 import { one, run } from '../db.ts';
 import { HttpError, badRequest } from '../http.ts';
-import { parseRepo } from './github-access.ts';
+import { parseRepo, repositoryFile, type GithubContext } from './github-access.ts';
 
 export const CATALOG_URL = 'https://api.github.com/repos/tader/switchboard-plugins/contents/plugins.json?ref=main';
 export interface CommunityPlugin {
@@ -54,9 +54,9 @@ export function validateCatalog(input: unknown): PluginCatalog {
   return { schemaVersion: 1, plugins: data.plugins.map(({ id, name, description, icon, repo, path, ref }) => ({ id, name, description, icon, repo, path, ref })) };
 }
 
-export async function communityCatalog(): Promise<PluginCatalog> {
+export async function communityCatalog(ctx: GithubContext = {}): Promise<PluginCatalog> {
   const sources = catalogSources();
-  const results = await Promise.allSettled(sources.map(fetchCatalog));
+  const results = await Promise.allSettled(sources.map((source) => fetchCatalog(source, ctx)));
   const plugins = new Map<string, CommunityPlugin>();
   const warnings: string[] = [];
   let loaded = 0;
@@ -72,12 +72,11 @@ export async function communityCatalog(): Promise<PluginCatalog> {
   return { schemaVersion: 1, plugins: [...plugins.values()], sources, warnings };
 }
 
-async function fetchCatalog(source: CatalogSource): Promise<PluginCatalog> {
+async function fetchCatalog(source: CatalogSource, ctx: GithubContext): Promise<PluginCatalog> {
   try {
     // The Contents API reads main directly; raw.githubusercontent.com's CDN can
     // retain an older branch response even with cache-busting query parameters.
-    const res = await fetch(`https://api.github.com/repos/${source.repo}/contents/${source.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(source.ref)}`, { headers: { accept: 'application/vnd.github.raw+json', 'user-agent': 'Switchboard', 'cache-control': 'no-cache' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) { await res.body?.cancel(); throw new Error(`HTTP ${res.status}`); }
+    const res = await repositoryFile(source, ctx);
     if (!res.body) throw new Error('Empty response');
     const reader = res.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -92,5 +91,8 @@ async function fetchCatalog(source: CatalogSource): Promise<PluginCatalog> {
       }
     } finally { await reader.cancel(); }
     return validateCatalog(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-  } catch { throw new HttpError(502, 'The community plugin catalog is unavailable or invalid. Try again later.'); }
+  } catch (error) {
+    if (error instanceof HttpError) throw new HttpError(502, `The community plugin catalog is unavailable. ${error.message}`);
+    throw new HttpError(502, 'The community plugin catalog is unavailable or invalid. Try again later.');
+  }
 }
