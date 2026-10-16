@@ -277,7 +277,7 @@ export function listServices(userId?: string): ServiceView[] {
       icon: s.icon,
       docsUrl: s.docsUrl,
       pluginId,
-      methods: s.authMethods.map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback, reusable: !!m.reusable && (m.reusable.kind !== 'oauth' || (s.kind !== 'mcp' && !s.websocket)) })),
+      methods: s.authMethods.filter((m) => !m.hidden).map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback, reusable: !!m.reusable && (m.reusable.kind !== 'oauth' || (s.kind !== 'mcp' && !s.websocket)) })),
     }))
   return local.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -326,7 +326,7 @@ export async function startConnect(
   const serviceId = existing?.serviceId ?? input.service;
   const service = plugins.service(serviceId);
   if (!service) throw badRequest(`Unknown service "${serviceId}"`);
-  const methodId = input.method ?? existing?.methodId ?? service.authMethods.find((m) => !m.unavailable)?.id;
+  const methodId = input.method ?? existing?.methodId ?? service.authMethods.find((m) => !m.hidden && !m.unavailable)?.id;
   const method = methodId ? findMethod(service, methodId) : undefined;
   if (!method) throw badRequest(`Unknown sign-in method "${methodId}"`);
   if (method.unavailable) throw badRequest(method.unavailable);

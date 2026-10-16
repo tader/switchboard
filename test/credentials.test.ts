@@ -234,3 +234,29 @@ test('an unavailable original product is not a credential parent dependency', as
     assert.equal((await request(`/credentials/${source.id}`)).data.status,'ok');
   } finally {plugins.services.set('reuse-a',registration);}
 });
+
+
+test('legacy sign-in methods keep working while setup offers their replacement', async () => {
+  const { listServices } = await import('../server/connections.ts');
+  const { execute } = await import('../server/proxy.ts');
+  const existing = await connect('a', 'token', 'legacy-token');
+  const service = plugins.service('reuse-a')!;
+  const original = service.authMethods;
+  const legacy = original.find(m => m.id === 'token')!;
+  try {
+    service.authMethods = [{ ...legacy, hidden: true }, { ...legacy, id: 'replacement', name: 'Shared authentication' }];
+    assert.deepEqual(listServices(user.id).find(s => s.id === service.id)!.methods.map(m => m.id), ['replacement']);
+    const result = await execute(user, existing.id, { method: 'GET', url: '/legacy-test' });
+    assert.equal(result.response.status, 200);
+    assert.equal((await result.response.json()).authorization, 'Bearer legacy-token');
+    const added = await startConnect(user, { service: service.id, name: 'replacement-default', config: { baseUrl: origin, token: 'replacement-token' } });
+    assert.equal(added.status, 'connected');
+    if (added.status === 'connected') assert.equal(added.connection.methodId, 'replacement');
+    const migrated = await startConnect(user, { service: service.id, connection: existing.id, method: 'replacement', config: { baseUrl: origin, token: 'migrated-token' } });
+    assert.equal(migrated.status, 'connected');
+    if (migrated.status === 'connected') {
+      assert.equal(migrated.connection.id, existing.id);
+      assert.equal(migrated.connection.methodId, 'replacement');
+    }
+  } finally { service.authMethods = original; }
+});
