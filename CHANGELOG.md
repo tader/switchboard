@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/tader/switchboard/compare/v0.6.0...v0.6.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* retry community catalogs with GitHub connections ([1cdb959](https://github.com/tader/switchboard/commit/1cdb9598327087d6909cac557eb311da5eaf5b41))
+* retry community catalogs with GitHub connections ([4faeffc](https://github.com/tader/switchboard/commit/4faeffcb96fba2f75175a2baf4c93388baab2862))
+
 ## [0.6.0](https://github.com/tader/switchboard/compare/v0.5.0...v0.6.0) (2026-10-16)
 
 
