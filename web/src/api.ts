@@ -231,6 +231,12 @@ export interface AdminUser extends User {
   inviteExpiresAt: number | null;
 }
 
+export interface PeerSummary {
+  id: string; name: string; url: string | null; disabled: boolean;
+  state: 'disabled' | 'connecting' | 'online' | 'offline'; direction: 'incoming' | 'outgoing';
+  remoteInstanceId: string | null; lastSeenAt: number | null; sharedConnections: number; receivedConnections: number;
+}
+
 export interface Peer {
   id: string;
   name: string;

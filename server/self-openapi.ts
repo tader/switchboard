@@ -81,6 +81,7 @@ export function openapiDocument() {
       '/api/connections/{ref}/websocket/operations': { get: op('WebSocket', 'Search/list WebSocket operations', { parameters: [ref, { name: 'query', in: 'query', schema: { type: 'string' } }, { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0 } }, { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }] }) },
       '/api/connections/{ref}/websocket/operations/{operationId}': { get: op('WebSocket', 'Inspect a WebSocket operation', { parameters: [ref, { name: 'operationId', in: 'path', required: true, description: 'URL-encode slashes in operation ids', schema: { type: 'string' } }] }) },
       '/api/connections/{ref}/websocket/call': { post: op('WebSocket', 'Execute a declared command', { parameters: [ref], requestBody: json({ type: 'object', required: ['operationId'], properties: { operationId: { type: 'string' }, arguments: { type: 'object', default: {} } } }) }) },
+      '/api/connections/{ref}/websocket/operations/get': { post: op('WebSocket', 'Get operation metadata without encoded path segments', { parameters: [ref], requestBody: json({ type: 'object', required: ['operationId'], properties: { operationId: { type: 'string' } } }) }) },
       '/api/connections/{ref}/websocket/subscriptions': {
         get: op('WebSocket', 'List subscription handles owned by this caller', { parameters: [ref] }),
         post: op('WebSocket', 'Start a declared subscription', { parameters: [ref], requestBody: json({ type: 'object', required: ['operationId'], properties: { operationId: { type: 'string' }, arguments: { type: 'object', default: {} } } }) }),
@@ -90,8 +91,8 @@ export function openapiDocument() {
       '/api/me': { get: op('Account', 'Who the token belongs to') },
       '/api/me/token': { delete: op('Account', 'Revoke the token making this request') },
       '/api/services': { get: op('Connections', 'Services and their sign-in methods') },
-      '/api/peers': { get: op('Connections', 'List peers available for owner-selected sharing') },
-      '/api/connection-shares': { get: op('Connections', 'Read your sharing matrix and blocked peer cycles') },
+      '/api/peers': { get: op('Peers', 'List peers with your sharing counts and last-seen information') },
+      '/api/connection-shares': { get: op('Peers', 'Read your sharing matrix and blocked peer cycles') },
       '/api/connections/{ref}/shares/{peerId}': { put: op('Connections', 'Set one sharing matrix cell for a connection you own', { parameters: [ref, { name: 'peerId', in: 'path', required: true, schema: { type: 'string' } }], requestBody: json({ type: 'object', required: ['shared'], properties: { shared: { type: 'boolean' } } }) }) },
       '/api/connections/{ref}/shares': {
         get: op('Connections', 'Read sharing grants for a connection you own', { parameters: [ref] }),

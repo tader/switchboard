@@ -77,7 +77,7 @@ export function toView(r: any): ConnectionView {
     try { peer = getPeer(r.peer_id); remote = peerConnection(r.user_id, r.peer_id, r.remote_connection_id); } catch {}
     const unavailable = !peer?.online || !remote || remote.status !== 'ok';
     return { kind: r.kind ?? 'http', readOnly: true, id: conn.id, name: conn.name, serviceId: conn.serviceId,
-      icon: remote?.icon, serviceName: remote?.serviceName ?? conn.serviceId, methodId: 'shared', methodName: 'Shared connection', account: null, config: {},
+      icon: remote?.icon, serviceName: remote?.serviceName ?? conn.serviceId.split('/').at(-1)!.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' '), methodId: 'shared', methodName: 'Shared connection', account: null, config: {},
       status: unavailable ? 'unavailable' : 'ok', statusMessage: !remote ? 'This connection is no longer shared with you' : !peer?.online ? `${peer.name} is offline` : remote.status !== 'ok' ? 'The connection is unavailable on its peer' : null,
       baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, hasWebSocket: !!remote?.hasWebSocket, canIssueToken: false, redirectUri: null,
       createdAt: r.created_at, updatedAt: r.updated_at, lastUsedAt: r.last_used_at,

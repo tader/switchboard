@@ -1,14 +1,15 @@
+import { createPortal } from 'react-dom';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { useSearchParams } from 'react-router';
 import { api, type Connection, type SavedCall } from '../api';
-import { Alert, Badge, Button, Card, Dialog, FormField, Input, PageHeader, Select, Spinner, Tabs, Textarea, useToast } from '../components/ui';
+import { Alert, Badge, Button, Card, Dialog, FormField, Input, Spinner, Tabs, Textarea, useToast } from '../components/ui';
 import { useResource } from '../lib';
 import { JsonView } from '../components/JsonView';
 
 type Tab = 'tools' | 'resources' | 'prompts';
 type Item = { name: string; description?: string; uri?: string; uriTemplate?: string; inputSchema?: any; outputSchema?: any; annotations?: any; arguments?: { name: string; required?: boolean }[] };
 
-export function McpConsole({ connection, connections, onConnection }: { connection: Connection; connections: Connection[]; onConnection: (id: string) => void }) {
+export function McpConsole({ connection, sidebarTarget, onPick, onSaved }: { connection: Connection; sidebarTarget: HTMLElement | null; onPick(): void; onSaved(): void }) {
   const toast = useToast();
   const [params] = useSearchParams();
   const saved = useResource(() => api<SavedCall[]>('/calls'), [connection.id]);
@@ -58,6 +59,7 @@ export function McpConsole({ connection, connections, onConnection }: { connecti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, revision]);
   const choose = (item: Item) => {
+    onPick();
     abort.current?.abort(); setBusy(false); setSelected(item); setTarget(item.uri ?? item.uriTemplate ?? item.name); setResult(null); setError('');
     const names = tab === 'prompts' ? item.arguments?.filter(a => a.required).map(a => a.name) ?? [] : item.inputSchema?.required ?? [];
     const initial: Record<string, unknown> = {};
@@ -87,7 +89,7 @@ export function McpConsole({ connection, connections, onConnection }: { connecti
     try {
       const operation = tab === 'tools' ? 'tools/call' : tab === 'resources' ? 'resources/read' : 'prompts/get';
       await api('/calls', { body: { kind: 'mcp', name: saveName, connectionId: connection.id, mcpRequest: { operation, ...(tab === 'resources' ? { uri: target } : { name: target, arguments: JSON.parse(args) }) } } });
-      saved.reload(); setSaveOpen(false); toast('Saved');
+      saved.reload(); onSaved(); setSaveOpen(false); toast('Saved');
     } catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
   };
@@ -103,16 +105,14 @@ export function McpConsole({ connection, connections, onConnection }: { connecti
     } catch (e: any) { if (!ctrl.signal.aborted) setError(e.message); }
     finally { if (abort.current === ctrl) setBusy(false); }
   };
-  return <div className="space-y-4 p-4 sm:p-6">
-    <PageHeader title="Console" actions={<Select aria-label="Connection" value={connection.id} onChange={e => onConnection(e.target.value)} className="max-w-full sm:max-w-xs">{connections.map(c => <option key={c.id} value={c.id}>{c.name} · {c.serviceName}</option>)}</Select>} />
-    <Tabs value={tab} onChange={setTab} tabs={[{ value: 'tools', label: 'Tools' }, { value: 'resources', label: 'Resources' }, { value: 'prompts', label: 'Prompts' }]} />
-    <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-      <Card className="min-w-0 space-y-3 p-3">
+  const reference = <div className="space-y-3"><Tabs value={tab} onChange={setTab} tabs={[{ value: 'tools', label: 'Tools' }, { value: 'resources', label: 'Resources' }, { value: 'prompts', label: 'Prompts' }]} /><Card className="min-w-0 space-y-3 p-3">
         <div className="flex gap-2"><Input aria-label="Search MCP items" placeholder="Search…" value={filter} onChange={e => setFilter(e.target.value)} /><Button size="sm" onClick={() => setRevision(v => v + 1)} disabled={loading}>Refresh</Button></div>
-        {loading ? <Spinner /> : listError ? <Alert>{listError}</Alert> : <ul className="max-h-96 space-y-1 overflow-y-auto">{items.filter(i => `${i.name} ${i.description ?? ''} ${i.uri ?? i.uriTemplate ?? ''}`.toLowerCase().includes(filter.toLowerCase())).map((item, n) => <li key={`${item.name}-${n}`}><button type="button" onClick={() => choose(item)} className="w-full rounded-lg px-2 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800"><span className="block truncate text-[13px] font-medium">{item.name}</span><span className="block truncate text-xs text-zinc-500">{item.uriTemplate ? 'Template · ' : ''}{item.description ?? item.uri ?? item.uriTemplate}</span></button></li>)}</ul>}
+        {loading ? <Spinner /> : listError ? <Alert>{listError}</Alert> : <ul className="max-h-96 space-y-1 overflow-y-auto">{items.filter(i => `${i.name} ${i.description ?? ''} ${i.uri ?? i.uriTemplate ?? ''}`.toLowerCase().includes(filter.toLowerCase())).map((item, n) => <li key={`${item.name}-${n}`}><button type="button" onClick={() => choose(item)} aria-current={selected === item ? 'true' : undefined} className={`w-full rounded-lg px-2 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800 ${selected === item ? 'bg-indigo-50 dark:bg-indigo-500/10' : ''}`}><span className="block truncate text-[13px] font-medium">{item.name}</span><span className="block truncate text-xs text-zinc-500">{item.uriTemplate ? 'Template · ' : ''}{item.description ?? item.uri ?? item.uriTemplate}</span></button></li>)}</ul>}
         {!loading && !listError && !items.length && <p className="text-xs text-zinc-500">No {tab} available.</p>}
-        {(saved.data ?? []).some(s => s.kind === 'mcp' && s.connectionId === connection.id) && <div className="border-t border-zinc-200 pt-3 dark:border-zinc-800"><h2 className="mb-1 text-xs font-medium text-zinc-500">Saved requests</h2>{saved.data?.filter(s => s.kind === 'mcp' && s.connectionId === connection.id).map(s => <button type="button" key={s.id} onClick={() => loadSaved(s)} className="block w-full truncate rounded px-2 py-1.5 text-left text-[13px] hover:bg-zinc-100 dark:hover:bg-zinc-800" aria-label={`Load ${s.name}`}>{s.name}</button>)}</div>}
-      </Card>
+</Card></div>;
+  return <div className="space-y-4 p-3 sm:p-4">
+    {sidebarTarget && createPortal(reference, sidebarTarget)}
+    <h2 className="text-sm font-semibold">{tab === 'tools' ? 'Tools' : tab === 'resources' ? 'Resources' : 'Prompts'}</h2>
       <div className="min-w-0 space-y-4">
         <Card className="space-y-3 p-4">
           <FormField label={tab === 'resources' ? 'Resource URI' : tab === 'tools' ? 'Tool' : 'Prompt'}><Input value={target} onChange={e => setTarget(e.target.value)} placeholder={tab === 'resources' ? 'file:///notes' : 'Select an item'} /></FormField>
@@ -132,9 +132,7 @@ export function McpConsole({ connection, connections, onConnection }: { connecti
           <details open={!!result.structuredContent}><summary className="cursor-pointer text-xs text-zinc-500">{result.structuredContent ? 'Structured content' : 'Full result'}</summary><JsonView value={result.structuredContent ?? result} /></details>
         </Card>}
       </div>
-    </div>
     <Dialog open={saveOpen} onClose={() => setSaveOpen(false)} title="Save MCP request"><form onSubmit={e => { e.preventDefault(); save(); }} className="space-y-4"><FormField label="Name"><Input aria-label="Saved request name" value={saveName} onChange={e => setSaveName(e.target.value)} required /></FormField>{error && <Alert>{error}</Alert>}<div className="flex justify-end gap-2"><Button onClick={() => setSaveOpen(false)}>Cancel</Button><Button type="submit" variant="primary" loading={saving}>Save</Button></div></form></Dialog>
-    <Link to="/connections" className="text-xs text-zinc-500 hover:underline">Connections</Link>
   </div>;
 }
 

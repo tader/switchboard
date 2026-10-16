@@ -1,8 +1,8 @@
+import { ListToolbar, SortHeader, useList, useViewState } from '../components/ListControls';
 import { CredentialPicker, type CredentialCandidate } from '../components/CredentialPicker';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { BookOpen, Code2, ExternalLink, FileKey, History, KeyRound, Laptop, LayoutGrid, List, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal, Trash2, Unlock } from 'lucide-react';
-import { SharingMatrix } from '../components/SharingMatrix';
 import { ConnectionSharing } from '../components/ConnectionSharing';
 import { api, type Connection, type FlowResult, type Service } from '../api';
 import { useSession } from '../auth';
@@ -23,15 +23,9 @@ export function Connections() {
   const [sharing, setSharing] = useState<Connection | null>(null);
   const [rename, setRename] = useState<Connection | null>(null);
   const [scripts, setScripts] = useState<Connection | null>(null);
-  const [filter, setFilter] = useState('');
-  const [view, setView] = useState<'normal' | 'compact' | 'sharing'>(() => {
-    try { const saved = localStorage.getItem('switchboard.connections.view'); return saved === 'compact' || saved === 'sharing' ? saved : 'normal'; }
-    catch { return 'normal'; }
-  });
-  const changeView = (next: 'normal' | 'compact' | 'sharing') => {
-    setView(next);
-    try { localStorage.setItem('switchboard.connections.view', next); } catch {}
-  };
+  const [layout, setLayout] = useViewState('connections-layout', { view: 'normal' });
+  const view = layout.view === 'compact' ? 'compact' : 'normal';
+  const changeView = (view: 'normal' | 'compact') => setLayout({ view });
   const [highlight, setHighlight] = useState<string | null>(null);
 
   // Coming back from an OAuth redirect.
@@ -41,7 +35,7 @@ export function Connections() {
     if (!connected && !error) return;
     if (error) toast(error, 'error');
     if (connected) setHighlight(connected);
-    setParams({}, { replace: true });
+    const next = new URLSearchParams(params); next.delete('connected'); next.delete('error'); setParams(next, { replace: true });
   }, [params, setParams, toast]);
 
   useEffect(() => {
@@ -52,10 +46,13 @@ export function Connections() {
     return () => clearTimeout(t);
   }, [highlight, connections.data, toast]);
 
-  const visible = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    return (connections.data ?? []).filter(c => !q || `${c.name} ${c.serviceName} ${c.account?.label ?? ''} ${c.peer?.name ?? ''}`.toLowerCase().includes(q));
-  }, [connections.data, filter]);
+  const list = useList('connections', connections.data ?? [], {
+    search: c => [c.name, c.serviceName, c.account?.label, c.peer?.name],
+    sorts: { service: c => `${c.serviceName} ${c.name}`, name: c => c.name, status: c => c.status, used: c => c.lastUsedAt },
+    filters: { status: '', service: '', location: '' },
+    filter: (c, f) => (!f.status || c.status === f.status) && (!f.service || c.serviceId === f.service) && (!f.location || (f.location === 'local' ? !c.peer : c.peer?.id === f.location)),
+  });
+  const visible = list.visible;
 
   const byService = useMemo(() => {
     const groups = new Map<string, Connection[]>();
@@ -128,20 +125,22 @@ export function Connections() {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 sm:flex">
-            <Input aria-label="Search connections" placeholder="Search connections…" value={filter} onChange={e => setFilter(e.target.value)} className="min-w-0 flex-1 sm:max-w-sm" />
-            <span className="shrink-0 text-xs text-zinc-500">{visible.length} of {connections.data?.length}</span>
-            <div role="group" aria-label="Connection view" className="col-span-2 flex shrink-0 justify-self-end gap-0.5 rounded-lg bg-zinc-100 p-0.5 sm:ml-auto dark:bg-zinc-800">
-              {([{ value: 'normal', label: 'Normal', Icon: LayoutGrid }, { value: 'compact', label: 'Compact', Icon: List }, { value: 'sharing', label: 'Sharing', Icon: Server }] as const).map(({ value, label, Icon }) => <button key={value} type="button" aria-pressed={view === value} onClick={() => changeView(value)} className={cx('inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition focus-visible:outline-2 focus-visible:outline-indigo-500', view === value ? 'bg-white text-zinc-900 shadow-xs dark:bg-zinc-700 dark:text-zinc-100' : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200')}><Icon className="size-3.5" aria-hidden="true" />{label}</button>)}
-            </div>
+          <ListToolbar list={list} label="connections" sorts={[{ value: 'service', label: 'Service' }, { value: 'name', label: 'Name' }, { value: 'status', label: 'Status' }, { value: 'used', label: 'Last used' }]}>
+            <Select aria-label="Connection status" value={list.state.status} onChange={e => list.set({ status: e.target.value })} className="w-36"><option value="">Any status</option><option value="ok">Connected</option><option value="error">Error</option><option value="unavailable">Unavailable</option></Select>
+            <Select aria-label="Service" value={list.state.service} onChange={e => list.set({ service: e.target.value })} className="w-40"><option value="">All services</option>{[...new Map((connections.data ?? []).map(c => [c.serviceId, c.serviceName])).entries()].map(([id, name]) => <option key={id} value={id}>{name}</option>)}</Select>
+            <Select aria-label="Location" value={list.state.location} onChange={e => list.set({ location: e.target.value })} className="w-36"><option value="">All locations</option><option value="local">Local</option>{[...new Map((connections.data ?? []).filter(c => c.peer).map(c => [c.peer!.id, c.peer!.name])).entries()].map(([id, name]) => <option key={id} value={id}>{name}</option>)}</Select>
+          </ListToolbar>
+          <div role="group" aria-label="Connection view" className="flex justify-end gap-1">
+            <Button size="sm" variant={view === 'normal' ? 'secondary' : 'ghost'} aria-pressed={view === 'normal'} icon={<LayoutGrid className="size-3.5" />} onClick={() => changeView('normal')}>Normal</Button>
+            <Button size="sm" variant={view === 'compact' ? 'secondary' : 'ghost'} aria-pressed={view === 'compact'} icon={<List className="size-3.5" />} onClick={() => changeView('compact')}>Compact</Button>
           </div>
-          {view === 'sharing' ? <SharingMatrix connections={visible} services={services.data ?? []} /> : view === 'compact' ? <Table label="Connections">
+          {view === 'compact' ? <Table label="Connections">
             <thead><tr>
-              <th scope="col" className="w-14 sm:w-[22%]">Service</th>
-              <th scope="col">Connection</th>
+              <SortHeader list={list} field="service" className="w-14 sm:w-[22%]">Service</SortHeader>
+              <SortHeader list={list} field="name">Connection</SortHeader>
               {hasPeers && <th scope="col" className="hidden w-[18%] lg:table-cell">Location</th>}
-              <th scope="col" className="w-8 sm:w-28">Status</th>
-              <th scope="col" className="hidden w-28 md:table-cell">Last used</th>
+              <SortHeader list={list} field="status" className="w-24">Status</SortHeader>
+              <SortHeader list={list} field="used" className="hidden w-28 md:table-cell">Last used</SortHeader>
               <th scope="col" className="w-11"><span className="sr-only">Actions</span></th>
             </tr></thead>
             <tbody>{visible.map(c => {
@@ -186,7 +185,7 @@ export function Connections() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                     <Link to={`/console?connection=${c.id}`} className="truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400">{c.account?.label ?? c.name}</Link>
-                    <code className="max-w-full truncate rounded bg-zinc-100 px-1.5 py-px font-mono text-[11.5px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.name}</code>
+                    {c.account?.label && c.account.label !== c.name && <code className="max-w-full truncate rounded bg-zinc-100 px-1.5 py-px font-mono text-[11.5px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.name}</code>}
                   </div>
                   <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                     <span className="inline-flex min-w-0 max-w-[45%] items-center gap-1 shrink-0" title={c.peer ? `Peer: ${c.peer.name}${c.peer.online ? '' : ' (offline)'}` : 'Local'}>
@@ -203,7 +202,7 @@ export function Connections() {
               </li>)}</ul>
             </Card>;
           })}</div>}
-          {!visible.length && <p className="py-6 text-center text-zinc-500">No connections match your search.</p>}
+          {!visible.length && <p className="py-6 text-center text-zinc-500">No connections match these filters.</p>}
         </div>
       )}
 

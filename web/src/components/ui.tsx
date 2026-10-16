@@ -1,6 +1,6 @@
 import {
   type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes,
-  createContext, forwardRef, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState,
+  createContext, forwardRef, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Copy, Eye, EyeOff, Loader2, X } from 'lucide-react';
@@ -8,7 +8,7 @@ import { copy, cx } from '../lib';
 
 export function Table({ children, label, layout = 'fixed' }: { children: ReactNode; label: string; layout?: 'fixed' | 'auto' }) {
   return <div className="overflow-x-auto rounded-xl bg-white ring-1 ring-zinc-200 dark:bg-zinc-900 dark:ring-zinc-800">
-    <table aria-label={label} className={cx(layout === 'auto' ? 'table-auto' : 'table-fixed', 'w-full text-left text-[13px] [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-zinc-500 [&_td]:px-3 [&_td]:py-2 [&_tbody_tr]:border-t [&_tbody_tr]:border-zinc-100 dark:[&_tbody_tr]:border-zinc-800 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-zinc-50 dark:[&_tbody_tr:hover]:bg-zinc-800/40')}>
+    <table aria-label={label} className={cx(layout === 'auto' ? 'table-auto' : 'table-fixed', 'w-full text-left text-[13px] [&_th]:px-3 [&_th]:py-2 [&_th]:text-xs [&_th]:font-medium [&_th]:text-zinc-500 dark:[&_th]:text-zinc-400 dark:[&_td_.text-zinc-500]:text-zinc-400 dark:[&_td.text-zinc-500]:text-zinc-400 [&_thead]:bg-zinc-50/80 dark:[&_thead]:bg-zinc-900/60 [&_td]:align-middle [&_td]:px-3 [&_td]:py-2 [&_tbody_tr]:border-t [&_tbody_tr]:border-zinc-100 dark:[&_tbody_tr]:border-zinc-800 [&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-zinc-50 dark:[&_tbody_tr:hover]:bg-zinc-800/40')}>
       {children}
     </table>
   </div>;
@@ -88,7 +88,6 @@ export function SecretInput(props: InputHTMLAttributes<HTMLInputElement>) {
       <Input {...props} type={show ? 'text' : 'password'} className={cx('pr-9', props.className)} autoComplete="off" spellCheck={false} />
       <button
         type="button"
-        tabIndex={-1}
         onClick={() => setShow(!show)}
         className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
         aria-label={show ? 'Hide' : 'Show'}
@@ -260,6 +259,14 @@ export function Tabs<T extends string>({ value, onChange, tabs, className }: { v
           role="tab"
           type="button"
           aria-selected={value === t.value}
+          tabIndex={value === t.value ? 0 : -1}
+          onKeyDown={e => {
+            const index = tabs.findIndex(tab => tab.value === t.value);
+            const next = e.key === 'ArrowRight' ? (index + 1) % tabs.length : e.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
+            if (next < 0) return;
+            e.preventDefault(); onChange(tabs[next].value);
+            (e.currentTarget.parentElement?.children[next] as HTMLElement)?.focus();
+          }}
           onClick={() => onChange(t.value)}
           className={cx(
             '-mb-px flex items-center gap-1.5 border-b-2 pb-2 pt-1 text-[13px] font-medium transition-colors',
@@ -281,6 +288,7 @@ export function Dialog({
   open, onClose, title, description, children, footer, size = 'md',
 }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children?: ReactNode; footer?: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl' }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const d = ref.current;
     if (!d) return;
@@ -292,6 +300,7 @@ export function Dialog({
   return createPortal(
     <dialog
       ref={ref}
+      aria-labelledby={titleId}
       onCancel={(e) => {
         e.preventDefault();
         onClose();
@@ -307,7 +316,7 @@ export function Dialog({
       <div className="flex max-h-[min(90vh,900px)] flex-col">
         <div className="flex items-start gap-3 px-5 pb-2 pt-4">
           <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold">{title}</h2>
+            <h2 id={titleId} className="text-base font-semibold">{title}</h2>
             {description && <p className="mt-0.5 text-[13px] text-zinc-500 dark:text-zinc-400">{description}</p>}
           </div>
           <IconButton label="Close" onClick={onClose} className="-mr-1.5 -mt-0.5">
@@ -363,10 +372,20 @@ export function Menu({
 
   useEffect(() => {
     if (!open) return;
+    panel.current?.querySelector<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
     const close = (e: MouseEvent) => {
       if (!panel.current?.contains(e.target as Node) && !anchor.current?.contains(e.target as Node)) setOpen(false);
     };
-    const key = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setOpen(false); (anchor.current?.querySelector('button') as HTMLElement | null)?.focus(); return; }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+      const buttons = Array.from(panel.current?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)') ?? []);
+      if (!buttons.length) return;
+      e.preventDefault();
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : e.key === 'ArrowDown' ? (index + 1) % buttons.length : (index < 0 ? buttons.length - 1 : (index + buttons.length - 1) % buttons.length);
+      buttons[next].focus();
+    };
     // Close when the page scrolls (the menu would drift from its button), not when the menu's own list scrolls.
     const scroll = (e: Event) => {
       if (!panel.current?.contains(e.target as Node)) setOpen(false);

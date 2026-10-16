@@ -7,6 +7,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Hono } from 'hono';
+import { getRequestListener } from '@hono/node-server';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-websocket-'));
@@ -348,4 +349,58 @@ test('REST binding validation rejects writes exposed as GET, duplicates, and sub
   assert.throws(() => validateWebSocketCapability({ ...capability, operations: [{ ...base, readOnlyHint: false }] }), /REST binding/);
   assert.throws(() => validateWebSocketCapability({ ...capability, operations: [base, { ...base, id: 'duplicate' }] }), /REST binding/);
   assert.throws(() => validateWebSocketCapability({ ...capability, operations: [{ ...base, mode: 'subscription' }] }), /REST binding/);
+});
+
+test('metadata lookup works through a real HTTP edge that rejects encoded path slashes', async () => {
+  const conn = await connect();
+  const listener = getRequestListener(app.fetch);
+  const edge = http.createServer((request, response) => {
+    if (/%2f/i.test(request.url ?? '')) { response.writeHead(400); response.end(); return; }
+    listener(request, response);
+  });
+  await new Promise<void>(resolve => edge.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${(edge.address() as AddressInfo).port}/api${root(conn.id)}/operations`;
+  try {
+    const legacy = await fetch(`${url}/echo%2Fvalue`, { headers: { authorization: `Bearer ${full.secret}` } });
+    assert.equal(legacy.status, 400);
+    for (const operationId of ['echo/value', 'watch']) {
+      const response = await fetch(`${url}/get`, { method: 'POST', headers: { authorization: `Bearer ${full.secret}`, 'content-type': 'application/json' }, body: JSON.stringify({ operationId }) });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json() as any).operation.id, operationId);
+    }
+    assert.equal((await request(`${root(conn.id)}/operations/get`, {})).status, 400);
+    assert.equal((await request(`${root(conn.id)}/operations/get`, { operationId: 'not-found' })).status, 404);
+    const limited = createToken(user.id, 'metadata limited', []);
+    assert.equal((await request(`${root(conn.id)}/operations/get`, { operationId: 'echo/value' }, limited.secret)).status, 403);
+    const session = createSession(user.id);
+    const cookie = `switchboard_session=${session}`;
+    const body = JSON.stringify({ operationId: 'echo/value' });
+    const safe = await app.request(`/api${root(conn.id)}/operations/get`, { method: 'POST', headers: { cookie, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, body });
+    assert.equal(safe.status, 200);
+    const crossSite = await app.request(`/api${root(conn.id)}/operations/get`, { method: 'POST', headers: { cookie, origin: 'https://other.example', 'content-type': 'application/json' }, body });
+    assert.equal(crossSite.status, 403);
+    deleteSession(session);
+  } finally { await new Promise<void>(resolve => edge.close(() => resolve())); }
+});
+
+test('peer summaries and per-cell sharing remain scoped to the connection owner', async () => {
+  const { createPeer } = await import('../server/peers.ts');
+  const peer = createPeer('Summary peer', user.id).peer;
+  const conn = await connect();
+  const endpoint = `/connections/${conn.id}/shares/${peer.id}`;
+  assert.equal((await request(endpoint, { shared: true }, full.secret, 'PUT')).status, 200);
+  const mine = (await request('/peers')).data.find((p: any) => p.id === peer.id);
+  assert.equal(mine.sharedConnections, 1);
+  assert.equal(mine.receivedConnections, 0);
+  assert.equal(mine.lastSeenAt, null);
+  run('UPDATE peers SET catalog_json = ? WHERE id = ?', JSON.stringify({ connections: [{ id: 'remote-demo', name: 'Remote demo', serviceId: 'websocket-test', serviceName: 'WebSocket test', kind: 'http', hasOpenapi: false, status: 'ok', route: ['remote-preview'] }] }), peer.id);
+  assert.equal((await request('/peers')).data.find((p: any) => p.id === peer.id).receivedConnections, 1, 'offline peers retain authorized received counts');
+  assert.equal((await request('/peers')).data.find((p: any) => p.id === peer.id).state, 'offline');
+
+  for (const key of ['token', 'token_enc', 'token_hash', 'userIds', 'ownerUserId', 'connections']) assert.equal(mine[key], undefined);
+  const otherToken = createToken(other.id, 'summary member', null);
+  assert.equal((await request('/peers', undefined, otherToken.secret)).data.find((p: any) => p.id === peer.id).sharedConnections, 0);
+  assert.equal((await request(endpoint, { shared: false }, otherToken.secret, 'PUT')).status, 404);
+  assert.equal((await request(endpoint, { shared: false }, full.secret, 'PUT')).status, 200);
+  assert.equal((await request('/peers')).data.find((p: any) => p.id === peer.id).sharedConnections, 0);
 });

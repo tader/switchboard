@@ -1,5 +1,5 @@
+import { useViewState } from '../components/ListControls';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, History, RefreshCw, Search, X } from 'lucide-react';
 import { api, type Connection } from '../api';
 import { JsonView } from '../components/JsonView';
@@ -93,32 +93,15 @@ function splitUrl(url: string | null): { host?: string; path: string } {
 }
 
 export function Activity() {
-  const [params, setParams] = useSearchParams();
-  const f = {
-    q: params.get('q') ?? '',
-    connection: params.get('connection') ?? '',
-    client: params.get('client') ?? '',
-    status: params.get('status') ?? '',
-    method: params.get('method') ?? '',
-    source: params.get('source') ?? '',
-    range: params.get('range') ?? '7d',
-    /** With range "custom": a zoomed-in period, in ms. */
-    from: params.get('from') ?? '',
-    to: params.get('to') ?? '',
-    by: (params.get('by') ?? 'connection') as Breakdown,
-    sort: (params.get('sort') ?? 'time') as SortKey,
-    order: params.get('order') ?? 'desc',
-    offset: Number(params.get('offset') ?? 0),
-  };
+  const [view, setView, resetView] = useViewState('activity', {
+    q: '', connection: '', client: '', status: '', method: '', source: '', range: '7d', from: '', to: '', by: 'connection', sort: 'time', order: 'desc', offset: '0', live: 'false',
+  }, ['offset']);
+  const f = { ...view, by: (['connection', 'client', 'method', 'status', 'url'].includes(view.by) ? view.by : 'connection') as Breakdown,
+    sort: (['time', 'status', 'duration', 'size'].includes(view.sort) ? view.sort : 'time') as SortKey,
+    range: view.range === 'custom' || Object.hasOwn(RANGES, view.range) ? view.range : '7d',
+    offset: Math.max(0, Number(view.offset) || 0), order: view.order === 'asc' ? 'asc' : 'desc' };
   const set = (patch: Partial<Record<keyof typeof f, string | number>>, keepOffset = false) => {
-    const next = { ...f, ...(keepOffset ? {} : { offset: 0 }), ...patch };
-    const p = new URLSearchParams();
-    for (const [k, v] of Object.entries(next)) {
-      const defaults: Record<string, unknown> = { range: '7d', sort: 'time', order: 'desc', offset: 0, by: 'connection' };
-      if ((k === 'from' || k === 'to') && next.range !== 'custom') continue;
-      if (v !== '' && v !== defaults[k]) p.set(k, String(v));
-    }
-    setParams(p, { replace: true });
+    setView(Object.fromEntries(Object.entries({ ...(keepOffset ? {} : { offset: '0' }), ...patch }).map(([key, value]) => [key, String(value)])));
   };
 
   // Search applies after typing stops.
@@ -130,6 +113,8 @@ export function Activity() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
+
+  const [refresh, setRefresh] = useState(0);
 
   // The filters both the chart and the table use.
   const filterQuery = useMemo(() => {
@@ -144,7 +129,7 @@ export function Activity() {
     }
     return p.toString();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [f.q, f.connection, f.client, f.status, f.method, f.source, f.range, f.from, f.to]);
+  }, [f.q, f.connection, f.client, f.status, f.method, f.source, f.range, f.from, f.to, refresh]);
   const query = useMemo(() => {
     const p = new URLSearchParams(filterQuery);
     for (const k of ['sort', 'order'] as const) if (f[k]) p.set(k, f[k]);
@@ -164,7 +149,6 @@ export function Activity() {
     setZoomStack((s) => s.slice(0, -1));
     set(prev ?? { range: '7d' });
   };
-  const [refresh, setRefresh] = useState(0);
   const pick = (key: string) => {
     if (f.by === 'connection') set({ connection: key });
     else if (f.by === 'client') set({ client: key });
@@ -178,14 +162,15 @@ export function Activity() {
   const [selected, setSelected] = useState<number | null>(null);
 
   // Live mode refreshes the newest page, to watch agents as they work.
-  const [live, setLive] = useState(false);
+  const live = view.live === 'true';
+  const setLive = (value: boolean) => setView({ live: String(value) });
   const liveOk = f.sort === 'time' && f.order === 'desc' && f.offset === 0 && f.range !== 'custom';
   const seen = useRef(new Set<number>());
   const [fresh, setFresh] = useState(new Set<number>());
   useEffect(() => {
     if (!live || !liveOk) return;
     const t = setInterval(() => {
-      page.reload();
+      if (!RANGES[f.range]?.ms) page.reload();
       facets.reload();
       setRefresh((n) => n + 1);
     }, 3000);
@@ -235,9 +220,9 @@ export function Activity() {
           <>
             <label className={cx('flex items-center gap-2 text-[13px]', !liveOk && 'opacity-50')} title={liveOk ? undefined : f.range === 'custom' ? 'Live shows the newest entries; zoom out first' : 'Live shows the newest entries; sort by newest first'}>
               <Switch checked={live && liveOk} onChange={setLive} disabled={!liveOk} label="Live" />
-              Live
+              {live && !liveOk ? 'Live paused' : 'Live'}
             </label>
-            <Button icon={<RefreshCw className={cx('size-4', page.loading && 'animate-spin')} />} onClick={() => (page.reload(), facets.reload(), setRefresh((n) => n + 1))}>
+            <Button icon={<RefreshCw className={cx('size-4', page.loading && 'animate-spin')} />} onClick={() => { if (!RANGES[f.range]?.ms) page.reload(); facets.reload(); setRefresh(n => n + 1); }}>
               Refresh
             </Button>
           </>
@@ -267,6 +252,7 @@ export function Activity() {
           ))}
         </Select>
         <Select value={f.status} onChange={(e) => set({ status: e.target.value })} className="w-36" aria-label="Status">
+          {f.status && !['2xx', '3xx', '4xx', '5xx', 'error'].includes(f.status) && <option value={f.status}>{f.status}</option>}
           <option value="">Any status</option>
           <option value="2xx">2xx Success</option>
           <option value="3xx">3xx Redirect</option>
@@ -306,13 +292,13 @@ export function Activity() {
             </option>
           ))}
         </Select>
-        {filtered && (
+        {(filtered || f.range !== '7d' || f.sort !== 'time' || f.order !== 'desc' || f.by !== 'connection') && (
           <Button
             variant="ghost"
             icon={<X className="size-4" />}
-            onClick={() => set({ q: '', connection: '', client: '', status: '', method: '', source: '' })}
+            onClick={() => { resetView(); setZoomStack([]); }}
           >
-            Clear
+            Reset
           </Button>
         )}
       </div>

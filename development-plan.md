@@ -362,3 +362,26 @@ plugin integration and deployment are outside this change.
 - [x] Chrome checks verify local/peer/relayed picker entries, peer labels,
   filtering, and selected connection IDs in preview requests. Light/dark/mobile
   screenshots inspected; no page errors or horizontal overflow. No deployment.
+
+
+## UX improvements and UI finishing touches
+
+- [x] Move sharing to Peers, available to all signed-in users, with an admin-route
+  redirect and admin-only pairing/access controls. Reuse the same per-cell editor
+  for the global matrix, individual peers, and individual connections.
+- [x] Add shared search/filter/sort controls and per-user browser preferences to
+  management lists; align Community with Installed plugins. Keep Activity's chart
+  and layout, remembering its controls and Live preference without restoring
+  pagination. Explicit links take precedence over remembered filters.
+- [x] Keep one console shell across HTTP, WebSocket, and MCP. Sidebar selections
+  choose the workspace; drafts, results, and active streams survive protocol-tab
+  changes. Mobile browsing has a close control and Escape support.
+- [x] Fix hosted WebSocket metadata lookup with JSON operation IDs. Preserve the
+  legacy GET API and add a real HTTP-edge regression that rejects encoded slashes.
+- [x] Polish MCP documentation access, credential management, connection labels,
+  long access pickers, guide search, keyboard navigation, and list feedback.
+- [x] Validation: 118 tests, server typecheck, strict web unused-symbol check, and
+  production web build pass. Chrome checks with isolated synthetic data cover
+  connection search restoration, scoped sharing, HTTP/WebSocket draft and result
+  retention, commands, subscription continuity/stop, MCP results, Activity Live
+  and chart restoration, light/dark styling, and a 400px viewport. No deployment.

@@ -58,6 +58,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <NavItem to="/connections" icon={<Plug />}>
           Connections
         </NavItem>
+        <NavItem to="/peers" icon={<MonitorUp />}>Peers</NavItem>
         <NavItem to="/credentials" icon={<KeyRound />}>Credentials</NavItem>
         <NavItem to="/console" icon={<SquareTerminal />}>
           Console
@@ -78,9 +79,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <NavItem to="/admin/users" icon={<Users />}>
             Users
           </NavItem>
-          <NavItem to="/admin/peers" icon={<MonitorUp />}>
-            Peers
-          </NavItem>
+
         </nav>
       )}
       <nav className="mt-auto flex flex-col gap-0.5">
