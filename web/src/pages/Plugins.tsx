@@ -103,7 +103,7 @@ export function Plugins() {
       {updateErrors.length > 0 && <Alert><ul className="space-y-1">{updateErrors.map((error, i) => <li key={i}>{error}</li>)}</ul></Alert>}
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'installed', label: 'Installed' }, { value: 'community', label: 'Community' }]} className="mb-4" />
       {plugins.error && <Alert>{plugins.error.message}<Button size="sm" variant="ghost" onClick={plugins.reload}>Try again</Button></Alert>}
-      {tab === 'community' ? <CommunityPlugins installed={plugins.data ?? []} onInstall={(initial) => setChangeRequest({ kind: 'install', initial })} /> : plugins.loading && !plugins.data ? (
+      {tab === 'community' ? <CommunityPlugins installed={plugins.data ?? []} onInstall={(listings) => setChangeRequest(listings.length === 1 ? { kind: 'install', initial: listings[0] } : { kind: 'install', listings })} /> : plugins.loading && !plugins.data ? (
         <div className="flex justify-center py-20">
           <Spinner className="size-5" />
         </div>

@@ -264,7 +264,9 @@ export interface Info {
   callbackUrl: string;
 }
 
+export interface CatalogSource { name: string; repo: string; path: string; ref: string }
 export interface CommunityPlugin {
+  catalogSource?: string;
   icon?: string;
   id: string;
   name: string;
@@ -273,7 +275,7 @@ export interface CommunityPlugin {
   ref?: string;
   path?: string;
 }
-export interface PluginCatalog { schemaVersion: 1; plugins: CommunityPlugin[] }
+export interface PluginCatalog { schemaVersion: 1; plugins: CommunityPlugin[]; sources?: CatalogSource[]; warnings?: string[] }
 export interface PluginPlan {
   planId: string;
   expiresAt: number;

@@ -22,6 +22,7 @@ const seen: { url: string; authorization: string | null }[] = [];
 let counter = 0;
 let catalog: unknown = { schemaVersion: 1, plugins: [] };
 let catalogStatus = 200;
+const extraCatalogs = new Map<string, unknown>();
 let alice: User;
 let bob: User;
 let aliceToken: string;
@@ -56,6 +57,7 @@ before(async () => {
     const url = String(input);
     const authorization = new Headers(init?.headers).get('authorization');
     seen.push({ url, authorization });
+    if (extraCatalogs.has(url)) return Response.json(extraCatalogs.get(url));
     if (url === catalogUrl) return Response.json(catalogStatus === 200 ? catalog : { error: 'offline' }, { status: catalogStatus });
     if (url === 'https://api.github.com/user') return Response.json({ id: authorization, login: authorization?.slice(7), avatar_url: '' });
     const m = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/(commits|tarball|releases)(?:\/(.+)|\?.+)$/);
@@ -328,6 +330,12 @@ test('catalog freshness, validation, bounded responses and admin API routes', as
   assert.equal((await call('/plugins/community')).status, 200, 'static catalog route is not captured as a plugin id');
   assert.equal((await call('/plugins/community', ordinarySecret)).status, 403);
   assert.equal((await call('/plugins/community', limitedSecret)).status, 403);
+  for (const token of [ordinarySecret, limitedSecret]) {
+    assert.equal((await call('/plugins/community/sources', token)).status, 403);
+    assert.equal((await app.request('/api/admin/plugins/community/sources', { method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ sources: [] }) })).status, 403);
+  }
+  assert.equal((await call('/plugins/community/sources')).status, 200);
+  assert.equal((await call('/plugins/install/plan', adminSecret, { installs: [] })).status, 400);
   await fixture('owner/api-new', [{ id: 'api-new' }]);
   assert.equal((await call('/plugins/releases', ordinarySecret, { repo: 'owner/api-new' })).status, 403);
   assert.equal((await call('/plugins/releases', limitedSecret, { repo: 'owner/api-new' })).status, 403);
@@ -351,6 +359,51 @@ test('catalog freshness, validation, bounded responses and admin API routes', as
   const audit = one('SELECT request_headers FROM audit_log WHERE source = ? AND connection_id = ? ORDER BY id DESC LIMIT 1', 'plugin', aliceToken);
   assert(audit);
   assert(!audit.request_headers.includes('alice-good'), 'plugin requests are audited with credentials masked');
+});
+
+test('additional curated lists persist, merge predictably and resolve batch dependencies', async () => {
+  const { catalogSources, saveCatalogSources, communityCatalog } = await import('../server/plugins/catalog.ts');
+  const gh = await import('../server/plugins/github.ts');
+  const { plugins } = await import('../server/plugins/manager.ts');
+  const source = { name: 'Team plugins', repo: 'owner/team-list', path: 'catalog/plugins.json', ref: 'main' };
+  const url = 'https://api.github.com/repos/owner/team-list/contents/catalog/plugins.json?ref=main';
+  const prior = catalog;
+  try {
+    await fixture('owner/batch-one', [{ id: 'batch-one', dependencies: ['team-helper'] }]);
+    await fixture('owner/batch-two', [{ id: 'batch-two', dependencies: ['team-helper'] }]);
+    await fixture('owner/team-helper', [{ id: 'team-helper' }]);
+    catalog = { schemaVersion: 1, plugins: [{ id: 'duplicate', name: 'Main wins', description: '', repo: 'owner/main' }] };
+    extraCatalogs.set(url, { schemaVersion: 1, plugins: [
+      { id: 'duplicate', name: 'Other', description: '', repo: 'owner/other' },
+      { id: 'team-helper', name: 'Helper', description: '', repo: 'owner/team-helper', path: 'plugins/team-helper' },
+    ] });
+    saveCatalogSources([source]);
+    assert.deepEqual(catalogSources().slice(1), [source]);
+    const merged = await communityCatalog();
+    assert.equal(merged.plugins.find(p => p.id === 'duplicate')?.name, 'Main wins');
+    assert.equal(merged.warnings?.length, 1);
+    assert(merged.plugins.find(p => p.id === 'team-helper')?.catalogSource);
+    assert.throws(() => saveCatalogSources([source, source]), /already configured/);
+    assert.throws(() => saveCatalogSources([{ ...source, repo: 'https://localhost/private' }]));
+    assert.throws(() => saveCatalogSources([{ ...source, path: '../secrets' }]));
+    const requests = ['batch-one', 'batch-two'].map(id => ({ repo: `owner/${id}`, path: `plugins/${id}`, expectedId: id }));
+    await assert.rejects(gh.previewInstalls([]), /1–100/);
+    await assert.rejects(gh.previewInstalls([requests[0], requests[0]]), /unique/);
+    await assert.rejects(gh.previewInstalls([requests[0], { ...requests[1], expectedId: 'wrong-id' }], { user: alice }), /expected/);
+    assert.equal(plugins.plugins.has('batch-one'), false, 'invalid batch never installs the valid first plugin');
+    const plan = await gh.previewInstalls(requests, { user: alice });
+    assert.deepEqual(new Set(plan.changes.map(c => c.id)), new Set(['batch-one', 'batch-two', 'team-helper']));
+    assert.equal(plan.changes.find(c => c.id === 'team-helper')?.dependency, true);
+    assert.equal(plan.changes.filter(c => !c.dependency).length, 2);
+    await gh.applyPlan(plan.planId, { user: alice });
+    for (const id of ['batch-one', 'batch-two', 'team-helper']) assert.equal(plugins.get(id).status, 'active');
+    extraCatalogs.set(url, { invalid: true });
+    const partial = await communityCatalog();
+    assert.equal(partial.plugins.length, 1);
+    assert.match(partial.warnings![0], /Team plugins/);
+    catalogStatus = 503;
+    await assert.rejects(communityCatalog(), /unavailable/);
+  } finally { catalogStatus = 200; catalog = prior; saveCatalogSources([]); extraCatalogs.clear(); }
 });
 
 test('release channels exclude unpublished code, pin immutably, and opt into development', async () => {

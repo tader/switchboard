@@ -1,8 +1,8 @@
 import { Hono, type Context } from 'hono';
 import { type Env, requireAdmin, requireUser } from '../auth.ts';
 import { badRequest } from '../http.ts';
-import { applyPlan, checkUpdates, install, parseRepo, previewInstall, previewUpdates, uninstall, update, updateOptions, type GithubContext } from '../plugins/github.ts';
-import { communityCatalog } from '../plugins/catalog.ts';
+import { applyPlan, checkUpdates, install, parseRepo, previewInstall, previewInstalls, previewUpdates, uninstall, update, updateOptions, type GithubContext } from '../plugins/github.ts';
+import { communityCatalog, catalogSources, saveCatalogSources } from '../plugins/catalog.ts';
 import { connectionOption, repositoryReleases } from '../plugins/github-access.ts';
 import { callerFrom } from '../audit.ts';
 import { type PluginRecord, pluginIcon, plugins } from '../plugins/manager.ts';
@@ -49,6 +49,12 @@ admin.get('/plugins/community', async (c) => {
   return c.json(await communityCatalog());
 });
 
+admin.get('/plugins/community/sources', (c) => c.json(catalogSources()));
+admin.put('/plugins/community/sources', async (c) => {
+  const { sources } = await pluginRequest(c);
+  return c.json(saveCatalogSources(sources));
+});
+
 admin.post('/plugins/releases', async (c) => {
   const { repo, path, githubConnectionId, pluginId } = await pluginRequest(c);
   const source = pluginId ? plugins.get(pluginId).source : undefined;
@@ -57,7 +63,8 @@ admin.post('/plugins/releases', async (c) => {
 });
 
 admin.post('/plugins/install/plan', async (c) => {
-  const { repo, ref, path, channel, githubConnectionId, expectedId } = await pluginRequest(c);
+  const { repo, ref, path, channel, githubConnectionId, expectedId, installs } = await pluginRequest(c);
+  if (installs !== undefined) return c.json(await previewInstalls(installs, githubContext(c, githubConnectionId)));
   return c.json(await previewInstall({ repo, ref, path, channel }, githubContext(c, githubConnectionId), expectedId));
 });
 

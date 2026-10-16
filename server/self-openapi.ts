@@ -195,7 +195,14 @@ export function openapiDocument() {
       },
       '/api/tokens/{id}': { delete: op('Tokens', 'Revoke an API token', { parameters: [id('Token id')] }) },
       '/api/admin/plugins': { get: op('Admin', 'List plugins') },
-      '/api/admin/plugins/community': { get: op('Admin', 'Fetch the live community plugin catalog', { description: 'Fetches the current public catalog on each request. Listings are not bundled with Switchboard.' }) },
+      '/api/admin/plugins/community': { get: op('Admin', 'Fetch the live community plugin catalog', { description: 'Fetches all configured public GitHub catalogs on each request. Returns sources and warnings alongside plugins. Earlier lists take precedence for duplicate IDs; unavailable lists are reported while other lists remain usable.' }) },
+      '/api/admin/plugins/community/sources': {
+        get: op('Admin', 'List curated plugin catalogs', { description: 'Returns the main catalog followed by saved additional catalogs.' }),
+        put: op('Admin', 'Save additional curated plugin catalogs', {
+          requestBody: json({ type: 'object', required: ['sources'], properties: { sources: { type: 'array', maxItems: 20, items: { type: 'object', required: ['name', 'repo', 'path', 'ref'], properties: { name: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } } } } } }),
+          description: 'Replaces the additional public GitHub JSON catalogs for the instance. The main catalog is always retained. Duplicate sources and invalid paths are rejected.',
+        }),
+      },
       '/api/admin/plugins/releases': { post: op('Admin', 'List published plugin releases', {
         requestBody: json({ type: 'object', properties: {
           repo: { type: 'string', description: 'owner/repo; optional when pluginId identifies an installed plugin' },
@@ -206,7 +213,8 @@ export function openapiDocument() {
         description: 'Returns tag, name, prerelease, publishedAt and url. Includes prereleases for explicit pinning, excludes drafts, and paginates GitHub results. Default latest tracking excludes prereleases. Repositories with component releases require a plugin folder.',
       }) },
       '/api/admin/plugins/install/plan': { post: op('Admin', 'Preview an installation and its dependencies', {
-        requestBody: json({ type: 'object', required: ['repo'], properties: {
+        requestBody: json({ type: 'object', properties: {
+          installs: { type: 'array', minItems: 1, maxItems: 100, description: 'Use instead of repo to preview multiple community listings together.', items: { type: 'object', required: ['repo', 'expectedId'], properties: { repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' }, expectedId: { type: 'string' } } } },
           repo: { type: 'string' }, channel: { type: 'string', enum: ['latest', 'release', 'branch'], description: 'latest follows stable published releases (install default); release pins ref to a published release; branch follows a development ref. Omit on update to keep the saved policy.' }, ref: { type: 'string' }, path: { type: 'string' }, expectedId: { type: 'string', description: 'Optional expected id for a single-plugin listing' },
           githubConnectionId: { type: 'string', nullable: true, description: 'A local or shared peer GitHub connection accessible to the administrator; null or omitted selects automatically' },
         } }, { repo: 'owner/repo' }),
