@@ -114,7 +114,12 @@ function installOptions(input: RepoRef): RepoRef {
 export async function previewInstall(input: RepoRef, ctx: GithubContext = {}, expectedId?: string): Promise<PluginPlan> {
   const parsed = installOptions(input);
   if (expectedId !== undefined && (typeof expectedId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(expectedId))) throw badRequest('Invalid expected plugin id');
-  return buildPlan({ input: parsed, expectedId }, [], ctx);
+  return buildPlan([{ input: parsed, expectedId }], [], ctx);
+}
+
+export async function previewInstalls(requests: unknown, ctx: GithubContext = {}): Promise<PluginPlan> {
+  if (!Array.isArray(requests) || !requests.length || requests.length > 100 || requests.some(r => !r || typeof r !== 'object' || typeof r.expectedId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(r.expectedId)) || new Set(requests.map(r => r.expectedId)).size !== requests.length) throw badRequest('installs must contain 1–100 unique plugin listings with expectedId');
+  return buildPlan(requests.map(r => ({ input: installOptions(r), expectedId: r.expectedId })), [], ctx);
 }
 
 export async function previewUpdates(requests: UpdateRequest[], ctx: GithubContext = {}): Promise<PluginPlan> {
@@ -122,7 +127,7 @@ export async function previewUpdates(requests: UpdateRequest[], ctx: GithubConte
   return buildPlan(undefined, requests.map((r) => ({ id: r.id, ...updateOptions(r) })), ctx);
 }
 
-async function buildPlanNow(installation: { input: RepoRef; expectedId?: string } | undefined, updates: UpdateRequest[], ctx: GithubContext): Promise<PluginPlan> {
+async function buildPlanNow(installations: { input: RepoRef; expectedId?: string }[] | undefined, updates: UpdateRequest[], ctx: GithubContext): Promise<PluginPlan> {
   const before = snapshot();
   const archives: RepositoryArchive[] = [];
   const fetched = new Map<string, Promise<RepositoryArchive>>();
@@ -144,8 +149,7 @@ async function buildPlanNow(installation: { input: RepoRef; expectedId?: string 
     selected.set(c.manifest.id, c);
   };
   try {
-    if (installation) {
-      const { input, expectedId } = installation;
+    for (const { input, expectedId } of installations ?? []) {
       const a = await fetchArchive(input);
       const rels = findPlugins(a.dir, input.path);
       if (expectedId && rels.length !== 1) throw badRequest('A community listing must identify one plugin folder');
@@ -258,8 +262,8 @@ async function buildPlanNow(installation: { input: RepoRef; expectedId?: string 
   } catch (e) { for (const a of archives) fs.rmSync(a.dir, { recursive: true, force: true }); throw e; }
 }
 
-function buildPlan(installation: { input: RepoRef; expectedId?: string } | undefined, updates: UpdateRequest[], ctx: GithubContext) {
-  return plugins.serial(() => buildPlanNow(installation, updates, ctx));
+function buildPlan(installations: { input: RepoRef; expectedId?: string }[] | undefined, updates: UpdateRequest[], ctx: GithubContext) {
+  return plugins.serial(() => buildPlanNow(installations, updates, ctx));
 }
 
 function place(c: Candidate) {
@@ -343,7 +347,7 @@ function requireReview(plan: PluginPlan) {
 
 export async function install(input: RepoRef, ctx: GithubContext = {}): Promise<string[]> {
   return plugins.mutate(async (reload) => {
-    const plan = await buildPlanNow({ input: installOptions(input) }, [], ctx);
+    const plan = await buildPlanNow([{ input: installOptions(input) }], [], ctx);
     requireReview(plan);
     return (await applyPlanNow(plan.planId, ctx, reload)).ids;
   });

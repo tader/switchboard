@@ -1,4 +1,5 @@
-import { HttpError } from '../http.ts';
+import { one, run } from '../db.ts';
+import { HttpError, badRequest } from '../http.ts';
 import { parseRepo } from './github-access.ts';
 
 export const CATALOG_URL = 'https://api.github.com/repos/tader/switchboard-plugins/contents/plugins.json?ref=main';
@@ -7,11 +8,32 @@ export interface CommunityPlugin {
   name: string;
   description: string;
   icon?: string;
+  catalogSource?: string;
   repo: string;
   path?: string;
   ref?: string;
 }
-export interface PluginCatalog { schemaVersion: 1; plugins: CommunityPlugin[] }
+export interface CatalogSource { name: string; repo: string; path: string; ref: string }
+export interface PluginCatalog { schemaVersion: 1; plugins: CommunityPlugin[]; sources?: CatalogSource[]; warnings?: string[] }
+export const MAIN_CATALOG: CatalogSource = { name: 'Main community list', repo: 'tader/switchboard-plugins', path: 'plugins.json', ref: 'main' };
+const sourceKey = (s: CatalogSource) => JSON.stringify([s.repo.toLowerCase(), s.path, s.ref]);
+export function catalogSources(): CatalogSource[] {
+  return [MAIN_CATALOG, ...JSON.parse(one<{ value: string }>("SELECT value FROM instance_settings WHERE key = 'plugin-catalogs'")?.value ?? '[]')];
+}
+export function saveCatalogSources(input: unknown): CatalogSource[] {
+  if (!Array.isArray(input) || input.length > 20) throw badRequest('Provide at most 20 additional curated lists');
+  const seen = new Set([sourceKey(MAIN_CATALOG)]);
+  const sources = input.map((s) => {
+    if (!s || typeof s.name !== 'string' || !s.name.trim() || s.name.length > 100 || typeof s.repo !== 'string' || typeof s.path !== 'string' || !s.path || typeof s.ref !== 'string' || !s.ref || s.path.length > 500 || s.ref.length > 200) throw badRequest('Each curated list needs a name, GitHub repository, file path and ref');
+    const parsed = parseRepo(s.repo, s.ref, s.path);
+    if (parsed.repo !== s.repo || parsed.path !== s.path || parsed.ref !== s.ref) throw badRequest('Invalid curated list source');
+    const source = { name: s.name.trim(), repo: s.repo, path: s.path, ref: s.ref };
+    if (seen.has(sourceKey(source))) throw badRequest('This curated list is already configured');
+    seen.add(sourceKey(source)); return source;
+  });
+  run("INSERT INTO instance_settings (key, value) VALUES ('plugin-catalogs', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(sources));
+  return catalogSources();
+}
 
 export function validateCatalog(input: unknown): PluginCatalog {
   const data = input as PluginCatalog;
@@ -33,10 +55,28 @@ export function validateCatalog(input: unknown): PluginCatalog {
 }
 
 export async function communityCatalog(): Promise<PluginCatalog> {
+  const sources = catalogSources();
+  const results = await Promise.allSettled(sources.map(fetchCatalog));
+  const plugins = new Map<string, CommunityPlugin>();
+  const warnings: string[] = [];
+  let loaded = 0;
+  results.forEach((result, i) => {
+    if (result.status === 'rejected') { warnings.push(`${sources[i].name}: ${result.reason.message}`); return; }
+    loaded++;
+    for (const plugin of result.value.plugins) {
+      if (plugins.has(plugin.id)) { warnings.push(`${sources[i].name}: duplicate plugin ${plugin.id}; the earlier list takes precedence.`); continue; }
+      plugins.set(plugin.id, { ...plugin, catalogSource: sourceKey(sources[i]) });
+    }
+  });
+  if (!loaded) throw new HttpError(502, warnings.join(' '));
+  return { schemaVersion: 1, plugins: [...plugins.values()], sources, warnings };
+}
+
+async function fetchCatalog(source: CatalogSource): Promise<PluginCatalog> {
   try {
     // The Contents API reads main directly; raw.githubusercontent.com's CDN can
     // retain an older branch response even with cache-busting query parameters.
-    const res = await fetch(CATALOG_URL, { headers: { accept: 'application/vnd.github.raw+json', 'user-agent': 'Switchboard', 'cache-control': 'no-cache' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(`https://api.github.com/repos/${source.repo}/contents/${source.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(source.ref)}`, { headers: { accept: 'application/vnd.github.raw+json', 'user-agent': 'Switchboard', 'cache-control': 'no-cache' }, cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(10_000) });
     if (!res.ok) { await res.body?.cancel(); throw new Error(`HTTP ${res.status}`); }
     if (!res.body) throw new Error('Empty response');
     const reader = res.body.getReader();

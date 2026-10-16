@@ -1,14 +1,16 @@
 import { ListToolbar, ListFeedback, SortHeader, useList } from './ListControls';
 import { useEffect, useState } from 'react';
 import { Download, RefreshCw } from 'lucide-react';
-import { api, type CommunityPlugin, type Connection, type PluginCatalog, type PluginInfo, type PluginPlan } from '../api';
-import { Alert, Badge, Button, Dialog, FormField, Input, Select, Spinner, Table, ServiceIcon } from './ui';
+import { api, type CatalogSource, type CommunityPlugin, type Connection, type PluginCatalog, type PluginInfo, type PluginPlan } from '../api';
+import { Alert, Badge, Button, Checkbox, Dialog, FormField, Input, Select, Spinner, Table, ServiceIcon } from './ui';
 
 export type PluginChangeRequest =
-  | { kind: 'install'; initial?: CommunityPlugin }
+  | { kind: 'install'; initial?: CommunityPlugin; listings?: CommunityPlugin[] }
   | { kind: 'update'; plugins: PluginInfo[]; editRef?: boolean };
 
-export function CommunityPlugins({ installed, onInstall }: { installed: PluginInfo[]; onInstall: (listing: CommunityPlugin) => void }) {
+export function CommunityPlugins({ installed, onInstall }: { installed: PluginInfo[]; onInstall: (listings: CommunityPlugin[]) => void }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [managing, setManaging] = useState(false);
   const [catalog, setCatalog] = useState<PluginCatalog | null>(null);
   const [details, setDetails] = useState<CommunityPlugin | null>(null);
   const [loading, setLoading] = useState(true);
@@ -22,23 +24,67 @@ export function CommunityPlugins({ installed, onInstall }: { installed: PluginIn
   };
   useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, []);
   const installation = (p: CommunityPlugin) => { const present = installed.find(i => i.id === p.id); return present?.origin === 'installed' ? 'installed' : present ? 'builtin' : 'available'; };
-  const list = useList('plugins-community', catalog?.plugins ?? [], { search: p => [p.id, p.name, p.description, p.repo], sorts: { name: p => p.name, source: p => p.repo, status: installation }, filters: { status: '', source: '' }, filter: (p, f) => (!f.status || installation(p) === f.status) && (!f.source || p.repo === f.source) });
+  const list = useList('plugins-community', catalog?.plugins ?? [], { search: p => [p.id, p.name, p.description, p.repo], sorts: { name: p => p.name, source: p => p.repo, status: installation }, filters: { status: '', source: '', catalog: '' }, filter: (p, f) => (!f.catalog || p.catalogSource === f.catalog) && (!f.status || installation(p) === f.status) && (!f.source || p.repo === f.source) });
+  const eligible = list.visible.filter(p => installation(p) !== 'installed');
+  const chosen = (catalog?.plugins ?? []).filter(p => selected.includes(p.id) && installation(p) !== 'installed');
   return <div className="space-y-3">
     <ListToolbar list={list} label="community plugins" placeholder="Search plugins…" sorts={[{ value: 'name', label: 'Name' }, { value: 'source', label: 'Source' }, { value: 'status', label: 'Status' }]}>
       <Select aria-label="Community installation state" value={list.state.status} onChange={e => list.set({ status: e.target.value })} className="w-40"><option value="">Any status</option><option value="available">Not installed</option><option value="installed">Installed</option><option value="builtin">Built in only</option></Select>
       <Select aria-label="Community repository" value={list.state.source} onChange={e => list.set({ source: e.target.value })} className="w-44"><option value="">All repositories</option>{[...new Set(catalog?.plugins.map(p => p.repo))].sort().map(repo => <option key={repo} value={repo}>{repo}</option>)}</Select>
+      <Select aria-label="Curated list" value={list.state.catalog} onChange={e => list.set({ catalog: e.target.value })} className="w-44"><option value="">All curated lists</option>{catalog?.sources?.map(source => <option key={JSON.stringify([source.repo.toLowerCase(), source.path, source.ref])} value={JSON.stringify([source.repo.toLowerCase(), source.path, source.ref])}>{source.name}</option>)}</Select>
+      <Button onClick={() => setManaging(true)}>Manage lists</Button>
       <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void load()}>Refresh</Button>
     </ListToolbar>
+    {!!catalog?.warnings?.length && <Alert tone="amber"><ul>{catalog.warnings.map((warning, i) => <li key={i}>{warning}</li>)}</ul></Alert>}
+    {!!chosen.length && <div className="flex flex-wrap items-center gap-2"><Button variant="primary" onClick={() => onInstall(chosen)}>Install selected ({chosen.length})</Button><Button variant="ghost" onClick={() => setSelected([])}>Clear selection</Button></div>}
     <ListFeedback loading={loading && !catalog} error={error ? new Error(error) : undefined} empty={!list.visible.length} filtered={list.filtered} label="community plugins" retry={() => void load()} reset={list.reset} />
-    {!!list.visible.length && <Table label="Community plugins"><thead><tr><SortHeader list={list} field="name">Plugin</SortHeader><SortHeader list={list} field="status" className="w-28">Status</SortHeader><SortHeader list={list} field="source" className="hidden w-[28%] lg:table-cell">Source</SortHeader><th className="w-24 sm:w-32"><span className="sr-only">Actions</span></th></tr></thead>
+    {!!list.visible.length && <Table label="Community plugins"><thead><tr><th className="w-10"><Checkbox aria-label="Select all available visible plugins" checked={!!eligible.length && eligible.every(p => selected.includes(p.id))} disabled={!eligible.length} onChange={checked => setSelected(ids => checked ? [...new Set([...ids, ...eligible.map(p => p.id)])] : ids.filter(id => !eligible.some(p => p.id === id)))} /></th><SortHeader list={list} field="name">Plugin</SortHeader><SortHeader list={list} field="status" className="w-28">Status</SortHeader><SortHeader list={list} field="source" className="hidden w-[28%] lg:table-cell">Source</SortHeader><th className="w-12 sm:w-32"><span className="sr-only">Actions</span></th></tr></thead>
       <tbody>{list.visible.map(p => { const state = installation(p); return <tr key={p.id}>
+        <td><Checkbox aria-label={`Select ${p.name}`} checked={state !== 'installed' && selected.includes(p.id)} disabled={state === 'installed'} onChange={checked => setSelected(ids => checked ? [...ids, p.id] : ids.filter(id => id !== p.id))} /></td>
         <td><div className="flex min-w-0 items-center gap-2"><ServiceIcon icon={p.icon} name={p.name} size="sm" /><div className="min-w-0"><button type="button" onClick={() => setDetails(p)} className="block max-w-full truncate text-left font-semibold hover:text-indigo-600 dark:hover:text-indigo-400" title={p.name}>{p.name}</button><div className="truncate text-xs text-zinc-500" title={p.description}>{p.description}</div></div></div></td>
         <td><Badge tone={state === 'installed' ? 'green' : 'neutral'}>{state === 'installed' ? 'Installed' : state === 'builtin' ? 'Built in' : 'Available'}</Badge></td><td className="hidden lg:table-cell"><a className="block truncate text-xs text-zinc-500 hover:text-indigo-600 dark:hover:text-indigo-400" href={`https://github.com/${p.repo}`} target="_blank" rel="noreferrer" title={p.repo}>{p.repo}</a></td>
-        <td className="text-right">{state !== 'installed' && <Button size="sm" icon={<Download className="size-3.5" />} title={state === 'builtin' ? 'Install external version' : undefined} onClick={() => onInstall(p)}>Install</Button>}</td>
+        <td className="text-right">{state !== 'installed' && <Button size="sm" aria-label={`Install ${p.name}`} icon={<Download className="size-3.5" />} title={state === 'builtin' ? 'Install external version' : undefined} onClick={() => onInstall([p])}><span className="hidden sm:inline">Install</span></Button>}</td>
       </tr>; })}</tbody>
     </Table>}
+    <CatalogSourcesDialog open={managing} onClose={() => setManaging(false)} onSaved={() => { setManaging(false); setSelected([]); void load(); }} />
     <Dialog open={!!details} onClose={() => setDetails(null)} title={details?.name ?? 'Plugin'}>{details && <div className="space-y-3 text-[13px]"><p className="text-zinc-500">{details.description}</p><a href={`https://github.com/${details.repo}`} target="_blank" rel="noreferrer" className="break-all text-indigo-600 dark:text-indigo-400">{details.repo}</a><div className="flex justify-end"><Button onClick={() => setDetails(null)}>Done</Button></div></div>}</Dialog>
   </div>;
+}
+
+function CatalogSourcesDialog({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+  const [sources, setSources] = useState<CatalogSource[] | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setSources(null); setError('');
+    const controller = new AbortController();
+    api<CatalogSource[]>('/admin/plugins/community/sources', { signal: controller.signal }).then(setSources, e => { if (!controller.signal.aborted) setError(e.message); });
+    return () => controller.abort();
+  }, [open]);
+  const change = (index: number, field: keyof CatalogSource, value: string) => setSources(items => items!.map((s, i) => i === index ? { ...s, [field]: value } : s));
+  return <Dialog open={open} onClose={() => { if (!busy) onClose(); }} title="Curated plugin lists">
+    <form className="space-y-4" onSubmit={async e => {
+      e.preventDefault(); setBusy(true); setError('');
+      try { await api('/admin/plugins/community/sources', { method: 'PUT', body: { sources: sources!.slice(1) } }); onSaved(); }
+      catch (e: any) { setError(e.message); } finally { setBusy(false); }
+    }}>
+      <p className="text-[13px] text-zinc-500">Public GitHub JSON catalogs using the community catalog format. Lists are shared by all administrators. Earlier lists take precedence for duplicate plugin IDs.</p>
+      {!sources && !error && <Spinner />}
+      {sources?.map((source, i) => <fieldset key={i} disabled={busy || i === 0} className="space-y-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+        {i === 0 ? <p className="text-[13px]">{source.name} · {source.repo}</p> : <>
+          <FormField label="Name" htmlFor={`catalog-name-${i}`}><Input id={`catalog-name-${i}`} required maxLength={100} value={source.name} onChange={e => change(i, 'name', e.target.value)} /></FormField>
+          <FormField label="GitHub repository" htmlFor={`catalog-repo-${i}`}><Input id={`catalog-repo-${i}`} required placeholder="owner/repo" value={source.repo} onChange={e => change(i, 'repo', e.target.value)} /></FormField>
+          <FormField label="JSON file path" htmlFor={`catalog-path-${i}`}><Input id={`catalog-path-${i}`} required value={source.path} onChange={e => change(i, 'path', e.target.value)} /></FormField>
+          <FormField label="Branch or tag" htmlFor={`catalog-ref-${i}`}><Input id={`catalog-ref-${i}`} required value={source.ref} onChange={e => change(i, 'ref', e.target.value)} /></FormField>
+          <Button onClick={() => setSources(items => items!.filter((_, index) => index !== i))}>Remove list</Button>
+        </>}
+      </fieldset>)}
+      {sources && <Button disabled={busy || sources.length >= 21} onClick={() => setSources(items => [...items!, { name: '', repo: '', path: 'plugins.json', ref: 'main' }])}>Add list</Button>}
+      {error && <Alert>{error}</Alert>}
+      <div className="flex justify-end gap-2"><Button disabled={busy} onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" loading={busy} disabled={!sources}>Save</Button></div>
+    </form>
+  </Dialog>;
 }
 
 export function PluginChangeDialog({ request, onClose, onApplied }: { request: PluginChangeRequest | null; onClose: () => void; onApplied: (plugins: PluginInfo[]) => void }) {
@@ -68,7 +114,8 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
     }, (e) => { if (!controller.signal.aborted) setConnectionError(e.message); });
     return () => controller.abort();
   }, [request]);
-  const choosingChannel = request?.kind === 'install' || (request?.kind === 'update' && request.editRef);
+  const batch = request?.kind === 'install' && !!request.listings;
+  const choosingChannel = (request?.kind === 'install' && !batch) || (request?.kind === 'update' && request.editRef);
   useEffect(() => {
     setReleases([]); setReleaseError('');
     if (!request || !choosingChannel || channel === 'branch' || !repo.trim()) { setLoadingReleases(false); return; }
@@ -95,7 +142,8 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
       } else {
         const githubConnectionId = connection === 'remembered' ? undefined : connection === 'automatic' ? null : connection;
         if (request.kind === 'install') {
-          setPlan(await api<PluginPlan>('/admin/plugins/install/plan', { body: { repo, channel, ...(channel !== 'latest' && ref.trim() ? { ref: ref.trim() } : {}), path: subpath, githubConnectionId, expectedId: request.initial?.id } }));
+          if (request.listings) setPlan(await api<PluginPlan>('/admin/plugins/install/plan', { body: { installs: request.listings.map(p => ({ repo: p.repo, path: p.path, ref: p.ref, expectedId: p.id })), githubConnectionId } }));
+          else setPlan(await api<PluginPlan>('/admin/plugins/install/plan', { body: { repo, channel, ...(channel !== 'latest' && ref.trim() ? { ref: ref.trim() } : {}), path: subpath, githubConnectionId, expectedId: request.initial?.id } }));
         } else {
           setPlan(await api<PluginPlan>('/admin/plugins/update/plan', { body: { updates: request.plugins.map((p) => ({ id: p.id, ...(request.editRef ? { channel, ...(channel !== 'latest' ? { ref: ref.trim() || null } : {}) } : {}), githubConnectionId })) } }));
         }
@@ -106,7 +154,7 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
     } finally { setBusy(false); }
   };
   const updating = request?.kind === 'update';
-  const title = plan ? 'Review plugin changes' : updating ? request.plugins.length > 1 ? `Update ${request.plugins.length} plugins` : `Update ${request.plugins[0]?.name ?? 'plugin'}` : 'Install from GitHub';
+  const title = plan ? 'Review plugin changes' : updating ? request.plugins.length > 1 ? `Update ${request.plugins.length} plugins` : `Update ${request.plugins[0]?.name ?? 'plugin'}` : batch ? `Install ${request?.kind === 'install' ? request.listings?.length : 0} plugins` : 'Install from GitHub';
   return <Dialog open={!!request} onClose={() => { if (!busy) onClose(); }} title={title}>
     <form onSubmit={submit} className="space-y-4">
       {plan ? <>
@@ -118,7 +166,8 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
         {plan.affectedDependents.length > 0 && <p className="text-[13px] text-zinc-500">Also reloads: {plan.affectedDependents.join(', ')}.</p>}
         {plan.requiresReview && <Alert tone="amber">This upgrades a shared dependency. Switchboard checked the version requirements of the enabled plugins that use it.</Alert>}
       </> : <>
-        {!updating && <>
+        {batch && request?.kind === 'install' && <div className="space-y-2">{request.listings?.map(p => <div key={p.id}><p className="text-[13px] font-semibold">{p.name}</p><p className="break-all text-xs text-zinc-500">{p.repo}{p.path && `/${p.path}`} · {p.ref || 'Latest release'}</p></div>)}</div>}
+        {!updating && !batch && <>
           <FormField label="Repository" htmlFor="plugin-repo" description="owner/repo or a GitHub folder URL. Without a folder, every plugin in the repository is selected.">
             <Input id="plugin-repo" value={repo} onChange={(e) => setRepo(e.target.value)} required autoFocus disabled={busy} spellCheck={false} />
           </FormField>
