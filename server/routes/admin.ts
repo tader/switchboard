@@ -46,7 +46,7 @@ async function pluginRequest(c: Context<Env>): Promise<Record<string, any>> {
 // Static GET routes must precede /plugins/:id.
 admin.get('/plugins/community', async (c) => {
   c.header('cache-control', 'no-store');
-  return c.json(await communityCatalog());
+  return c.json(await communityCatalog(githubContext(c)));
 });
 
 admin.get('/plugins/community/sources', (c) => c.json(catalogSources()));

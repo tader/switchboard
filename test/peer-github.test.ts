@@ -82,8 +82,10 @@ test('plugin releases, installation and updates use a shared GitHub connection w
       assert.equal(req.headers.authorization, undefined);
       res.end(archives.get(pathname.split('/').at(-1)!)); return;
     }
+    if (pathname.includes('/contents/') && req.headers.authorization !== `Bearer ${secret}`) { res.writeHead(429); res.end('{}'); return; }
     if (req.headers.authorization !== `Bearer ${secret}`) { res.writeHead(404); res.end('{}'); return; }
     res.setHeader('content-type', 'application/json');
+    if (pathname.includes('/contents/')) { res.end(JSON.stringify({ schemaVersion: 1, plugins: [{ id: 'peer-github-app', name: 'Peer app', description: '', repo: 'owner/private' }] })); return; }
     if (pathname === '/user') { res.end(JSON.stringify({ id: 1, login: 'owner' })); return; }
     if (pathname.includes('/releases')) {
       const items = Array.from({ length: release + 1 }, (_, n) => ({ tag_name: `v1.${release - n}.0`, published_at: '2026-01-01T00:00:00Z' }));
@@ -134,6 +136,12 @@ test('plugin releases, installation and updates use a shared GitHub connection w
   });
   assert.match(shared.serviceId, /^peer\/[^/]+\/github$/);
   assert.deepEqual(shared.config, {});
+  const catalog = await consumer.call('GET', '/api/admin/plugins/community');
+  assert.equal(catalog.status, 200, JSON.stringify(catalog.data));
+  assert.equal(catalog.data.plugins[0].id, 'peer-github-app');
+  assert(seen.some(r => r.path.includes('/contents/') && r.instance === 'consumer' && !r.auth));
+  assert(seen.some(r => r.path.includes('/contents/') && r.instance === 'owner' && r.auth === `Bearer ${secret}`));
+
   const list = await consumer.call('POST', '/api/admin/plugins/releases', { repo: 'owner/private', githubConnectionId: shared.id });
   assert.equal(list.status, 200, JSON.stringify(list.data));
   assert.equal(list.data[0].tag, 'v1.0.0');

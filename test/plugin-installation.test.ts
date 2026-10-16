@@ -22,6 +22,7 @@ const seen: { url: string; authorization: string | null }[] = [];
 let counter = 0;
 let catalog: unknown = { schemaVersion: 1, plugins: [] };
 let catalogStatus = 200;
+let catalogResponse: ((url: string, authorization: string | null) => Response | undefined) | undefined;
 const extraCatalogs = new Map<string, unknown>();
 let alice: User;
 let bob: User;
@@ -57,6 +58,8 @@ before(async () => {
     const url = String(input);
     const authorization = new Headers(init?.headers).get('authorization');
     seen.push({ url, authorization });
+    const override = catalogResponse?.(url, authorization);
+    if (override) return override;
     if (extraCatalogs.has(url)) return Response.json(extraCatalogs.get(url));
     if (url === catalogUrl) return Response.json(catalogStatus === 200 ? catalog : { error: 'offline' }, { status: catalogStatus });
     if (url === 'https://api.github.com/user') return Response.json({ id: authorization, login: authorization?.slice(7), avatar_url: '' });
@@ -539,4 +542,96 @@ test('legacy stored sources use releases by default and retain explicit developm
   await gh.update('legacy-policy');
   assert.equal(plugins.get('legacy-policy').source?.commit, dev);
   assert.equal(plugins.get('legacy-policy').source?.channel, 'branch');
+});
+
+
+test('catalogs retry GitHub access with only the acting administrator’s credentials', async (t) => {
+  const { createUser } = await import('../server/users.ts');
+  const { startConnect } = await import('../server/connections.ts');
+  const alice = createUser('catalog-alice', 'admin');
+  const bob = createUser('catalog-bob', 'admin');
+  await startConnect(alice, { service: 'github', method: 'token', name: 'catalog-alice', config: { token: 'alice-good' } });
+  await startConnect(bob, { service: 'github', method: 'token', name: 'catalog-bob', config: { token: 'bob-good' } });
+  const { communityCatalog, saveCatalogSources } = await import('../server/plugins/catalog.ts');
+  const { config } = await import('../server/config.ts');
+  const previousToken = config.githubToken;
+  const listing = { schemaVersion: 1, plugins: [{ id: 'authenticated-listing', name: 'Authenticated listing', description: '', repo: 'owner/listing' }] };
+  const attempts = () => seen.filter(s => s.url === catalogUrl).map(s => s.authorization);
+  try {
+    config.githubToken = undefined;
+    await t.test('public catalog does not access stored credentials', async () => {
+      seen.length = 0;
+      catalogResponse = url => url === catalogUrl ? Response.json(listing) : undefined;
+      assert.equal((await communityCatalog({ user: alice })).plugins[0].id, 'authenticated-listing');
+      assert.deepEqual(attempts(), [null]);
+    });
+    for (const status of [403, 429]) await t.test(`HTTP ${status} falls back through configured token to the user's connection`, async () => {
+      config.githubToken = 'configured-limited';
+      seen.length = 0;
+      catalogResponse = (url, auth) => url === catalogUrl
+        ? auth === 'Bearer alice-good' ? Response.json(listing) : new Response(null, { status, headers: { 'x-ratelimit-remaining': '0' } })
+        : undefined;
+      assert.equal((await communityCatalog({ user: alice })).plugins[0].id, 'authenticated-listing');
+      assert.deepEqual(attempts(), [null, 'Bearer configured-limited', 'Bearer alice-good']);
+    });
+    await t.test('configured token can resolve a catalog without a signed-in user', async () => {
+      config.githubToken = 'configured-good';
+      seen.length = 0;
+      catalogResponse = (url, auth) => url === catalogUrl
+        ? auth === 'Bearer configured-good' ? Response.json(listing) : new Response(null, { status: 429 })
+        : undefined;
+      assert.equal((await communityCatalog()).plugins[0].id, 'authenticated-listing');
+      assert.deepEqual(attempts(), [null, 'Bearer configured-good']);
+    });
+    config.githubToken = undefined;
+    await t.test('exhausted rate limits are reported and another user’s credentials are never tried', async () => {
+      seen.length = 0;
+      catalogResponse = url => url === catalogUrl ? new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }) : undefined;
+      await assert.rejects(communityCatalog({ user: bob }), /Main community list:.*GitHub rate limit/);
+      assert.deepEqual(attempts(), [null, 'Bearer bob-good']);
+    });
+    await t.test('private curated list retries a 404 with the acting user’s connection', async () => {
+      const source = { name: 'Private list', repo: 'owner/private-list', path: 'curated/plugins.json', ref: 'branch/one' };
+      saveCatalogSources([source]);
+      const url = 'https://api.github.com/repos/owner/private-list/contents/curated/plugins.json?ref=branch%2Fone';
+      seen.length = 0;
+      catalogResponse = (request, auth) => request === catalogUrl ? Response.json({ schemaVersion: 1, plugins: [] }) : request === url
+        ? auth === 'Bearer alice-good' ? Response.json(listing) : new Response(null, { status: 404 })
+        : undefined;
+      const result = await communityCatalog({ user: alice });
+      assert.equal(result.plugins[0].id, 'authenticated-listing');
+      assert.deepEqual(result.warnings, []);
+      assert.deepEqual(seen.filter(s => s.url === url).map(s => s.authorization), [null, 'Bearer alice-good']);
+      saveCatalogSources([]);
+    });
+    await t.test('dependency resolution uses authenticated catalogs', async () => {
+      const gh = await import('../server/plugins/github.ts');
+      await fixture('owner/authenticated-helper', [{ id: 'authenticated-helper' }]);
+      await fixture('owner/authenticated-app', [{ id: 'authenticated-app', dependencies: ['authenticated-helper'] }]);
+      catalogResponse = (url, auth) => url === catalogUrl
+        ? auth === 'Bearer alice-good' ? Response.json({ schemaVersion: 1, plugins: [{ id: 'authenticated-helper', name: 'Helper', description: '', repo: 'owner/authenticated-helper', path: 'plugins/authenticated-helper' }] }) : new Response(null, { status: 429 })
+        : undefined;
+      const plan = await gh.previewInstall({ repo: 'owner/authenticated-app' }, { user: alice });
+      assert.deepEqual(new Set(plan.changes.map(c => c.id)), new Set(['authenticated-app', 'authenticated-helper']));
+    });
+    await t.test('invalid content is not retried with credentials', async () => {
+      seen.length = 0;
+      catalogResponse = url => url === catalogUrl ? Response.json({ invalid: true }) : undefined;
+      await assert.rejects(communityCatalog({ user: alice }), /invalid/);
+      assert.deepEqual(attempts(), [null]);
+    });
+    await t.test('community API supplies administrator context for fallback', async () => {
+      const { Hono } = await import('hono');
+      const { admin } = await import('../server/routes/admin.ts');
+      const { createToken } = await import('../server/users.ts');
+      const app = new Hono(); app.route('/api/admin', admin);
+      catalogResponse = (url, auth) => url === catalogUrl
+        ? auth === 'Bearer bob-good' ? Response.json(listing) : new Response(null, { status: 429 })
+        : undefined;
+      const token = createToken(bob.id, 'catalog fallback', null).secret;
+      const response = await app.request('/api/admin/plugins/community', { headers: { authorization: `Bearer ${token}` } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).plugins[0].id, 'authenticated-listing');
+    });
+  } finally { config.githubToken = previousToken; catalogResponse = undefined; saveCatalogSources([]); }
 });

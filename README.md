@@ -29,7 +29,7 @@ On first start, and whenever no administrator can sign in, the log contains a se
 | `SWITCHBOARD_DATA_DIR` | `.data` (`/data` in the image) | Database, encryption key, installed plugins. |
 | `SWITCHBOARD_SECRET_KEY` | generated in the data dir | 32 bytes (hex or base64) used to encrypt credentials at rest. |
 | `SWITCHBOARD_ADMIN_USERNAME` | `admin` | Who the setup link is for. |
-| `SWITCHBOARD_GITHUB_TOKEN` | | For installing plugins from private repos and higher rate limits. |
+| `SWITCHBOARD_GITHUB_TOKEN` | | For fetching plugin catalogs, installing from private repos and higher rate limits. |
 | `SWITCHBOARD_PORT` / `SWITCHBOARD_HOST` | `8770` / `0.0.0.0` | |
 | `SWITCHBOARD_SESSION_TTL_SECS` | 14 days | |
 | `SWITCHBOARD_WATCH_PLUGINS` | `true` | Reload plugins when their files change. |

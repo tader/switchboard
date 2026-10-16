@@ -81,13 +81,14 @@ function credentials(ctx: GithubContext): Credential[] {
   return [{}, ...(config.githubToken ? [{ configured: true }] : []), ...connections.map((c) => ({ connectionId: c.id, peer: !!c.peer }))];
 }
 
-async function request(url: string, accept: string, credential: Credential, ctx: GithubContext): Promise<Response> {
+async function request(url: string, accept: string, credential: Credential, ctx: GithubContext, fresh = false): Promise<Response> {
   const headers: Record<string, string> = { accept, 'user-agent': 'switchboard', 'x-github-api-version': '2022-11-28' };
+  if (fresh) headers['cache-control'] = 'no-cache';
   if (credential.connectionId) {
     return (await execute(ctx.user!, credential.connectionId, { method: 'GET', url, headers: Object.entries(headers) }, undefined, ctx.caller)).response;
   }
   if (credential.configured) headers.authorization = `Bearer ${config.githubToken}`;
-  try { return await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(120_000) }); }
+  try { return await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(fresh ? 10_000 : 120_000), ...(fresh ? { cache: 'no-store' as const } : {}) }); }
   catch { throw badRequest('Could not reach GitHub; try again later'); }
 }
 
@@ -103,6 +104,25 @@ async function githubError(res: Response, repo: string): Promise<Error> {
 }
 
 const accessFailure = (res: Response) => [401, 403, 404, 429].includes(res.status);
+
+/** Fetch a fresh file through the same user-scoped credential fallback as installs. */
+export async function repositoryFile(input: RepoRef & { path: string }, ctx: GithubContext = {}): Promise<Response> {
+  let error: Error | undefined;
+  const url = `https://api.github.com/repos/${input.repo}/contents/${input.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(input.ref ?? 'HEAD')}`;
+  for (const credential of credentials(ctx)) {
+    let res: Response;
+    try { res = await request(url, 'application/vnd.github.raw+json', credential, ctx, true); }
+    catch (e) {
+      if (retryCredential(e, credential, ctx)) { error = e; continue; }
+      throw e;
+    }
+    if (res.ok) return res;
+    const retry = accessFailure(res);
+    error = await githubError(res, input.repo);
+    if (!retry) throw error;
+  }
+  throw error ?? badRequest('No usable GitHub credentials');
+}
 
 async function resolveWith(repo: string, ref: string | undefined, credential: Credential, ctx: GithubContext) {
   const res = await request(`https://api.github.com/repos/${repo}/commits/${ref ? encodeURIComponent(ref) : 'HEAD'}`, 'application/vnd.github.sha', credential, ctx);

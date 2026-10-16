@@ -208,7 +208,7 @@ async function buildPlanNow(installations: { input: RepoRef; expectedId?: string
               }
             }
             if (!dep) {
-              catalog ??= await communityCatalog();
+              catalog ??= await communityCatalog(parent?.archive.access ?? ctx);
               const listing = catalog.plugins.find((p) => p.id === id);
               if (!listing) throw badRequest(`Dependency ${id} is not installed and has no community catalog listing`);
               const input = parseRepo(listing.repo, listing.ref, listing.path);
