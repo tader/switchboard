@@ -11,8 +11,8 @@ const processes:ChildProcess[]=[];
 let rejectCurrent=false;
 const upstream=http.createServer((req,res)=>{if(rejectCurrent&&req.headers.authorization==='Bearer fixture-access-secret'){res.writeHead(401);res.end();return;}res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({authorization:req.headers.authorization}));});
 after(async()=>{for(const child of processes)child.kill();upstream.close();await new Promise(resolve=>setTimeout(resolve,150));fs.rmSync(scratch,{recursive:true,force:true});});
-async function waitFor(fn: () => any | Promise<any>) {
-  const deadline = Date.now() + 12_000;
+async function waitFor(fn: () => any | Promise<any>, timeoutMs = 12_000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 50)); }
   throw new Error('Timed out waiting for credential peer');
 }
@@ -58,7 +58,14 @@ test('credential transfers require an explicit grant; imported credentials work 
  const denied=await server.request('POST','/api/connections',{service:'fixture-consumer',method:'source',config:{authenticationSource:remote.id,endpoint}});assert.equal(denied.status,403,JSON.stringify(denied.data));
  assert.equal((await laptop.request('PUT',`/api/connections/${source}/shares`,{peerIds:[peer],credentialPeerIds:[peer]})).status,200);
  await waitFor(async()=>(await candidates()).data.length===1);
+ // A generic connection test can leave an otherwise valid authentication source in error.
+ const failedProbe=await laptop.request('POST','/api/call',{connection:source,method:'GET',url:'/'});
+ assert.equal(failedProbe.status,502);
+ await waitFor(async()=>(await server.request('GET','/api/connections')).data.find((c:any)=>c.id===remote.id)?.status==='unavailable',30_000);
+ const blockedData=await server.request('POST','/api/call',{connection:remote.id,method:'GET',url:'/'});
+ assert.equal(blockedData.status,503,'ordinary data calls stay blocked for an errored shared source');
  const consumer=await server.request('POST','/api/connections',{service:'fixture-consumer',method:'source',name:'server-consumer',config:{authenticationSource:remote.id,endpoint}});assert.equal(consumer.status,200,JSON.stringify(consumer.data));
+ assert.equal((await laptop.request('GET',`/api/connections/${source}`)).data.status,'ok','successful credential provision clears the stale provider error');
  const id=consumer.data.connection.id;
  assert.ok(!JSON.stringify(consumer.data).includes('fixture-access-secret'));
  const call=()=>server.request('POST','/api/call',{connection:id,method:'GET',url:'/test'});

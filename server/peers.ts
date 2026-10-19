@@ -363,7 +363,9 @@ export async function requestPeer<T>(peerId: string, userId: string, operation: 
   if (typeof remote !== 'string') throw badRequest('A shared connection id is required');
   const descriptor = peerConnection(userId, peerId, remote);
   if (operation === 'credentials' && (!descriptor.credentialProvider || descriptor.route.length !== 1)) throw new HttpError(403, 'Peer authentication source is unavailable');
-  if (descriptor.status !== 'ok') throw new HttpError(503, 'The shared connection is unavailable on its peer');
+  // A provider may recover from a stale error by refreshing or using a newly reconnected session.
+  // Keep unavailable services and ordinary data calls blocked; credential grants were checked above.
+  if (descriptor.status !== 'ok' && !(operation === 'credentials' && descriptor.status === 'error')) throw new HttpError(503, 'The shared connection is unavailable on its peer');
   if (signal?.aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
   if (!userCanUsePeer(userId, peerId)) throw new HttpError(403, 'You cannot use this peer');
   const peer = getPeer(peerId);
