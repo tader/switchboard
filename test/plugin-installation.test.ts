@@ -14,7 +14,7 @@ process.env.SWITCHBOARD_WATCH_PLUGINS = 'false';
 fs.mkdirSync(process.env.SWITCHBOARD_DATA_DIR, { recursive: true });
 const realFetch = globalThis.fetch;
 const catalogUrl = 'https://api.github.com/repos/tader/switchboard-plugins/contents/plugins.json?ref=main';
-interface Fixture { id: string; version?: string; dependencies?: string[]; dependencyVersions?: Record<string, string>; broken?: boolean; atRoot?: boolean }
+interface Fixture { folder?: string; id: string; version?: string; dependencies?: string[]; dependencyVersions?: Record<string, string>; broken?: boolean; atRoot?: boolean }
 interface Release { tag_name: string; published_at: string; draft?: boolean; prerelease?: boolean }
 interface Repo { latest?: string; releases: Release[]; refs: Map<string, string>; files: Map<string, Buffer>; allowed?: string[]; redirect?: string }
 const repos = new Map<string, Repo>();
@@ -33,7 +33,7 @@ async function fixture(repo: string, fixtures: Fixture[], ref = 'HEAD', allowed?
   const sha = (++counter).toString(16).padStart(40, '0');
   const root = path.join(tmp, sha, 'archive-root');
   for (const p of fixtures) {
-    const dir = p.atRoot ? root : path.join(root, 'plugins', p.id);
+    const dir = p.atRoot ? root : path.join(root, 'plugins', p.folder ?? p.id);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ id: p.id, name: p.id, version: p.version ?? '1.0.0', dependencies: p.dependencies, dependencyVersions: p.dependencyVersions }));
     fs.writeFileSync(path.join(dir, 'index.ts'), p.broken ? 'export default () => { throw new Error("fixture activation failure"); };' : 'export default () => ({ exports: { value: 1 } });');
@@ -63,6 +63,15 @@ before(async () => {
     if (extraCatalogs.has(url)) return Response.json(extraCatalogs.get(url));
     if (url === catalogUrl) return Response.json(catalogStatus === 200 ? catalog : { error: 'offline' }, { status: catalogStatus });
     if (url === 'https://api.github.com/user') return Response.json({ id: authorization, login: authorization?.slice(7), avatar_url: '' });
+    const content = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/contents\/(.+)\?ref=(.+)$/);
+    if (content) {
+      const spec = repos.get(content[1]);
+      if (!spec) return new Response('', { status: 404 });
+      if (spec.allowed && !spec.allowed.includes(authorization ?? '')) return new Response('', { status: authorization ? 401 : 404 });
+      const sha = spec.refs.get(decodeURIComponent(content[3]));
+      const file = sha && path.join(tmp, sha, 'archive-root', decodeURIComponent(content[2]));
+      return file && fs.existsSync(file) ? new Response(fs.readFileSync(file)) : new Response('', { status: 404 });
+    }
     const m = url.match(/^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)\/(commits|tarball|releases)(?:\/(.+)|\?.+)$/);
     if (m) {
       const spec = repos.get(m[1]);
@@ -634,4 +643,40 @@ test('catalogs retry GitHub access with only the acting administrator’s creden
       assert.equal((await response.json()).plugins[0].id, 'authenticated-listing');
     });
   } finally { config.githubToken = previousToken; catalogResponse = undefined; saveCatalogSources([]); }
+});
+
+
+test('migrated plugin folders discover stable releases by preserved manifest identity', async () => {
+  const { repositoryReleases, releaseRef } = await import('../server/plugins/github-access.ts');
+  const gh = await import('../server/plugins/github.ts');
+  const { plugins } = await import('../server/plugins/manager.ts');
+  const repo = 'owner/migrated-components';
+  const stable = await fixture(repo, [{ id: 'teams-web', folder: 'teams', version: '0.12.2' }, { id: 'word' }], 'HEAD', undefined, false);
+  const spec = repos.get(repo)!;
+  for (const tag of ['teams-web-v0.12.2','teams-web-v0.12.3-beta.1','word-v9.0.0']) spec.refs.set(tag,stable);
+  spec.releases = [
+    {tag_name:'word-v9.0.0',published_at:'2026-10-20'},
+    {tag_name:'teams-web-v0.12.3-beta.1',published_at:'2026-10-19',prerelease:true},
+    {tag_name:'teams-web-v0.12.2',published_at:'2026-10-18'},
+  ];
+  const input = {repo,path:'plugins/teams'};
+  assert.deepEqual((await repositoryReleases(input)).map(r=>r.tag),['teams-web-v0.12.3-beta.1','teams-web-v0.12.2']);
+  assert.equal((await releaseRef(input)).ref,'teams-web-v0.12.2');
+  await assert.rejects(releaseRef({...input,channel:'release',ref:'word-v9.0.0'}),/published release/);
+  await gh.install({...input,channel:'branch'});
+  await gh.update('teams-web',{channel:'latest'});
+  assert.equal(plugins.get('teams-web').source?.ref,'teams-web-v0.12.2');
+  assert.equal(plugins.get('teams-web').source?.commit,stable);
+  assert.equal(plugins.get('teams-web').manifest.id,'teams-web');
+});
+
+test('manifest identity lookup keeps credential fallback and does not borrow sibling releases', async () => {
+  const { repositoryReleases, releaseRef } = await import('../server/plugins/github-access.ts');
+  const repo='owner/private-migrated';
+  const sha=await fixture(repo,[{id:'private-web',folder:'private'}],'HEAD',['Bearer alice-good'],false);
+  const spec=repos.get(repo)!;spec.refs.set('private-web-v1.0.0',sha);spec.releases=[{tag_name:'private-web-v1.0.0',published_at:'2026-10-19'}];
+  assert.equal((await releaseRef({repo,path:'plugins/private'},{user:alice})).ref,'private-web-v1.0.0');
+  assert.deepEqual(await repositoryReleases({repo,path:'plugins/missing'},{user:alice}),[]);
+  spec.releases=[{tag_name:'other-v9.0.0',published_at:'2026-10-20'}];
+  await assert.rejects(releaseRef({repo,path:'plugins/private'},{user:alice}),/No stable release/);
 });

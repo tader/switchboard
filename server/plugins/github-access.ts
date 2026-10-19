@@ -179,7 +179,28 @@ export async function repositoryReleases(input: RepoRef, ctx: GithubContext = {}
     if (denied) continue;
     // release-please supports both repository-wide v1.2.3 and component-v1.2.3 tags.
     const component = input.path?.split('/').at(-1);
-    const scoped = component ? releases.filter((r) => r.tag.startsWith(`${component}-v`)) : [];
+    let scoped = component ? releases.filter((r) => r.tag.startsWith(`${component}-v`)) : [];
+    // A migrated plugin can keep its ID/tag prefix while living in a shorter folder
+    // (e.g. plugins/teams contains teams-web, released as teams-web-v0.12.2).
+    if (!scoped.length && input.path && releases.some((r) => /^[a-z][a-z0-9-]*-v\d/.test(r.tag))) {
+      const file = [...input.path.split('/'), 'plugin.json'].map(encodeURIComponent).join('/');
+      const ref = input.channel === 'release' && input.ref ? input.ref : 'HEAD';
+      let res: Response;
+      try { res = await request(`https://api.github.com/repos/${input.repo}/contents/${file}?ref=${encodeURIComponent(ref)}`, 'application/vnd.github.raw+json', credential, ctx, true); }
+      catch (e) { if (retryCredential(e, credential, ctx)) { error = e; continue; } throw e; }
+      if (res.status === 404) await res.body?.cancel(); // Preserve repository-wide releases for non-plugin folders.
+      else if (!res.ok) {
+        const retry = accessFailure(res);
+        error = await githubError(res, input.repo);
+        if (retry) continue;
+        throw error;
+      } else {
+        let manifest: { id?: unknown };
+        try { manifest = await res.json(); } catch { throw badRequest('GitHub returned an invalid plugin manifest'); }
+        if (!manifest || typeof manifest.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(manifest.id)) throw badRequest('GitHub returned an invalid plugin manifest');
+        scoped = releases.filter((r) => r.tag.startsWith(`${manifest.id}-v`));
+      }
+    }
     const result = scoped.length ? scoped : releases.filter((r) => !/^[a-z][a-z0-9-]*-v\d/.test(r.tag));
     return result;
   }
