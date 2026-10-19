@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/tader/switchboard/compare/v0.7.0...v0.7.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* allow shared authentication sources to recover from errors ([0015192](https://github.com/tader/switchboard/commit/0015192811adc7c78e2f78f97c677abfc0f00810))
+* recover errored peer authentication sources ([4a7932a](https://github.com/tader/switchboard/commit/4a7932ab0461055c8984512be3c9bb3747879b3a))
+
 ## [0.7.0](https://github.com/tader/switchboard/compare/v0.6.1...v0.7.0) (2026-10-16)
 
 
