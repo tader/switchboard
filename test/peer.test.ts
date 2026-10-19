@@ -224,6 +224,16 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   await waitFor(() => waitingMcp);
   assert.equal((await peerRequest('PUT', `/api/connections/${localMcp.data.connection.id}/shares`, { peerIds: [] })).status, 200);
   assert.equal((await pendingMcp).status, 499, 'share revocation cancels an in-flight peer MCP request');
+  await waitFor(async () => !(await request('GET', '/api/connections')).data.some((c: any) => c.id === remoteMcpId));
+  assert.equal((await request('GET', `/api/connections/${remoteMcpId}`)).status, 404);
+  assert((await request('GET', '/api/calls')).data.some((call: any) => call.id === savedRemote.data.id), 'saved calls survive revocation');
+  assert.equal((await request('POST', `/api/calls/${savedRemote.data.id}/run`, {})).status, 403);
+  await peerRequest('PUT', `/api/connections/${localMcp.data.connection.id}/shares`, { peerIds: [peerId] });
+  await waitFor(async () => (await request('GET', '/api/connections')).data.some((c: any) => c.id === remoteMcpId));
+  assert.equal((await request('POST', `/api/calls/${savedRemote.data.id}/run`, {})).status, 200, 're-sharing restores the same handle and saved calls');
+  await peerRequest('PUT', `/api/connections/${localMcp.data.connection.id}/shares`, { peerIds: [] });
+  await waitFor(async () => !(await request('GET', '/api/connections')).data.some((c: any) => c.id === remoteMcpId));
+
 
   const centralDb = fs.readFileSync(path.join(centralDir, 'switchboard.db'));
   assert.equal(centralDb.includes(Buffer.from('peer-only-secret')), false, 'central database contains no local credential plaintext');
@@ -296,7 +306,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.deepEqual(bothMcp.map(r => r.status), [200, 200]);
   assert.deepEqual(bothMcp.map(r => r.data.structuredContent), [{ direction: 'outgoing' }, { direction: 'incoming' }]);
   assert.equal((await request('PUT', `/api/connections/${reverseLocal.data.connection.id}/shares/${incomingPeerId}`, { shared: false })).status, 200);
-  await waitFor(async () => (await peerRequest('GET', '/api/connections')).data.find((c: any) => c.id === reverseHandle.id)?.status === 'unavailable');
+  await waitFor(async () => !(await peerRequest('GET', '/api/connections')).data.some((c: any) => c.id === reverseHandle.id));
   assert.equal((await peerRequest('POST', '/api/call', { connection: reverseHandle.id })).status, 403);
 
   // A second peer receives a different selection, independently of the first.
@@ -341,7 +351,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   await waitFor(async () => (await peerRequest('GET', '/api/admin/peers')).data.some((s: any) => s.name === 'Reverse link' && s.online));
   assert.deepEqual((await peerRequest('GET', '/api/admin/peers')).data.find((s: any) => s.name === 'Reverse link').connections, []);
   await peerRequest('PUT', `/api/connections/${local.data.connection.id}/shares`, { peerIds: [] });
-  await waitFor(async () => (await secondRequest('GET', '/api/connections')).data.find((c: any) => c.id === chainHandle.id)?.status === 'unavailable');
+  await waitFor(async () => !(await secondRequest('GET', '/api/connections')).data.some((c: any) => c.id === chainHandle.id));
   assert.equal((await secondRequest('POST', '/api/call', { connection: chainHandle.id, method: 'GET', url: '/local' })).status, 403);
   assert.equal((await secondRequest('POST', '/api/call', { connection: 'second-only', method: 'GET', url: '/local' })).status, 200);
 

@@ -125,6 +125,14 @@ export function listConnections(userId: string, only?: string[] | null): Connect
   syncPeerConnections(userId);
   return all('SELECT * FROM connections WHERE user_id = ? ORDER BY service_id, name COLLATE NOCASE', userId)
     .filter((r) => !only || only.includes(r.id))
+    .filter((r) => {
+      if (!r.peer_id) return true;
+      // Keep internal handles for saved calls and future re-sharing, but only
+      // advertise connections still present in the user's authorized peer catalog.
+      // An offline peer retains its catalog, so its connections remain visible.
+      try { peerConnection(userId, r.peer_id, r.remote_connection_id); return true; }
+      catch { return false; }
+    })
     .map(toView);
 }
 

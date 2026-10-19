@@ -183,7 +183,7 @@ test('plugin releases, installation and updates use a shared GitHub connection w
   const preview = await consumer.call('POST', '/api/admin/plugins/update/plan', { updates: [{ id: 'peer-github-app', githubConnectionId: shared.id }] });
   assert.equal(preview.status, 200, JSON.stringify(preview.data));
   await owner.call('PUT', `/api/connections/${ownerConnection}/shares`, { peerIds: [] });
-  await waitFor(async () => (await consumer.call('GET', '/api/connections')).data.find((c: any) => c.id === shared.id)?.status === 'unavailable');
+  await waitFor(async () => !(await consumer.call('GET', '/api/connections')).data.some((c: any) => c.id === shared.id));
   const applied = await consumer.call('POST', '/api/admin/plugins/apply', { planId: preview.data.planId });
   assert.equal(applied.status, 503, JSON.stringify(applied.data));
   assert.equal((await consumer.call('GET', '/api/admin/plugins/peer-github-app')).data.version, '1.1.0');

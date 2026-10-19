@@ -78,6 +78,9 @@ test('credential transfers require an explicit grant; imported credentials work 
  const raw=await server.request('GET',`/api/connections/${remote.id}/token`);assert.notEqual(raw.status,200);
  await laptop.request('PATCH',`/api/admin/peers/${peer}`,{disabled:true});
  await waitFor(async()=>!(await server.request('GET','/api/admin/peers')).data.some((p:any)=>p.online));
+ const offlineSource=(await server.request('GET','/api/connections')).data.find((c:any)=>c.id===remote.id);
+ assert(offlineSource,'a temporarily offline peer connection stays visible');
+ assert.equal(offlineSource.status,'unavailable');
  assert.equal((await call()).status,200,'cached credentials survive a disconnected laptop');
  const stopped=new Promise(resolve=>server.child.once('exit',resolve));server.child.kill();await stopped;server=await launch('server',port+500);
  assert.equal((await call()).status,200,'encrypted imported credentials survive restart while the laptop is offline');

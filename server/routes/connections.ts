@@ -50,6 +50,7 @@ api.get('/connections/:ref', (c) => {
   const row = getConnectionRow(c.get('user').id, c.req.param('ref'));
   assertConnectionAccess(c, row.id);
   const view = listConnections(c.get('user').id, [row.id])[0];
+  if (!view) throw notFound('This connection is no longer shared with you');
   return c.json(c.get('token')?.connectionIds && view.credential ? { ...view, credential: null, reusable: false, canIssueToken: false } : view);
 });
 
