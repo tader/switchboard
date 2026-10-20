@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.2](https://github.com/tader/switchboard/compare/v0.7.1...v0.7.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* allow local removal of stale peer connections ([04a976e](https://github.com/tader/switchboard/commit/04a976e849e0becc3b50bd21b79e7c1ccb16700b))
+* allow local removal of stale peer connections ([d96d95d](https://github.com/tader/switchboard/commit/d96d95df18a88af1d32be6e0c492aa523314e7b8))
+
 ## [0.7.1](https://github.com/tader/switchboard/compare/v0.7.0...v0.7.1) (2026-10-19)
 
 
