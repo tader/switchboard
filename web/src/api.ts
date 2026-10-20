@@ -94,6 +94,7 @@ export interface Connection {
   reusable?: boolean;
   icon?: string;
   readOnly: boolean;
+  canRemove?: boolean;
   kind: 'http' | 'mcp';
   id: string;
   name: string;

@@ -111,7 +111,7 @@ export function openapiDocument() {
         delete: op('Admin', 'Remove a peer and its sharing grants', { parameters: [id('Peer id')] }),
       },
       '/api/connections': {
-        get: op('Connections', 'List local connections and read-only shared handles', { description: 'readOnly=true identifies imported peer connections. Only execution, OpenAPI discovery and explicit onward sharing are supported for imported handles.' }),
+        get: op('Connections', 'List local connections and read-only shared handles', { description: 'readOnly=true identifies imported peer connections. Imported handles support execution, OpenAPI discovery and explicit onward sharing. canRemove=true allows removal of a stale handle whose peer no longer shares it.' }),
         post: op('Connections', 'Connect an account', {
           description: 'Returns status "connected", "redirect" (open url in a browser) or "device" (show the code, then poll).',
           requestBody: json(
@@ -133,7 +133,7 @@ export function openapiDocument() {
       '/api/connections/{ref}': {
         get: op('Connections', 'Get a connection', { parameters: [ref] }),
         patch: op('Connections', 'Rename a connection', { parameters: [ref], requestBody: json({ type: 'object', properties: { name: { type: 'string', description: 'New name; scripts using the old one stop working' } } }, { name: '' }) }),
-        delete: op('Connections', 'Disconnect', { parameters: [ref] }),
+        delete: op('Connections', 'Disconnect or remove a stale peer handle', { parameters: [ref], description: 'Disconnects a local connection, or removes an imported handle no longer shared by its peer. Saved calls are kept. Removing a stale handle does not change the remote connection. Still-shared handles cannot be removed.' }),
       },
       '/api/connections/{ref}/reconnect': { post: op('Connections', 'Sign in again', { parameters: [ref], description: 'Full-access owners only. Shared reconnection updates the credential for every linked service; independent requires a fresh private OAuth grant.', requestBody: json({ type: 'object', properties: { method: { type: 'string' }, config: { type: 'object' }, credentialId: { type: 'string' }, independent: { type: 'boolean' } } }, {}) }) },
       '/api/connections/{ref}/token': {
