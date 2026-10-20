@@ -229,6 +229,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.equal(centralDb.includes(Buffer.from('peer-only-secret')), false, 'central database contains no local credential plaintext');
   assert.equal((await request('GET', `/api/connections/${connected.data.connection.id}/token`)).status, 400, 'raw tokens stay on the peer');
   assert.equal((await request('DELETE', `/api/connections/${connected.data.connection.id}`)).status, 403);
+  assert.equal(connected.data.connection.canRemove, false, 'active shared handles cannot be removed');
 
   const shellService = (await peerRequest('GET', '/api/services')).data.find((s: any) => s.id === 'shell-command');
   assert.equal(shellService.methods[0].fields[0].type, 'text');
@@ -242,6 +243,15 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.equal(shellCall.status, 200, JSON.stringify(shellCall.data));
   assert.equal(shellCall.data.body, 'peer command output\n');
   assert.equal((await peerRequest('DELETE', `/api/connections/${localShell.data.connection.id}`)).status, 200);
+  await waitFor(async () => (await request('GET', `/api/connections/${shell.data.connection.id}`)).data.canRemove === true);
+  const staleSaved = await request('POST', '/api/calls', { name: 'stale-peer-call', connectionId: shell.data.connection.id, method: 'GET', url: '/' });
+  assert.equal(staleSaved.status, 201);
+  assert.equal((await request('DELETE', `/api/connections/${shell.data.connection.id}`)).status, 200, 'a deleted remote connection can be removed locally');
+  assert.equal((await request('GET', `/api/connections/${shell.data.connection.id}`)).status, 404);
+  for (let i = 0; i < 2; i++) assert.ok(!(await request('GET', '/api/connections')).data.some((c: any) => c.id === shell.data.connection.id), 'catalog sync must not recreate a removed stale handle');
+  const keptSaved = (await request('GET', '/api/calls')).data.find((c: any) => c.id === staleSaved.data.id);
+  assert.ok(keptSaved, 'saved calls are retained');
+  assert.equal(keptSaved.connectionId, null);
 
   // The receiving machine shares back over the same socket; both ends call simultaneously.
   const incomingPeerId = enrolled.data.peer.id;
@@ -298,6 +308,15 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.equal((await request('PUT', `/api/connections/${reverseLocal.data.connection.id}/shares/${incomingPeerId}`, { shared: false })).status, 200);
   await waitFor(async () => (await peerRequest('GET', '/api/connections')).data.find((c: any) => c.id === reverseHandle.id)?.status === 'unavailable');
   assert.equal((await peerRequest('POST', '/api/call', { connection: reverseHandle.id })).status, 403);
+  assert.equal((await peerRequest('GET', `/api/connections/${reverseHandle.id}`)).data.canRemove, true);
+  assert.equal((await peerRequest('DELETE', `/api/connections/${reverseHandle.id}`)).status, 200, 'an unshared handle can be removed locally');
+  assert.equal((await request('GET', `/api/connections/${reverseLocal.data.connection.id}`)).status, 200, 'local removal must not delete the origin');
+  assert.ok(!(await peerRequest('GET', '/api/connections')).data.some((c: any) => c.id === reverseHandle.id));
+  await request('PUT', `/api/connections/${reverseLocal.data.connection.id}/shares/${incomingPeerId}`, { shared: true });
+  await waitFor(async () => (await peerRequest('GET', '/api/connections')).data.some((c: any) => c.name === 'from-server'));
+  const resharedHandle = (await peerRequest('GET', '/api/connections')).data.find((c: any) => c.name === 'from-server');
+  assert.notEqual(resharedHandle.id, reverseHandle.id, 'an explicit new share creates a fresh local handle');
+  assert.equal(resharedHandle.canRemove, false);
 
   // A second peer receives a different selection, independently of the first.
   const secondPort = centralPort + 6000;

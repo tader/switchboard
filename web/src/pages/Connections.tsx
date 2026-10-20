@@ -66,16 +66,16 @@ export function Connections() {
 
   const remove = async (c: Connection) => {
     const ok = await confirm({
-      title: `Disconnect ${c.account?.label ?? c.name}?`,
-      message: 'Scripts using this connection will stop working. Saved calls are kept.',
-      confirm: 'Disconnect',
+      title: `${c.peer ? 'Remove local connection' : 'Disconnect'} ${c.account?.label ?? c.name}?`,
+      message: c.peer ? 'Remove this stale connection from this device. Saved calls are kept. The remote connection is unchanged.' : 'Scripts using this connection will stop working. Saved calls are kept.',
+      confirm: c.peer ? 'Remove' : 'Disconnect',
       danger: true,
     });
     if (!ok) return;
     try {
       await api(`/connections/${c.id}`, { method: 'DELETE' });
       connections.setData((d) => d?.filter((x) => x.id !== c.id));
-      toast('Disconnected');
+      toast(c.peer ? 'Local connection removed' : 'Disconnected');
     } catch (e: any) {
       toast(e.message, 'error');
     }
@@ -91,7 +91,7 @@ export function Connections() {
     { label: 'Manage credentials', icon: <KeyRound />, onSelect: () => navigate(`/credentials?connection=${c.id}`), hidden: c.readOnly || !c.reusable },
     { label: 'Make independent', icon: <KeyRound />, onSelect: async () => { if (c.credential?.kind === 'oauth') setConnect({ service, connection: c, independent: true }); else { try { await api(`/connections/${c.id}/credential/independent`, { body: {} }); connections.reload(); } catch (e: any) { toast(e.message, 'error'); } } }, hidden: !c.credential || c.readOnly },
     'separator',
-    { label: 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true, hidden: c.readOnly },
+    { label: c.peer ? 'Remove local connection' : 'Disconnect', icon: <Trash2 />, onSelect: () => remove(c), danger: true, hidden: c.readOnly && !c.canRemove },
   ]} />;
 
   const hasPeers = connections.data?.some(c => c.peer) ?? false;

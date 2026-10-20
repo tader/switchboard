@@ -14,6 +14,8 @@ export interface ConnectionView {
   kind: 'http' | 'mcp';
   icon?: string;
   readOnly: boolean;
+  /** A stale imported handle can be removed locally without changing its origin. */
+  canRemove?: boolean;
   id: string;
   name: string;
   serviceId: string;
@@ -78,7 +80,7 @@ export function toView(r: any): ConnectionView {
     let peer: any; let remote: any;
     try { peer = getPeer(r.peer_id); remote = peerConnection(r.user_id, r.peer_id, r.remote_connection_id); } catch {}
     const unavailable = !peer?.online || !remote || remote.status !== 'ok';
-    return { kind: r.kind ?? 'http', readOnly: true, id: conn.id, name: conn.name, serviceId: conn.serviceId,
+    return { kind: r.kind ?? 'http', readOnly: true, canRemove: !remote, id: conn.id, name: conn.name, serviceId: conn.serviceId,
       icon: remote?.icon, serviceName: remote?.serviceName ?? conn.serviceId.split('/').at(-1)!.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' '), methodId: 'shared', methodName: 'Shared connection', account: null, config: {},
       status: unavailable ? 'unavailable' : 'ok', statusMessage: !remote ? 'This connection is no longer shared with you' : !peer?.online ? `${peer.name} is offline` : remote.status !== 'ok' ? 'The connection is unavailable on its peer' : null,
       baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, hasWebSocket: !!remote?.hasWebSocket, canIssueToken: false, redirectUri: null,
@@ -210,8 +212,16 @@ export function renameConnection(userId: string, ref: string, name: string) {
 
 export async function deleteConnection(userId: string, ref: string) {
   const row = getConnectionRow(userId, ref);
+  if (row.peer_id) {
+    let shared = false;
+    try { peerConnection(userId, row.peer_id, row.remote_connection_id); shared = true; } catch {}
+    if (shared) throw new HttpError(403, 'This connection is still shared by its peer');
+    connectionChanged(row.id);
+    run('DELETE FROM connections WHERE id = ?', row.id);
+    run('UPDATE saved_calls SET connection_id = NULL WHERE connection_id = ?', row.id);
+    return;
+  }
   connectionChanged(row.id);
-  if (row.peer_id) throw new HttpError(403, 'Shared peer connections are managed on their peer');
   const conn = rowToConnection(row);
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
