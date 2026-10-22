@@ -278,3 +278,9 @@ Authentication methods can set `hidden: true` to retain handlers for existing co
 ## QR device pairing
 
 Cores with `ctx.capabilities?.deviceQr` support returning `{ device: { qrCode, instructions?, expiresIn?, interval? }, pending? }` from `connect`. `qrCode` is the raw provisioning text (up to 4096 characters), rendered locally by the browser. Instructions are plain text, up to 1000 characters. Use this alternative without `userCode` or `verificationUri`. Pairing expires, polls and cancels through the usual device-flow endpoints. Check the capability before offering QR-only sign-in on older cores. Existing code-based device authorization is unchanged.
+
+### Browser sign-in and changing pairing displays
+
+With `ctx.capabilities?.deviceBrowser`, return `{ device: { browser: true, instructions, expiresIn?, interval? }, pending? }` when the plugin opens its own authentication browser. Switchboard shows the plain-text instructions and a sign-in spinner without a device code or copy/open button. Explain where the browser opens, especially when Switchboard runs on another computer.
+
+With `ctx.capabilities?.deviceUpdates`, `poll()` may return `{ wait: true, device, pending?, interval? }` to replace the displayed instructions or QR. The device payload follows the same validation as `connect()`; updates never extend the original flow deadline. QR presentations may include `qrExpiresAt` (Unix milliseconds) so the browser hides an expired image while awaiting its replacement. Render QR payloads locally and never log pairing material.

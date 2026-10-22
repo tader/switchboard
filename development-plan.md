@@ -385,3 +385,14 @@ plugin integration and deployment are outside this change.
   connection search restoration, scoped sharing, HTTP/WebSocket draft and result
   retention, commands, subscription continuity/stop, MCP results, Activity Live
   and chart restoration, light/dark styling, and a 400px viewport. No deployment.
+
+
+## Browser authentication and rotating QR presentations
+
+- [x] Add browser-managed sign-in instructions without placeholder codes or copy/open controls.
+- [x] Add validated device presentation updates and independent QR expiry without extending the connect-flow deadline.
+- [x] Reject authentication results arriving after cancellation or expiry.
+- [x] Verify 132 core tests, server typecheck and web production build.
+- [x] Inspect Chrome light/dark/narrow browser dialogs and QR rotation/expiry; retain code pairing controls.
+- [x] Exercise WhatsApp installer, plugin manager, both pairing methods, rotation, encrypted storage and restart against this core.
+- Publishing: pending protected PR checks and Release Please rollout; no deployment performed.
