@@ -305,6 +305,7 @@ class PluginManager {
       dir: p.dir,
       dataDir,
       peer: hasConfiguredPeers(),
+      capabilities: { deviceQr: true },
       mcp: { oauth: mcpOAuth },
       credentials: { obtain: obtainCredentials },
     };

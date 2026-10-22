@@ -58,6 +58,8 @@ export interface PluginContext {
   dataDir: string;
   /** True when this instance has a peer connection configured. */
   peer: boolean;
+  /** Optional for compatibility with older Switchboard instances. */
+  capabilities?: { deviceQr?: boolean };
   /** Core MCP OAuth discovery and encrypted connect-flow integration. */
   mcp: { oauth(): AuthMethod };
   /** Backend-only, bound to the acting user and consumer source selection. */
@@ -110,15 +112,24 @@ export interface Connected {
   config?: Record<string, any>;
 }
 
-export interface DeviceAuthorization {
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete?: string;
-  /** Seconds until the code expires. */
+export type DeviceAuthorization = {
+  /** Seconds until pairing expires. */
   expiresIn?: number;
   /** Seconds between polls. */
   interval?: number;
-}
+} & ({
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  qrCode?: never;
+} | {
+  /** Raw pairing text. The browser renders it locally, never via a third party. */
+  qrCode: string;
+  instructions?: string;
+  userCode?: never;
+  verificationUri?: never;
+  verificationUriComplete?: never;
+});
 
 /**
  * Result of a connect step:
