@@ -59,7 +59,7 @@ export interface PluginContext {
   /** True when this instance has a peer connection configured. */
   peer: boolean;
   /** Optional for compatibility with older Switchboard instances. */
-  capabilities?: { deviceQr?: boolean };
+  capabilities?: { deviceQr?: boolean; deviceUpdates?: boolean; deviceBrowser?: boolean };
   /** Core MCP OAuth discovery and encrypted connect-flow integration. */
   mcp: { oauth(): AuthMethod };
   /** Backend-only, bound to the acting user and consumer source selection. */
@@ -122,27 +122,41 @@ export type DeviceAuthorization = {
   verificationUri: string;
   verificationUriComplete?: string;
   qrCode?: never;
+  qrExpiresAt?: never;
+  browser?: never;
 } | {
   /** Raw pairing text. The browser renders it locally, never via a third party. */
   qrCode: string;
+  /** Unix milliseconds when this QR expires, independent of the overall flow. */
+  qrExpiresAt?: number;
   instructions?: string;
+  browser?: never;
   userCode?: never;
   verificationUri?: never;
   verificationUriComplete?: never;
+} | {
+  /** Authentication is managed by a browser launched by the plugin. */
+  browser: true;
+  instructions: string;
+  userCode?: never;
+  verificationUri?: never;
+  verificationUriComplete?: never;
+  qrCode?: never;
+  qrExpiresAt?: never;
 });
 
 /**
  * Result of a connect step:
  *  - Connected: done
  *  - { redirect }: send the user's browser there; the provider returns to ctx.callbackUrl
- *  - { device }: show the code to the user and poll() until done
+ *  - { device }: present pairing instructions and poll() until done
  */
 export type ConnectStep =
   | Connected
   | { redirect: string; pending?: any }
   | { device: DeviceAuthorization; pending?: any };
 
-export type PollResult = Connected | { wait: true; pending?: any; interval?: number };
+export type PollResult = Connected | { wait: true; pending?: any; interval?: number; device?: DeviceAuthorization };
 
 export interface ConnectArgs {
   config: Record<string, any>;

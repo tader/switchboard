@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { BookOpen, Code2, ExternalLink, FileKey, History, KeyRound, Laptop, LayoutGrid, List, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal, Trash2, Unlock } from 'lucide-react';
 import { ConnectionSharing } from '../components/ConnectionSharing';
-import { api, type Connection, type FlowResult, type Service } from '../api';
+import { api, type Connection, type FlowResult, type PendingFlowResult, type Service } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
@@ -368,10 +368,13 @@ export function ConnectDialog({
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const r = await api<FlowResult | { status: 'pending'; interval?: number }>(`/connect/${step.flowId}/poll`, { method: 'POST' });
+        const r = await api<FlowResult | PendingFlowResult>(`/connect/${step.flowId}/poll`, { method: 'POST' });
         if (stopped) return;
         if (r.status === 'pending') {
-          if (r.interval) delay = r.interval * 1000;
+          const interval = r.interval ?? r.device?.interval;
+          if (interval) delay = Math.max(1, interval) * 1000;
+          const device = r.device;
+          if (device) setStep(current => current.kind === 'device' && current.flowId === step.flowId ? { ...current, device } : current);
           timer = setTimeout(poll, delay);
         } else handle(r as FlowResult);
       } catch (err: any) {
@@ -387,7 +390,7 @@ export function ConnectDialog({
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, open]);
+  }, [step.kind, step.kind === 'device' ? step.flowId : undefined, open]);
 
   const close = () => {
     if (step.kind === 'device' || step.kind === 'paste') api(`/connect/${step.flowId}`, { method: 'DELETE' }).catch(() => {});
@@ -525,7 +528,7 @@ export function ConnectDialog({
           <PairingInstructions device={step.device} />
           <p className="flex items-center justify-center gap-2 text-xs text-zinc-500">
             <Spinner className="size-3.5" />
-            Waiting for approval…
+            {step.device.browser ? 'Waiting for sign-in to complete…' : 'Waiting for approval…'}
           </p>
         </div>
       )}
@@ -536,7 +539,15 @@ export function ConnectDialog({
 function PairingInstructions({ device }: { device: Extract<FlowResult, { status: 'device' }>['device'] }) {
   const [image, setImage] = useState('');
   const [error, setError] = useState(false);
+  const [expired, setExpired] = useState(false);
   const payload = device.qrCode;
+  useEffect(() => {
+    const deadline = device.qrExpiresAt;
+    setExpired(deadline !== undefined && deadline <= Date.now());
+    if (deadline === undefined || deadline <= Date.now()) return;
+    const timer = setTimeout(() => setExpired(true), Math.min(deadline - Date.now(), 2_147_483_647));
+    return () => clearTimeout(timer);
+  }, [payload, device.qrExpiresAt]);
   useEffect(() => {
     let active = true;
     setImage('');
@@ -546,9 +557,10 @@ function PairingInstructions({ device }: { device: Extract<FlowResult, { status:
       .catch(() => { if (active) setError(true); });
     return () => { active = false; };
   }, [payload]);
+  if (device.browser) return <p className="text-[13px] text-zinc-600 dark:text-zinc-300">{device.instructions}</p>;
   if (device.qrCode !== undefined) return <div className="space-y-4">
     <p className="text-[13px] text-zinc-600 dark:text-zinc-300">{device.instructions ?? 'Scan this QR code with your device to connect.'}</p>
-    {error ? <Alert>Could not display the pairing code. Close this dialog and try again.</Alert> : image ?
+    {expired ? <div className="flex h-[280px] items-center justify-center gap-2 text-sm text-zinc-500"><Spinner />Refreshing QR code…</div> : error ? <Alert>Could not display the pairing code. Close this dialog and try again.</Alert> : image ?
       <img src={image} alt="Device pairing QR code" className="mx-auto size-[280px] max-w-full rounded-lg bg-white" /> :
       <div className="flex h-[280px] items-center justify-center"><Spinner /></div>}
   </div>;

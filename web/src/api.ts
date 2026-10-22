@@ -117,10 +117,41 @@ export interface Connection {
   peer: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
-export type DeviceAuthorization = { expiresIn?: number; interval: number } & (
-  { userCode: string; verificationUri: string; verificationUriComplete?: string; qrCode?: never } |
-  { qrCode: string; instructions?: string; userCode?: never; verificationUri?: never; verificationUriComplete?: never }
-);
+export type DeviceAuthorization = {
+  /** Seconds until pairing expires. */
+  expiresIn?: number;
+  /** Seconds between polls. */
+  interval: number;
+} & ({
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  qrCode?: never;
+  qrExpiresAt?: never;
+  browser?: never;
+} | {
+  /** Raw pairing text. The browser renders it locally, never via a third party. */
+  qrCode: string;
+  /** Unix milliseconds when this QR expires, independent of the overall flow. */
+  qrExpiresAt?: number;
+  instructions?: string;
+  browser?: never;
+  userCode?: never;
+  verificationUri?: never;
+  verificationUriComplete?: never;
+} | {
+  /** Authentication is managed by a browser launched by the plugin. */
+  browser: true;
+  instructions: string;
+  userCode?: never;
+  verificationUri?: never;
+  verificationUriComplete?: never;
+  qrCode?: never;
+  qrExpiresAt?: never;
+});
+
+
+export type PendingFlowResult = { status: 'pending'; interval?: number; device?: DeviceAuthorization };
 
 export type FlowResult =
   | { status: 'connected'; connection: Connection }

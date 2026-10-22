@@ -400,20 +400,36 @@ interface FlowInfo {
   redirectUri?: string;
 }
 
+/** Apply the same contract to initial presentations and updates from poll(). */
+function validateDevice(device: DeviceAuthorization): DeviceAuthorization & { interval: number } {
+  if (!device || typeof device !== 'object') throw badRequest('Invalid device authorization');
+  const qr = device.qrCode !== undefined, browser = device.browser !== undefined;
+  if (qr) {
+    if (typeof device.qrCode !== 'string' || !device.qrCode || device.qrCode.length > 4096 ||
+      browser || device.userCode !== undefined || device.verificationUri !== undefined || device.verificationUriComplete !== undefined ||
+      (device.qrExpiresAt !== undefined && (!Number.isFinite(device.qrExpiresAt) || device.qrExpiresAt <= 0))) throw badRequest('Invalid QR pairing data');
+  } else if (browser) {
+    if (device.browser !== true || typeof device.instructions !== 'string' || !device.instructions.trim() ||
+      device.userCode !== undefined || device.verificationUri !== undefined || device.verificationUriComplete !== undefined || device.qrExpiresAt !== undefined) throw badRequest('Invalid browser sign-in data');
+  } else if (typeof device.userCode !== 'string' || !device.userCode || typeof device.verificationUri !== 'string' || !device.verificationUri || device.qrExpiresAt !== undefined) {
+    throw badRequest('Invalid device code data');
+  }
+  if ('instructions' in device && device.instructions !== undefined && (typeof device.instructions !== 'string' || device.instructions.length > 1000)) throw badRequest('Invalid pairing instructions');
+  if ((device.expiresIn !== undefined && (!Number.isFinite(device.expiresIn) || device.expiresIn <= 0)) ||
+    (device.interval !== undefined && (!Number.isFinite(device.interval) || device.interval <= 0))) throw badRequest('Invalid device authorization timing');
+  return { ...device, interval: device.interval ?? 5 };
+}
+
 function handleStep(user: User, step: ConnectStep, f: FlowInfo): FlowResult {
   if ('redirect' in step) {
     saveFlow(user, f, 'redirect', step.pending, 15 * 60);
     return { status: 'redirect', flowId: f.flowId, url: step.redirect, ...(f.redirectUri ? { manual: true } : {}) };
   }
   if ('device' in step) {
-    if (step.device.qrCode !== undefined && (
-      typeof step.device.qrCode !== 'string' || !step.device.qrCode || step.device.qrCode.length > 4096 ||
-      step.device.userCode !== undefined || step.device.verificationUri !== undefined ||
-      (step.device.instructions !== undefined && (typeof step.device.instructions !== 'string' || step.device.instructions.length > 1000))
-    )) throw badRequest('Invalid QR pairing data');
+    const device = validateDevice(step.device);
     const expiresIn = step.device.expiresIn ?? 900;
     saveFlow(user, f, 'device', step.pending, expiresIn);
-    return { status: 'device', flowId: f.flowId, device: { ...step.device, interval: step.device.interval ?? 5 } };
+    return { status: 'device', flowId: f.flowId, device };
   }
   return { status: 'connected', connection: storeConnection(user, f, step) };
 }
@@ -484,7 +500,7 @@ export async function completeFromPaste(flowId: string, pasted: string, user: Us
   return completeRedirect(flowId, { ...params, state: flowId }, user);
 }
 
-export async function pollDevice(flowId: string, user: User): Promise<FlowResult | { status: 'pending'; interval?: number }> {
+export async function pollDevice(flowId: string, user: User): Promise<FlowResult | { status: 'pending'; interval?: number; device?: DeviceAuthorization & { interval: number } }> {
   if (one('SELECT 1 FROM connect_flows WHERE id = ? AND peer_id IS NOT NULL', flowId)) throw badRequest('Legacy peer sign-in is no longer supported; sign in on the peer');
   const { r, service, method, cfg, pending } = loadFlow(flowId, 'device');
   if (r.user_id !== user.id) throw notFound();
@@ -497,9 +513,15 @@ export async function pollDevice(flowId: string, user: User): Promise<FlowResult
     run('DELETE FROM connect_flows WHERE id = ?', flowId);
     throw e;
   }
+  // A user may cancel, or the original deadline may pass, during plugin I/O.
+  // Never complete or update an attempt that no longer exists.
+  loadFlow(flowId, 'device');
   if ('wait' in result) {
+    let device;
+    try { device = result.device === undefined ? undefined : validateDevice(result.device); }
+    catch (error) { run('DELETE FROM connect_flows WHERE id = ?', flowId); throw error; }
     if (result.pending !== undefined) run('UPDATE connect_flows SET pending_enc = ? WHERE id = ?', encrypt(result.pending), flowId);
-    return { status: 'pending', interval: result.interval };
+    return { status: 'pending', interval: result.interval, ...(device ? { device } : {}) };
   }
   run('DELETE FROM connect_flows WHERE id = ?', flowId);
   const view = storeConnection(user, { flowId, service, method, cfg, name: r.name ?? undefined, connectionId: r.connection_id ?? undefined }, result);
