@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/tader/switchboard/compare/v0.7.2...v0.8.0) (2026-10-22)
+
+
+### Features
+
+* support browser sign-in and rotating QR presentations ([#33](https://github.com/tader/switchboard/issues/33)) ([1db4d3d](https://github.com/tader/switchboard/commit/1db4d3dbd4b6843df4be6bd7a541a363c8e8afb3))
+* support QR device pairing and Debian-based containers ([#31](https://github.com/tader/switchboard/issues/31)) ([8a09c51](https://github.com/tader/switchboard/commit/8a09c51d833ced905290eda600feb6ca93c599f6))
+
 ## [0.7.2](https://github.com/tader/switchboard/compare/v0.7.1...v0.7.2) (2026-10-20)
 
 
