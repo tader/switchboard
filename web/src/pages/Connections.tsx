@@ -1,3 +1,4 @@
+import QRCode from 'qrcode';
 import { ListToolbar, SortHeader, useList, useViewState } from '../components/ListControls';
 import { CredentialPicker, type CredentialCandidate } from '../components/CredentialPicker';
 import { useEffect, useMemo, useState } from 'react';
@@ -521,22 +522,7 @@ export function ConnectDialog({
 
       {step.kind === 'device' && (
         <div className="space-y-5 py-2 text-center">
-          <p className="text-[13px] text-zinc-600 dark:text-zinc-300">Enter this code on the sign-in page:</p>
-          <div className="flex items-center justify-center gap-2">
-            <code className="rounded-xl bg-zinc-100 px-5 py-3 font-mono text-2xl font-semibold tracking-[0.2em] dark:bg-zinc-800">{step.device.userCode}</code>
-          </div>
-          <div className="flex justify-center gap-2">
-            <Button
-              variant="primary"
-              icon={<ExternalLink className="size-4" />}
-              onClick={() => {
-                navigator.clipboard?.writeText(step.device.userCode).catch(() => {});
-                window.open(step.device.verificationUriComplete ?? step.device.verificationUri, '_blank', 'noopener');
-              }}
-            >
-              Copy code and open {safeHost(step.device.verificationUri)}
-            </Button>
-          </div>
+          <PairingInstructions device={step.device} />
           <p className="flex items-center justify-center gap-2 text-xs text-zinc-500">
             <Spinner className="size-3.5" />
             Waiting for approval…
@@ -545,6 +531,37 @@ export function ConnectDialog({
       )}
     </Dialog>
   );
+}
+
+function PairingInstructions({ device }: { device: Extract<FlowResult, { status: 'device' }>['device'] }) {
+  const [image, setImage] = useState('');
+  const [error, setError] = useState(false);
+  const payload = device.qrCode;
+  useEffect(() => {
+    let active = true;
+    setImage('');
+    setError(false);
+    if (payload) QRCode.toDataURL(payload, { width: 280, margin: 4, errorCorrectionLevel: 'M' })
+      .then(value => { if (active) setImage(value); })
+      .catch(() => { if (active) setError(true); });
+    return () => { active = false; };
+  }, [payload]);
+  if (device.qrCode !== undefined) return <div className="space-y-4">
+    <p className="text-[13px] text-zinc-600 dark:text-zinc-300">{device.instructions ?? 'Scan this QR code with your device to connect.'}</p>
+    {error ? <Alert>Could not display the pairing code. Close this dialog and try again.</Alert> : image ?
+      <img src={image} alt="Device pairing QR code" className="mx-auto size-[280px] max-w-full rounded-lg bg-white" /> :
+      <div className="flex h-[280px] items-center justify-center"><Spinner /></div>}
+  </div>;
+  return <div className="space-y-5">
+    <p className="text-[13px] text-zinc-600 dark:text-zinc-300">Enter this code on the sign-in page:</p>
+    <code className="inline-block rounded-xl bg-zinc-100 px-5 py-3 font-mono text-2xl font-semibold tracking-[0.2em] dark:bg-zinc-800">{device.userCode}</code>
+    <div className="flex justify-center">
+      <Button variant="primary" icon={<ExternalLink className="size-4" />} onClick={() => {
+        navigator.clipboard?.writeText(device.userCode).catch(() => {});
+        window.open(device.verificationUriComplete ?? device.verificationUri, '_blank', 'noopener');
+      }}>Copy code and open {safeHost(device.verificationUri)}</Button>
+    </div>
+  </div>;
 }
 
 function PasteStep({ step, onConnected, onRestart }: { step: Extract<Step, { kind: 'paste' }>; onConnected: (c: Connection) => void; onRestart: () => void }) {

@@ -5,7 +5,7 @@ import { connectionChanged, credentialsChanged } from './connection-events.ts';
 import { decrypt, encrypt, randomId, randomToken } from './crypto.ts';
 import { all, db, now, one, run } from './db.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
-import type { AuthMethod, ConnectArgs, ConnectStep, Connected, Connection, Field, ServiceDefinition } from './plugins/api.ts';
+import type { AuthMethod, ConnectArgs, ConnectStep, Connected, Connection, DeviceAuthorization, Field, ServiceDefinition } from './plugins/api.ts';
 import { plugins } from './plugins/manager.ts';
 import type { User } from './users.ts';
 import { getPeer, parseRemoteServiceId, peerConnection, syncPeerConnections } from './peers.ts';
@@ -296,7 +296,7 @@ export type FlowResult =
   | { status: 'connected'; connection: ConnectionView }
   /** `manual`: the provider redirects to a URI other than Switchboard's; the user pastes the address it sent them to. */
   | { status: 'redirect'; flowId: string; url: string; manual?: boolean }
-  | { status: 'device'; flowId: string; device: { userCode: string; verificationUri: string; verificationUriComplete?: string; expiresIn?: number; interval: number } };
+  | { status: 'device'; flowId: string; device: DeviceAuthorization & { interval: number } };
 
 function validateConfig(method: AuthMethod, input: Record<string, any>, previous?: Record<string, any>) {
   const out: Record<string, any> = {};
@@ -406,6 +406,11 @@ function handleStep(user: User, step: ConnectStep, f: FlowInfo): FlowResult {
     return { status: 'redirect', flowId: f.flowId, url: step.redirect, ...(f.redirectUri ? { manual: true } : {}) };
   }
   if ('device' in step) {
+    if (step.device.qrCode !== undefined && (
+      typeof step.device.qrCode !== 'string' || !step.device.qrCode || step.device.qrCode.length > 4096 ||
+      step.device.userCode !== undefined || step.device.verificationUri !== undefined ||
+      (step.device.instructions !== undefined && (typeof step.device.instructions !== 'string' || step.device.instructions.length > 1000))
+    )) throw badRequest('Invalid QR pairing data');
     const expiresIn = step.device.expiresIn ?? 900;
     saveFlow(user, f, 'device', step.pending, expiresIn);
     return { status: 'device', flowId: f.flowId, device: { ...step.device, interval: step.device.interval ?? 5 } };

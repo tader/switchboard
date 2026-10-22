@@ -117,10 +117,15 @@ export interface Connection {
   peer: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
+export type DeviceAuthorization = { expiresIn?: number; interval: number } & (
+  { userCode: string; verificationUri: string; verificationUriComplete?: string; qrCode?: never } |
+  { qrCode: string; instructions?: string; userCode?: never; verificationUri?: never; verificationUriComplete?: never }
+);
+
 export type FlowResult =
   | { status: 'connected'; connection: Connection }
   | { status: 'redirect'; flowId: string; url: string; manual?: boolean }
-  | { status: 'device'; flowId: string; device: { userCode: string; verificationUri: string; verificationUriComplete?: string; expiresIn?: number; interval: number } };
+  | { status: 'device'; flowId: string; device: DeviceAuthorization };
 
 export interface Pair {
   key: string;

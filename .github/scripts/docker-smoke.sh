@@ -7,7 +7,7 @@ trap cleanup EXIT
 start() {
   docker run -d --name "$name" -v "$volume:/data" switchboard:smoke >/dev/null
   for attempt in {1..60}; do
-    if docker exec "$name" wget -qO- http://127.0.0.1:8770/healthz >/dev/null 2>&1; then return; fi
+    if docker exec "$name" node -e "fetch('http://127.0.0.1:8770/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then return; fi
     sleep 1
   done
   docker logs "$name"
