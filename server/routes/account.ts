@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { type Env, endSession, sessionCookie, loginAllowed, loginFailed, loginSucceeded, requireFullAccess, requireUser, startSession } from '../auth.ts';
+import { type Env, endSession, requireBrowserOrigin, sessionCookie, loginAllowed, loginFailed, loginSucceeded, requireFullAccess, requireUser, startSession } from '../auth.ts';
 import { HttpError, badRequest } from '../http.ts';
 import {
   acceptInvite, checkLogin, createToken, deleteOtherSessions, deleteSession, deleteToken, inviteUser, listTokens, setPassword, updateToken,
@@ -13,9 +13,10 @@ export const account = new Hono<Env>();
 
 account.get('/info', (c) => c.json({ publicUrl: config.publicUrl, callbackUrl }));
 
-account.post('/auth/login', async (c) => {
+account.post('/auth/login', requireBrowserOrigin, async (c) => {
   const { username, password } = await c.req.json<{ username?: string; password?: string }>();
-  const key = `${(username ?? '').toLowerCase()}|${c.req.header('x-forwarded-for')?.split(',')[0] ?? ''}`;
+  if (typeof username !== 'string' || typeof password !== 'string') throw badRequest('Username and password are required');
+  const key = `${username.trim().toLowerCase()}|${c.req.header('x-forwarded-for')?.split(',')[0] ?? ''}`;
   if (!loginAllowed(key)) throw new HttpError(429, 'Too many attempts. Try again in a few minutes.');
   const user = username && password ? checkLogin(username, password) : undefined;
   if (!user) {
@@ -27,7 +28,7 @@ account.post('/auth/login', async (c) => {
   return c.json(user);
 });
 
-account.post('/auth/logout', (c) => {
+account.post('/auth/logout', requireBrowserOrigin, (c) => {
   const cookie = sessionCookie(c);
   if (cookie) deleteSession(cookie);
   endSession(c);
@@ -40,7 +41,7 @@ account.get('/auth/invite/:token', (c) => {
   return c.json({ username: user.username, hasPassword: user.hasPassword });
 });
 
-account.post('/auth/invite', async (c) => {
+account.post('/auth/invite', requireBrowserOrigin, async (c) => {
   const { token, password } = await c.req.json<{ token: string; password: string }>();
   const user = acceptInvite(token, password ?? '');
   startSession(c, user.id);

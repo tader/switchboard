@@ -396,3 +396,14 @@ plugin integration and deployment are outside this change.
 - [x] Inspect Chrome light/dark/narrow browser dialogs and QR rotation/expiry; retain code pairing controls.
 - [x] Exercise WhatsApp installer, plugin manager, both pairing methods, rotation, encrypted storage and restart against this core.
 - Publishing: pending protected PR checks and Release Please rollout; no deployment performed.
+
+
+## Authentication and credential boundary maintenance
+
+- [x] Validate callback URI categories and authentication request origins while retaining native/loopback clients and existing HTTP origin-client consent behavior.
+- [x] Keep authenticated request URLs local and strengthen audit field redaction.
+- [x] Reuse pinned public-network connections and enforce the existing metadata response limit during reads.
+- [x] Update DOMPurify to 3.4.17; production web dependency audit reports no advisories.
+- [x] Validation: 142 core tests, server typecheck and production web build; Chrome authentication/consent checks and Markdown rendering in light/dark/narrow views.
+- [x] Signal installer, privacy/idempotency and two-core sharing integration; WhatsApp installer/linking/persistence integration; Microsoft authentication, Teams and content checks.
+- Functional-policy proposals and detailed review evidence are kept in a private local report, outside repository history. Publication follows protected PR checks and Release Please; no deployment performed.

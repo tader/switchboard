@@ -54,22 +54,27 @@ const BODY_LIMIT = 4096;
 /** Masks query parameters with secret-looking names (Switchboard's own credentials are already masked). */
 export function redactUrl(url: string): string {
   try {
-    const u = new URL(url);
+    const absolute = /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('//');
+    const u = new URL(url, 'https://redaction.invalid');
+    if (u.username) u.username = MASK;
+    if (u.password) u.password = MASK;
     for (const k of new Set(u.searchParams.keys())) if (SECRET_NAME.test(k)) u.searchParams.set(k, MASK);
-    return u.toString();
+    const relative = u.pathname + u.search + u.hash;
+    return absolute ? u.toString() : url.startsWith('/') ? relative : relative.replace(/^\//, '');
   } catch {
-    return url;
+    return '[Invalid URL omitted]';
   }
 }
 
 export function redactHeaders(headers: { name: string; value: string; byHub: boolean }[]) {
-  return headers.map((h) => ({ ...h, value: h.byHub || SECRET_NAME.test(h.name) || h.name === 'cookie' ? (h.value.includes(MASK) ? h.value : MASK) : h.value }));
+  return headers.map((h) => ({ ...h, value: h.byHub || SECRET_NAME.test(h.name) || h.name === 'cookie' ? (/^(?:[A-Za-z][\w-]{0,15} )?••••••••$/.test(h.value) ? h.value : MASK) : h.value }));
 }
 
 function redactJson(v: unknown, depth = 0): unknown {
-  if (depth > 20 || v === null || typeof v !== 'object') return v;
+  if (depth > 20) return MASK;
+  if (v === null || typeof v !== 'object') return v;
   if (Array.isArray(v)) return v.map((x) => redactJson(x, depth + 1));
-  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, SECRET_NAME.test(k) && (typeof x === 'string' || typeof x === 'number') ? MASK : redactJson(x, depth + 1)]));
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, SECRET_NAME.test(k) ? MASK : redactJson(x, depth + 1)]));
 }
 
 /** Redacts secret-looking fields in JSON and form bodies, and keeps at most 4 KB. */
@@ -83,7 +88,7 @@ export function redactBody(body: Uint8Array | string | undefined | null, content
   if (/json/i.test(contentType) || /^\s*[[{]/.test(text)) {
     try {
       text = JSON.stringify(redactJson(JSON.parse(text)));
-    } catch {}
+    } catch { text = '[Unparseable structured body omitted]'; }
   } else if (/form-urlencoded/i.test(contentType)) {
     const p = new URLSearchParams(text);
     for (const k of new Set(p.keys())) if (SECRET_NAME.test(k)) p.set(k, MASK);

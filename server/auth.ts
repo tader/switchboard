@@ -44,6 +44,13 @@ function bearer(c: Context): string | undefined {
   return c.req.header('x-switchboard-token') ?? c.req.header('x-hub-token') ?? undefined;
 }
 
+/** Browser authentication posts must originate at Switchboard, including login. */
+export const requireBrowserOrigin: MiddlewareHandler<Env> = async (c, next) => {
+  const site = c.req.header('sec-fetch-site'), origin = c.req.header('origin');
+  if ((site && site !== 'same-origin' && site !== 'none') || (origin && origin !== new URL(config.publicUrl).origin)) throw forbidden('Cross-site request blocked');
+  await next();
+};
+
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** Resolves the caller from an API token or the session cookie. */

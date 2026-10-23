@@ -73,6 +73,6 @@ export async function handleSharedRequest(peerId: string, peerUserId: string, op
   } finally { reader.releaseLock(); }
   const body = Buffer.concat(chunks); if (ex.auditId) setResponseSize(ex.auditId, body.length);
   return { status: ex.response.status, statusText: ex.response.statusText, headers: [...ex.response.headers.entries()], body: body.toString('base64'),
-    url: ex.url.toString(), durationMs: ex.durationMs,
+    url: ex.sent.url, durationMs: ex.durationMs,
     sent: { ...ex.sent, body: ex.sent.body == null ? undefined : Buffer.from(ex.sent.body as any).toString('base64'), bodyEncoding: ex.sent.body == null ? undefined : 'base64' } };
 }

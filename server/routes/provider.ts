@@ -4,9 +4,9 @@
 //    lists the client's redirect URIs. Preferred by the MCP specification.
 //  - Dynamic Client Registration (RFC 7591) at /oauth/register, for clients that do not support the above.
 //  - A plain URL client id whose redirect URI is on the same origin (IndieAuth style), used by Switchboards.
+import { publicOAuthFetch, limitedText } from '../public-network.ts';
+import { callbackUri } from '../oauth-redirect.ts';
 import crypto from 'node:crypto';
-import dns from 'node:dns/promises';
-import net from 'node:net';
 import { Hono } from 'hono';
 import { type Env, requireFullAccess, requireUser } from '../auth.ts';
 import { config } from '../config.ts';
@@ -66,35 +66,22 @@ function redirectAllowed(requested: string, allowed: string[]) {
 // With a plain-http public URL (local development) these checks are relaxed.
 const devMode = !config.secure;
 
-function privateAddress(ip: string) {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
-  }
-  const v = ip.toLowerCase();
-  return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80') || v.startsWith('::ffff:127.') || v.startsWith('::ffff:10.') || v.startsWith('::ffff:192.168.');
-}
-
 const metadataCache = new Map<string, { at: number; doc: any }>();
 
 async function fetchClientMetadata(clientId: string): Promise<{ client_name?: string; redirect_uris: string[] }> {
   const hit = metadataCache.get(clientId);
   if (hit && Date.now() - hit.at < 5 * 60_000) return hit.doc;
   const url = new URL(clientId);
-  if (!devMode) {
-    const addresses = await dns.lookup(url.hostname, { all: true }).catch(() => []);
-    if (!addresses.length) throw badRequest(`Could not resolve ${url.hostname}`);
-    if (addresses.some((a) => privateAddress(a.address))) throw badRequest('The client metadata document is on a private network address');
-  }
+  if (url.username || url.password || url.hash) throw badRequest('Invalid client metadata URL');
   let res: Response;
   try {
-    res = await fetch(url, { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(5000) });
+    res = await (devMode ? fetch(url, { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(5000) }) : publicOAuthFetch(url, { headers: { accept: 'application/json' } }, AbortSignal.timeout(5000)));
+    if (res.status >= 300 && res.status < 400) { await res.body?.cancel(); throw badRequest('Client metadata redirects are not supported'); }
   } catch (e: any) {
     throw badRequest(`Could not fetch the client metadata document: ${e.cause?.message ?? e.message}`);
   }
-  if (!res.ok) throw badRequest(`The client metadata document responded ${res.status}`);
-  const text = await res.text();
-  if (text.length > 64 * 1024) throw badRequest('The client metadata document is too large');
+  if (!res.ok) { await res.body?.cancel(); throw badRequest(`The client metadata document responded ${res.status}`); }
+  const text = await limitedText(res, 64 * 1024);
   let doc: any;
   try {
     doc = JSON.parse(text);
@@ -103,23 +90,19 @@ async function fetchClientMetadata(clientId: string): Promise<{ client_name?: st
   }
   if (doc?.client_id !== clientId) throw badRequest('The client metadata document has a different client_id');
   if (!Array.isArray(doc.redirect_uris) || !doc.redirect_uris.length) throw badRequest('The client metadata document lists no redirect_uris');
+  for (const uri of doc.redirect_uris) callbackUri(uri);
   if (doc.token_endpoint_auth_method && doc.token_endpoint_auth_method !== 'none') throw badRequest('Only public clients (token_endpoint_auth_method "none") are supported');
   metadataCache.set(clientId, { at: Date.now(), doc });
   return doc;
 }
 
 async function resolveClient(clientId: string, redirectUri: string): Promise<Client> {
+  const redirect = callbackUri(redirectUri);
   if (isRegisteredClient(clientId)) {
     const row = one('SELECT * FROM oauth_clients WHERE client_id = ?', clientId);
     if (!row) throw badRequest('Unknown client_id');
     if (!redirectAllowed(redirectUri, JSON.parse(row.redirect_uris))) throw badRequest('redirect_uri is not registered for this client');
     return { kind: 'registered', name: row.client_name, verifiedName: false };
-  }
-  let redirect: URL;
-  try {
-    redirect = new URL(redirectUri);
-  } catch {
-    throw badRequest('redirect_uri must be a URL');
   }
   let client: URL;
   try {
@@ -256,7 +239,7 @@ registerEndpoint.post('/', async (c) => {
     }
     // Native apps may use custom schemes; plain http only for loopback.
     if (url.protocol === 'http:' && !isLoopback(url) && !devMode) return c.json({ error: 'invalid_redirect_uri', error_description: 'http redirect URIs must be loopback' }, 400);
-    if (url.hash) return c.json({ error: 'invalid_redirect_uri', error_description: 'redirect URIs cannot have a fragment' }, 400);
+    try { callbackUri(u); } catch { return c.json({ error: 'invalid_redirect_uri', error_description: 'Unsupported redirect URI' }, 400); }
   }
   if (b.token_endpoint_auth_method && b.token_endpoint_auth_method !== 'none') return err('Only public clients (token_endpoint_auth_method "none") are supported');
   const clientId = `${DCR_PREFIX}${randomToken(16)}`;
