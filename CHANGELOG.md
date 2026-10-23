@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/tader/switchboard/compare/v0.8.1...v0.8.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* dispose plugin instances after rejected setup ([#36](https://github.com/tader/switchboard/issues/36)) ([c8efbfb](https://github.com/tader/switchboard/commit/c8efbfbc9c09ff3e44527ff69bc38e723e916e0b))
+
 ## [0.8.1](https://github.com/tader/switchboard/compare/v0.8.0...v0.8.1) (2026-10-23)
 
 
