@@ -407,3 +407,5 @@ plugin integration and deployment are outside this change.
 - [x] Validation: 142 core tests, server typecheck and production web build; Chrome authentication/consent checks and Markdown rendering in light/dark/narrow views.
 - [x] Signal installer, privacy/idempotency and two-core sharing integration; WhatsApp installer/linking/persistence integration; Microsoft authentication, Teams and content checks.
 - Functional-policy proposals and detailed review evidence are kept in a private local report, outside repository history. Publication follows protected PR checks and Release Please; no deployment performed.
+
+- [x] Dispose plugin instances returned after setup timeout or rejected by service validation. Verify real listener cleanup and preservation of a newer successful reload with controlled deadlines.

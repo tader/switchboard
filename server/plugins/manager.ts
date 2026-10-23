@@ -235,6 +235,15 @@ class PluginManager {
       }
     }
 
+    let candidate: PluginInstance | undefined;
+    let abandoned = false;
+    let cleanupStarted = false;
+    const cleanup = async () => {
+      if (!candidate || cleanupStarted) return;
+      cleanupStarted = true;
+      try { await candidate.dispose?.(); }
+      catch (error: any) { this.log(p, 'error', `dispose failed after rejected setup: ${error.message}`); }
+    };
     try {
       const entry = this.entryFile(p);
       // ESM modules cannot be unloaded, so every load imports a fresh copy of the plugin
@@ -246,7 +255,14 @@ class PluginManager {
       if (typeof setup !== 'function') throw new Error('The entry module must export a setup function as default');
 
       const ctx = this.context(p);
-      const instance: PluginInstance = (await withTimeout(Promise.resolve(setup(ctx)), 15_000, 'setup timed out')) ?? {};
+      const pending = Promise.resolve(setup(ctx)).then((value) => {
+        candidate = value ?? {};
+        // A timeout does not cancel the factory. Dispose a late result instead
+        // of leaving its helpers, listeners and locks outside manager ownership.
+        if (abandoned) void cleanup();
+        return candidate!;
+      });
+      const instance = await withTimeout(pending, 15_000, 'setup timed out');
       const services = instance.services ?? [];
       for (const s of services) {
         validateService(s);
@@ -263,6 +279,8 @@ class PluginManager {
       p.loadedAt = now();
       this.log(p, 'info', `loaded ${p.manifest.version}${services.length ? ` (${services.map((s) => s.id).join(', ')})` : ''}`);
     } catch (e: any) {
+      abandoned = true;
+      await cleanup();
       p.status = 'error';
       p.error = e?.message ?? String(e);
       this.log(p, 'error', p.error!);
