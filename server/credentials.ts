@@ -3,7 +3,7 @@ import { decrypt, encrypt, randomId } from './crypto.ts';
 import { connectionChanged, credentialsChanged } from './connection-events.ts';
 import { plugins } from './plugins/manager.ts';
 import { allowedHosts } from './proxy.ts';
-import { getConnectionRow, loadConnection, resolveBaseUrl, saveCredentials, withLock } from './connections.ts';
+import { getConnectionRow, loadConnection, resolveBaseUrl, saveCredentials, markError, trackConnectionHealth, withLock } from './connections.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
 import type { AuthMethod, Connection } from './plugins/api.ts';
 import type { User } from './users.ts';
@@ -154,8 +154,9 @@ export async function credentialHealth(user: User, id: string) {
   const result: { id: string; name: string; status: string }[] = [];
   for (const row of all('SELECT id, name FROM connections WHERE credential_id = ? AND user_id = ?', id, user.id)) {
     let status = 'ok';
-    try { const { conn, method } = loadConnection(user.id, row.id); await reusable(method).validate!(conn); } catch { status = 'error'; }
-    run('UPDATE connections SET status = ?, status_message = ? WHERE id = ?', status, status === 'ok' ? null : 'Credential validation failed or service is unreachable', row.id);
+    const recovered = trackConnectionHealth(row.id);
+    try { const { conn, method } = loadConnection(user.id, row.id); await reusable(method).validate!(conn); recovered(); }
+    catch { status = 'error'; markError(row.id, 'Credential validation failed or service is unreachable'); }
     result.push({ ...row, status });
   }
   return result;

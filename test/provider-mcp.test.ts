@@ -17,7 +17,7 @@ const database = await import('../server/db.ts');
 const { initDb, one, all } = database;
 const { initKey, decrypt } = await import('../server/crypto.ts');
 const { plugins } = await import('../server/plugins/manager.ts');
-const { startConnect, completeRedirect, getConnectionRow, deleteConnection } = await import('../server/connections.ts');
+const { startConnect, completeRedirect, getConnectionRow, deleteConnection, markError } = await import('../server/connections.ts');
 const { createUser, createToken } = await import('../server/users.ts');
 const { executeMcp } = await import('../server/provider-mcp.ts');
 const { api } = await import('../server/routes/connections.ts');
@@ -353,4 +353,10 @@ test('upstream MCP OAuth: insufficient scope requires reconnect and renews reque
     if (renew.status !== 'redirect') throw new Error('Expected consent redirect');
     assert.ok(new URL(renew.url).searchParams.get('scope')?.includes('tools.write'));
   } finally { requireExtraScope = false; }
+});
+
+test('successful MCP operations clear an old error, but tool failures do not',async()=>{
+ const conn=await connect('/modern','token',{token:'recovery-token'});markError(conn.id,'Old MCP authentication failure');
+ assert.equal((await executeMcp(owner,conn.id,{operation:'tools/call',name:'failure'})).isError,true);assert.equal(getConnectionRow(owner.id,conn.id).status,'error');
+ await executeMcp(owner,conn.id,{operation:'tools/list'});const row=getConnectionRow(owner.id,conn.id);assert.equal(row.status,'ok');assert.equal(row.status_message,null);
 });

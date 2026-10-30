@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { config } from './config.ts';
 import { initKey } from './crypto.ts';
 import { initDb } from './db.ts';
+import { recoverHistoricalConnectionErrors } from './connections.ts';
 import { HttpError } from './http.ts';
 import { plugins } from './plugins/manager.ts';
 import { account } from './routes/account.ts';
@@ -29,6 +30,7 @@ import { stopProviderMcp } from './provider-mcp.ts';
 fs.mkdirSync(config.dataDir, { recursive: true });
 initKey();
 initDb();
+recoverHistoricalConnectionErrors();
 
 const app = new Hono<Env>();
 

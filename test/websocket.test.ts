@@ -18,7 +18,7 @@ const database = await import('../server/db.ts');
 const { initDb, one, all, run } = database;
 const { initKey } = await import('../server/crypto.ts');
 const { plugins } = await import('../server/plugins/manager.ts');
-const { startConnect, saveCredentials } = await import('../server/connections.ts');
+const { startConnect, saveCredentials, markError } = await import('../server/connections.ts');
 const { createUser, createToken, updateToken, deleteToken, createSession, deleteSession } = await import('../server/users.ts');
 const { api } = await import('../server/routes/connections.ts');
 const { mcp } = await import('../server/mcp.ts');
@@ -403,4 +403,13 @@ test('peer summaries and per-cell sharing remain scoped to the connection owner'
   assert.equal((await request(endpoint, { shared: false }, otherToken.secret, 'PUT')).status, 404);
   assert.equal((await request(endpoint, { shared: false }, full.secret, 'PUT')).status, 200);
   assert.equal((await request('/peers')).data.find((p: any) => p.id === peer.id).sharedConnections, 0);
+});
+
+test('WebSocket authentication and reused-session successes clear stale errors',async()=>{
+ const conn=await connect();markError(conn.id,'Old WebSocket error');const endpoint=root(conn.id);
+ assert.equal((await request(`${endpoint}/call`,{operationId:'echo/value',arguments:{value:'recovered'}})).status,200);
+ assert.equal(one('SELECT status FROM connections WHERE id=?',conn.id).status,'ok');
+ const before=opened;markError(conn.id,'Another stale error');
+ assert.equal((await request(`${endpoint}/call`,{operationId:'echo/value',arguments:{value:'still-working'}})).status,200);
+ assert.equal(opened,before);assert.deepEqual({...one<{status:string;status_message:string|null}>('SELECT status,status_message FROM connections WHERE id=?',conn.id)},{status:'ok',status_message:null});
 });

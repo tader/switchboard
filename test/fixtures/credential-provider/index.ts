@@ -6,7 +6,7 @@ export default function setup(ctx: any) {
     authorize() { throw new Error('Authentication sources do not proxy data'); },
     credentialProvider: { format, async provide(conn:any,opts:any) {
       const credentials = {...conn.credentials,generation:conn.credentials.generation+(opts.forceAuthentication?1:0)};
-      return {bundle:{...credentials,expiresAt:Date.now()+60000},credentials,account:conn.account};
+      return {bundle:{...credentials,expiresAt:Date.now()+60000},credentials:opts.forceAuthentication?credentials:undefined,account:conn.account};
     } },
   };
   const consumer = {

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { all } from './db.ts';
-import { getConnectionRow, loadConnection, markError, saveCredentials, withLock } from './connections.ts';
+import { getConnectionRow, loadConnection, markError, saveCredentials, trackConnectionHealth, withLock } from './connections.ts';
 import { peerConnection, requestPeer, syncPeerConnections } from './peers.ts';
 import { record } from './audit.ts';
 import { HttpError, badRequest } from './http.ts';
@@ -43,12 +43,14 @@ export async function provideCredentials(userId: string, connectionId: string, f
     const provider = method.credentialProvider;
     if (!provider || provider.format !== format) throw new HttpError(403, 'Incompatible authentication source');
     const started = Date.now();
+    const recovered = trackConnectionHealth(row.id);
     try {
       const result = await credentialCall(userId, method, conn.config, () => provider.provide(conn, { forceAuthentication, signal, persistCredentials: value => { saveCredentials(row.id, value); } }));
       if (!result.account?.id || (conn.account?.id && result.account.id !== conn.account.id)) throw new HttpError(403, 'The authentication source changed accounts');
       if (result.credentials !== undefined) saveCredentials(row.id, result.credentials);
       const value = { format, bundle: result.bundle, account: result.account };
       if (Buffer.byteLength(JSON.stringify(value)) > 512 * 1024) throw new HttpError(502, 'Authentication bundle exceeded the size limit');
+      recovered();
       record({ userId, connection: { id: row.id, name: conn.name, serviceId: conn.serviceId }, caller: { source: 'plugin', tokenId: null, tokenName: null, ip: null, userAgent: null }, method: 'CREDENTIAL', url: 'Provided authentication credentials', status: 200, durationMs: Date.now() - started });
       return value;
     } catch (error: any) {
