@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/tader/switchboard/compare/v0.8.2...v0.8.3) (2026-10-30)
+
+
+### Bug Fixes
+
+* clear stale connection errors after confirmed recovery ([#38](https://github.com/tader/switchboard/issues/38)) ([5b2be0b](https://github.com/tader/switchboard/commit/5b2be0b5c9957dea9a3d7c75f916c1083f24028c))
+
 ## [0.8.2](https://github.com/tader/switchboard/compare/v0.8.1...v0.8.2) (2026-10-23)
 
 
