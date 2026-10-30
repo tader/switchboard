@@ -201,3 +201,11 @@ For a local connection whose plugin enables frame proxying, upgrade `/api/connec
 Plugins may attach a `rest: { method, path }` binding to a declared WebSocket command. These endpoints are served under `/api/connections/:ref/plugin`; GET arguments come from query parameters and POST/PUT arguments from a JSON body. Boolean query arguments use `true` or `false`. The route validates against the command schema, executes the plugin adapter on an authenticated provider WebSocket, and returns the command's result directly as JSON. Its OpenAPI reference is at `/api/connections/:ref/plugin/openapi.json`. Raw proxies and plugin REST bindings currently require local connections.
 
 The Home Assistant plugin declares GET `/plugin/lovelace/dashboards`, GET `/plugin/lovelace/config`, PUT `/plugin/lovelace/config`, and GET `/plugin/system/logs`, each prefixed by `/api/connections/:ref`. Dashboard configuration calls accept `url_path`; reads also accept `force=true`. PUT accepts the full `{ "url_path": "my-home", "config": { ... } }` configuration and returns JSON `null` when HA acknowledges the save. The logs endpoint returns condensed system-log warnings and errors. Both interfaces connect to Home Assistant over WebSocket.
+
+## Connection errors and recovery
+
+Connection errors clear after a confirmed successful HTTP request, MCP operation, WebSocket authentication/operation, token issue, or credential provision. Recovery does not require token rotation or reconnecting when the existing authentication already works. The Connections page refreshes automatically.
+
+Failed requests and MCP tool errors do not count as recovery. An older in-flight success cannot erase a newer failure. Saving refreshed credentials alone does not clear an unresolved connection error; the operation must succeed.
+
+At startup, Switchboard also reconciles errors saved by older versions when the latest audit entry proves a successful operation started after the error. Errors without that evidence, newer failures, and revoked/expired shared credentials remain flagged. This updates current connection health; historical failures stay in Activity.

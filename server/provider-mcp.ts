@@ -1,5 +1,5 @@
 import { Client, StreamableHTTPClientTransport, InsufficientScopeError, type CompleteRequest, type RequestOptions, type Tool } from '@modelcontextprotocol/client';
-import { getConnectionRow, loadConnection, saveCredentials, markError, touch, withLock, resolveBaseUrl } from './connections.ts';
+import { getConnectionRow, loadConnection, saveCredentials, markError, touch, trackConnectionHealth, withLock, resolveBaseUrl } from './connections.ts';
 import { onConnectionChange } from './connection-events.ts';
 import { allowedHosts, hostAllowed } from './proxy.ts';
 import { badRequest, HttpError } from './http.ts';
@@ -43,6 +43,7 @@ export function validateMcpInput(input: McpInput) {
 async function executeRemoteMcp(user: User, row: any, input: McpInput, signal?: AbortSignal, caller?: Caller) {
   if (peerConnection(user.id, row.peer_id, row.remote_connection_id).kind !== 'mcp') throw badRequest('This shared connection is not MCP');
   const controller = new AbortController();
+  const recovered = trackConnectionHealth(row.id);
   active.set(controller, row.id);
   const started = Date.now();
   const audit = (status: number, outcome: 'success' | 'tool-error' | 'protocol-error' | 'cancelled') => caller && record({
@@ -55,6 +56,7 @@ async function executeRemoteMcp(user: User, row: any, input: McpInput, signal?: 
       AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]));
     if (Buffer.byteLength(JSON.stringify(result)) > MCP_RESPONSE_LIMIT) throw new HttpError(502, 'Peer MCP result exceeded the size limit');
     touch(row.id);
+    if (!result?.isError) recovered();
     audit(result?.isError ? 502 : 200, result?.isError ? 'tool-error' : 'success');
     return result;
   } catch (error: any) {
@@ -70,6 +72,7 @@ export async function executeMcp(user: User, ref: string, input: McpInput, signa
   if (row.kind !== 'mcp') throw badRequest('This connection is an HTTP API; use an HTTP request');
   if (row.peer_id) return executeRemoteMcp(user, row, input, signal, caller);
   const { conn, service } = loadConnection(user.id, row.id);
+  const recovered = trackConnectionHealth(conn.id);
   const endpoint = mcpEndpoint(resolveBaseUrl(service, conn));
   const controller = new AbortController();
   const operationSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(MCP_TIMEOUT), ...(signal ? [signal] : [])]);
@@ -158,6 +161,7 @@ export async function executeMcp(user: User, ref: string, input: McpInput, signa
     }
     if (Buffer.byteLength(JSON.stringify(result)) > MCP_RESPONSE_LIMIT) throw new HttpError(502, 'MCP result exceeded the size limit');
     touch(conn.id);
+    if (!result?.isError) recovered();
     audit(result?.isError ? 502 : 200, result?.isError ? 'The MCP tool reported failure' : undefined, result?.isError ? 'tool-error' : 'success');
     return result;
   } catch (error: any) {

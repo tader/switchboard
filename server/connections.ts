@@ -218,6 +218,7 @@ export async function deleteConnection(userId: string, ref: string) {
     if (shared) throw new HttpError(403, 'This connection is still shared by its peer');
     connectionChanged(row.id);
     run('DELETE FROM connections WHERE id = ?', row.id);
+    errorRevisions.delete(row.id);
     run('UPDATE saved_calls SET connection_id = NULL WHERE connection_id = ?', row.id);
     return;
   }
@@ -231,18 +232,43 @@ export async function deleteConnection(userId: string, ref: string) {
     console.warn(`revoke failed for ${conn.id}: ${e.message}`);
   }
   run('DELETE FROM connections WHERE id = ?', row.id);
+  errorRevisions.delete(row.id);
   run('UPDATE saved_calls SET connection_id = NULL WHERE connection_id = ?', row.id);
 }
 
 export function saveCredentials(id: string, credentials: unknown) {
   const linked = one('SELECT credential_id, user_id FROM connections WHERE id = ?', id);
   if (linked?.credential_id) { replaceCredential(getCredential(linked.user_id, linked.credential_id), exportCredential(loadConnection(linked.user_id, id, true).method, credentials)); return; }
-  run(`UPDATE connections SET credentials_enc = ?, status = 'ok', status_message = NULL, updated_at = ? WHERE id = ?`, encrypt(credentials), now(), id);
+  run(`UPDATE connections SET credentials_enc = ?, updated_at = ? WHERE id = ?`, encrypt(credentials), now(), id);
   credentialsChanged(id);
 }
 
+const errorRevisions = new Map<string, number>();
+
 export function markError(id: string, message: string) {
-  run(`UPDATE connections SET status = 'error', status_message = ?, updated_at = ? WHERE id = ?`, message.slice(0, 500), now(), id);
+  const result = run(`UPDATE connections SET status = 'error', status_message = ?, updated_at = ? WHERE id = ?`, message.slice(0, 500), now(), id);
+  if (result.changes) errorRevisions.set(id, (errorRevisions.get(id) ?? 0) + 1);
+}
+
+/** Capture the error an operation can resolve; an older success must not erase a newer failure. */
+export function trackConnectionHealth(id: string): () => void {
+  const previous = one('SELECT status, status_message FROM connections WHERE id = ?', id);
+  const revision = errorRevisions.get(id) ?? 0;
+  return () => {
+    if (!previous || !['ok', 'error'].includes(previous.status) || (previous.status === 'ok' && !previous.status_message) || (errorRevisions.get(id) ?? 0) !== revision) return;
+    run("UPDATE connections SET status = 'ok', status_message = NULL, updated_at = ? WHERE id = ? AND status IN ('ok', 'error') AND status_message IS ?", now(), id, previous.status_message);
+  };
+}
+
+/** Recover pre-fix status rows only when the latest recorded operation proves later recovery. */
+export function recoverHistoricalConnectionErrors() {
+  return run(`UPDATE connections SET status = 'ok', status_message = NULL, updated_at = ?
+    WHERE peer_id IS NULL AND status = 'error'
+      AND NOT EXISTS (SELECT 1 FROM credentials WHERE id = connections.credential_id AND status != 'ok')
+      AND EXISTS (SELECT 1 FROM audit_log AS activity
+        WHERE activity.id = (SELECT id FROM audit_log WHERE user_id = connections.user_id AND connection_id = connections.id ORDER BY created_at DESC, id DESC LIMIT 1)
+          AND activity.status BETWEEN 200 AND 299 AND activity.error IS NULL
+          AND activity.created_at - MAX(COALESCE(activity.duration_ms, 0), 0) > connections.updated_at)`, now()).changes;
 }
 
 export function touch(id: string) {

@@ -14,13 +14,14 @@ const { initDb, db, one, all, run } = await import('../server/db.ts');
 const database = await import('../server/db.ts');
 const { initKey, decrypt } = await import('../server/crypto.ts');
 const { plugins } = await import('../server/plugins/manager.ts');
-const { startConnect, completeRedirect, deleteConnection, loadConnection, withLock } = await import('../server/connections.ts');
+const { startConnect, completeRedirect, deleteConnection, loadConnection, withLock, markError, saveCredentials, recoverHistoricalConnectionErrors } = await import('../server/connections.ts');
 const { createUser, createToken } = await import('../server/users.ts');
 const { api } = await import('../server/routes/connections.ts');
 const { credentialsApi } = await import('../server/routes/credentials.ts');
 const { HttpError } = await import('../server/http.ts');
 const { replaceCredential, getCredential } = await import('../server/credentials.ts');
 const { onCredentialsChange } = await import('../server/connection-events.ts');
+const { record } = await import('../server/audit.ts');
 initKey(); initDb();
 const user = createUser('owner','admin'); const other = createUser('other','user');
 const owner = createToken(user.id,'owner',null);
@@ -29,6 +30,7 @@ app.onError((e,c) => c.json({ error: e.message, code: (e as any).code }, e insta
 app.route('/api', credentialsApi); app.route('/api', api);
 let origin = ''; let outage = ''; let rotations = 0; let badRefresh = false;
 let heldRefresh: Promise<void> | undefined; let refreshStarted: (() => void) | undefined;
+let heldResponse: Promise<void> | undefined; let requestStarted: (() => void) | undefined;
 const requests: { path: string; authorization: string }[] = [];
 const provider = http.createServer(async (req,res) => {
   const url = new URL(req.url!, 'http://x');
@@ -44,6 +46,7 @@ const provider = http.createServer(async (req,res) => {
     const code = values.get('code');
     return send(200,{access_token:`oauth-${code}`,refresh_token:'first-refresh',expires_in:0.01, scope:code === 'only-a' ? 'a' : 'a b'});
   }
+  if (url.pathname.endsWith('/held')) { requestStarted?.(); if (heldResponse) await heldResponse; }
   const authorization = req.headers.authorization ?? '';
   requests.push({path:url.pathname,authorization});
   if (url.pathname.startsWith(`/${outage}/`) && outage) return send(503,{});
@@ -259,4 +262,75 @@ test('legacy sign-in methods keep working while setup offers their replacement',
       assert.equal(migrated.connection.methodId, 'replacement');
     }
   } finally { service.authMethods = original; }
+});
+
+function connectionStatus(id: string) { return { ...one<{status:string;status_message:string|null}>('SELECT status, status_message FROM connections WHERE id = ?',id) }; }
+test('successful HTTP calls clear a transient Signal-style error without changing credentials',async()=>{
+ const a=await connect('a'); const auth=plugins.service('reuse-a')!.authMethods.find(m=>m.id==='token')!; const original=auth.authorize;
+ try {
+  auth.authorize=()=>{throw new Error('Signal operation failed (session_in_use).');};
+  assert.equal((await request('/call',{connection:a.id,url:'/a/resource'})).status,502);
+  assert.match(String(connectionStatus(a.id).status_message),/session_in_use/);
+  auth.authorize=original;
+  const before=one('SELECT credentials_enc FROM connections WHERE id=?',a.id).credentials_enc;
+  const result=await request('/call',{connection:a.id,url:'/a/resource'});assert.equal(result.data.status,200);
+  assert.deepEqual(connectionStatus(a.id),{status:'ok',status_message:null});
+  assert.equal(one('SELECT credentials_enc FROM connections WHERE id=?',a.id).credentials_enc,before);
+ }finally{auth.authorize=original;}
+});
+test('an Outlook-style linked-credential error clears on success without a credential rotation',async()=>{
+ const a=await connect('a'),b=await connect('b');const source=await promote(a,'Recovery source');
+ await request(`/connections/${b.id}/credential`,{credentialId:source.id});
+ const auth=plugins.service('reuse-b')!.authMethods.find(m=>m.id==='token')!;const original=auth.authorize;
+ try{
+  auth.authorize=()=>{throw new Error('temporary provider failure');};
+  assert.equal((await request('/call',{connection:b.id,url:'/b/resource'})).status,502);
+  assert.equal(connectionStatus(b.id).status_message,'Shared credential authentication failed; check or reconnect it');
+  auth.authorize=original;
+  const version=getCredential(user.id,source.id).version;
+  assert.equal((await request('/call',{connection:b.id,url:'/b/resource'})).data.status,200);
+  assert.deepEqual(connectionStatus(b.id),{status:'ok',status_message:null});assert.equal(getCredential(user.id,source.id).version,version);
+ }finally{auth.authorize=original;}
+});
+test('credential persistence and failed upstream calls do not hide a still-unresolved error',async()=>{
+ const a=await connect('a');markError(a.id,'Authentication still needs attention');
+ saveCredentials(a.id,{token:'broken'});assert.equal(connectionStatus(a.id).status,'error');
+ assert.equal((await request('/call',{connection:a.id,url:'/a/resource'})).data.status,401);assert.equal(connectionStatus(a.id).status,'error');
+ saveCredentials(a.id,{token:'valid-again'});outage='a';
+ try {assert.equal((await request('/call',{connection:a.id,url:'/a/resource'})).data.status,503);assert.equal(connectionStatus(a.id).status,'error');}finally{outage='';}
+ assert.equal((await request('/call',{connection:a.id,url:'/a/resource'})).data.status,200);assert.equal(connectionStatus(a.id).status,'ok');
+});
+test('successful cached token issuance clears stale errors without rotated credentials',async()=>{
+ const a=await connect('a');markError(a.id,'Old token provider failure');const before=one('SELECT credentials_enc FROM connections WHERE id=?',a.id).credentials_enc;
+ assert.equal((await request(`/connections/${a.id}/token`)).status,200);assert.deepEqual(connectionStatus(a.id),{status:'ok',status_message:null});
+ assert.equal(one('SELECT credentials_enc FROM connections WHERE id=?',a.id).credentials_enc,before);
+});
+test('an older successful request cannot clear a newer error with the same message',async()=>{
+ const a=await connect('a');const auth=plugins.service('reuse-a')!.authMethods.find(m=>m.id==='token')!;const original=auth.authorize;
+ markError(a.id,'Same failure');let release!:()=>void;heldResponse=new Promise<void>(resolve=>{release=resolve;});
+ const started=new Promise<void>(resolve=>{requestStarted=resolve;});const old=request('/call',{connection:a.id,url:'/a/held'});
+ try{
+  await started;auth.authorize=()=>{throw new Error('Same failure');};
+  assert.equal((await request('/call',{connection:a.id,url:'/a/resource'})).status,502);auth.authorize=original;
+  release();assert.equal((await old).data.status,200);assert.equal(connectionStatus(a.id).status,'error');
+  assert.equal((await request('/call',{connection:a.id,url:'/a/resource'})).data.status,200);assert.equal(connectionStatus(a.id).status,'ok');
+ }finally{release();auth.authorize=original;heldResponse=undefined;requestStarted=undefined;await old;}
+});
+
+test('startup reconciles historical errors only with later successful audit evidence',async()=>{
+ const recovered=await connect('a'),failed=await connect('a'),inflight=await connect('a'),unverified=await connect('a'),revoked=await connect('a');
+ const source=await promote(revoked,'Revoked history source');
+ for(const conn of [recovered,failed,inflight,unverified,revoked])markError(conn.id,'Historical authentication error');
+ const success=(conn:any,durationMs=10)=>{
+  const previous=one<{updated_at:number}>('SELECT updated_at FROM connections WHERE id=?',conn.id)!.updated_at;
+  const id=record({userId:user.id,connection:{id:conn.id,name:conn.name,serviceId:conn.serviceId},caller:{source:'call',tokenId:null,tokenName:null,ip:null,userAgent:null},method:'GET',url:origin+'/a/resource',status:200,durationMs});
+  run('UPDATE audit_log SET created_at=? WHERE id=?',previous+1000,id);return previous;
+ };
+ success(recovered);success(revoked);const previous=success(failed);success(inflight,2000);
+ const latest=record({userId:user.id,connection:{id:failed.id,name:failed.name,serviceId:failed.serviceId},caller:{source:'call',tokenId:null,tokenName:null,ip:null,userAgent:null},method:'GET',url:origin+'/a/resource',status:503,error:'Still failing'});
+ run('UPDATE audit_log SET created_at=? WHERE id=?',previous+2000,latest);run("UPDATE credentials SET status='revoked' WHERE id=?",source.id);
+ recoverHistoricalConnectionErrors();
+ assert.deepEqual(connectionStatus(recovered.id),{status:'ok',status_message:null});
+ for(const conn of [failed,inflight,unverified,revoked])assert.equal(connectionStatus(conn.id).status,'error');
+ assert.equal(getCredential(user.id,source.id).status,'revoked');
 });

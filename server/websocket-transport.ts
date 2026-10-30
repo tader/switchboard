@@ -1,7 +1,7 @@
 import { onPeerDisconnected } from './peer-events.ts';
 import { WebSocket } from 'ws';
 import type { WebSocketChannel, WebSocketSession, ServiceDefinition, Connection } from './plugins/api.ts';
-import { loadConnection, resolveBaseUrl, saveCredentials, withLock } from './connections.ts';
+import { loadConnection, resolveBaseUrl, saveCredentials, trackConnectionHealth, withLock } from './connections.ts';
 import { allowedHosts, hostAllowed } from './proxy.ts';
 import { onConnectionChange, onCredentialsChange } from './connection-events.ts';
 import { onAccessChange } from './access-events.ts';
@@ -136,6 +136,7 @@ export async function acquireWebSocket(access: WebSocketAccess, id: string, sign
     let channel: Channel | undefined;
     let adapter: WebSocketSession | undefined;
     try {
+      const recovered = trackConnectionHealth(id);
       await withLock(id, async () => {
         for (const force of [false, true]) {
           access.check(id); openSignal.throwIfAborted();
@@ -169,6 +170,7 @@ export async function acquireWebSocket(access: WebSocketAccess, id: string, sign
       adapter = await abortable(creation, openSignal);
       openSignal.throwIfAborted(); access.check(id);
       if (!adapter || typeof adapter.call !== 'function') throw new Error('WebSocket session must implement call');
+      recovered();
       const session: ManagedWebSocket = { connectionId: id, access, adapter, channel: raw ? channel : undefined, controller, service, endpoint: target.href,
         fingerprint: fingerprint(current), holds: 0, lastUsed: Date.now(), close(reason) {
           if (controller.signal.aborted) return;

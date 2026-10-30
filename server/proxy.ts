@@ -1,7 +1,7 @@
 import { one } from './db.ts';
 import { HttpError, badRequest } from './http.ts';
 import type { Connection, ServiceDefinition } from './plugins/api.ts';
-import { loadConnection, markError, resolveBaseUrl, saveCredentials, touch, withLock } from './connections.ts';
+import { loadConnection, markError, resolveBaseUrl, saveCredentials, touch, trackConnectionHealth, withLock } from './connections.ts';
 import type { User } from './users.ts';
 import { type Caller, countingStream, record, redactBody, setResponseSize } from './audit.ts';
 import { getConnectionRow } from './connections.ts';
@@ -169,6 +169,7 @@ export async function execute(user: User, connectionRef: string, input: CallInpu
 
 async function executeRemote(user: User, row: any, input: CallInput, method: string, signal?: AbortSignal, caller?: Caller): Promise<Executed> {
   const started = Date.now();
+  const recovered = trackConnectionHealth(row.id);
   const encoded = {
     ...input,
     body: input.body == null ? null : Buffer.from(input.body as any).toString('base64'),
@@ -200,6 +201,7 @@ async function executeRemote(user: User, row: any, input: CallInput, method: str
       });
     }
     touch(row.id);
+    if (ex.response.ok) recovered();
     return ex;
   } catch (e: any) {
     if (caller) record({
@@ -214,6 +216,7 @@ async function executeRemote(user: User, row: any, input: CallInput, method: str
 
 async function executeLoaded(loaded: ReturnType<typeof loadConnection>, user: User, input: CallInput, method: string, signal?: AbortSignal): Promise<Executed> {
   const { conn, service, method: auth } = loaded;
+  const recovered = trackConnectionHealth(conn.id);
   const url = buildUrl(service, conn, input);
 
   const baseHeaders = new Headers();
@@ -267,6 +270,7 @@ async function executeLoaded(loaded: ReturnType<typeof loadConnection>, user: Us
     result = await attempt(true);
   }
   touch(conn.id);
+  if (result.response.ok) recovered();
   return result;
 }
 
@@ -318,12 +322,15 @@ export async function issueToken(user: User, connectionRef: string, force = fals
   }
   return withLock(conn.id, async () => {
     const fresh = loadConnection(user.id, conn.id).conn;
+    const recovered = trackConnectionHealth(conn.id);
     try {
       const t = await method.token!(fresh, { force });
       if (t.credentials !== undefined) saveCredentials(conn.id, t.credentials);
       const current = loadConnection(user.id, conn.id).conn;
       const currentScopes = contract?.grantedScopes?.(current.credentials) ?? [];
       if (scopedCaller && contract?.kind === 'oauth' && (contract.coversScopes ? !contract.coversScopes(required, currentScopes) : currentScopes.some(scope => !required.includes(scope)))) throw new HttpError(403, 'Only full-access owners can retrieve broader-grant tokens');
+      recovered();
+      touch(conn.id);
       audit(200);
       return { access_token: t.accessToken, token_type: t.tokenType ?? 'Bearer', expires_at: t.expiresAt ?? null };
     } catch (e: any) {

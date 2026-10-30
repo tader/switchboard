@@ -1,6 +1,6 @@
 import { onPeerDisconnected } from './peer-events.ts';
 import type { WebSocketOperation } from './plugins/api.ts';
-import { getConnectionRow, loadConnection, touch } from './connections.ts';
+import { getConnectionRow, loadConnection, touch, trackConnectionHealth } from './connections.ts';
 import { requestPeer, peerConnection } from './peers.ts';
 import { peerRoute } from './peer-protocol.ts';
 import { onConnectionChange } from './connection-events.ts';
@@ -208,6 +208,7 @@ export async function executeWebSocket(access: WebSocketAccess, ref: string, inp
       const args = input.arguments ?? {};
       validateWebSocketValue(op, 'input', args);
       if ((input.action === 'call') !== (op.mode === 'command')) throw badRequest('Operation mode does not match this action');
+      const recovered = trackConnectionHealth(row.id);
       const session = await acquireWebSocket(access, row.id, operationSignal);
       if (session.holds >= 32) throw new HttpError(429, 'Too many concurrent operations on this WebSocket session');
       session.holds++; session.lastUsed = Date.now();
@@ -243,6 +244,7 @@ export async function executeWebSocket(access: WebSocketAccess, ref: string, inp
         }
       }
       touch(row.id);
+      recovered();
     }
     const size = jsonSize(result, WS_LIMITS.message);
     const auditId = audit(access, row, input, caller, started, 200, size);
