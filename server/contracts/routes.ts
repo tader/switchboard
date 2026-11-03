@@ -205,6 +205,17 @@ contracts.get("/contracts/v1/subscriptions/:id/events", async (c) => {
             data: JSON.stringify({ cursor }),
           });
         if (!page.events.length) await waiting;
+      } catch (error: any) {
+        // The subscription or its authority can disappear while the stream waits.
+        // Close normally; reconnecting an evicted cursor returns the usual 409.
+        if (
+          ["subscription_not_found", "invalid_cursor"].includes(
+            error?.message,
+          ) ||
+          (error instanceof HttpError && [401, 403, 404].includes(error.status))
+        )
+          break;
+        throw error;
       } finally {
         clearTimeout(timer);
         off();

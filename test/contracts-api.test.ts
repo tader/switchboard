@@ -581,6 +581,36 @@ test("a forbidden resource does not pause other reads on the connection", async 
     200,
   );
 });
+test("deleting a subscription closes a waiting SSE stream normally", async () => {
+  const created = (await (
+    await call("/contracts/v1/subscriptions", { connections: ["first"] })
+  ).json()) as any;
+  const response = await call(
+    `/contracts/v1/subscriptions/${created.id}/events?cursor=${created.cursor}`,
+  );
+  const reader = response.body!.getReader();
+  const first = await reader.read();
+  assert.equal(first.done, false);
+  assert.ok(new TextDecoder().decode(first.value).includes("heartbeat"));
+  const deleted = await contracts.request(
+    `http://localhost/contracts/v1/subscriptions/${created.id}`,
+    { method: "DELETE", headers: { authorization: "Bearer " + token } },
+  );
+  assert.equal(deleted.status, 200);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const next = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error("stream did not close")), 2000);
+      }),
+    ]);
+    assert.equal(next.done, true);
+  } finally {
+    clearTimeout(timer);
+    await reader.cancel();
+  }
+});
 after(async () => {
   const { pushSources, collectors } = await import(
     "../server/contracts/service.ts"
