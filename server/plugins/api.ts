@@ -236,6 +236,8 @@ export interface AuthMethod {
 }
 
 export interface ServiceDefinition {
+  /** Optional provider-independent contract, alongside existing APIs. */
+  contracts?: ContractDefinition;
   /** Omitted by existing plugins; defaults to HTTP. */
   kind?: ConnectionKind;
   /** Globally unique, e.g. "gmail". */
@@ -297,4 +299,51 @@ export interface WebSocketCapability {
   endpoint: string | ((conn: Connection) => string);
   operations: WebSocketOperation[];
   createSession(args: { channel: WebSocketChannel; connection: Connection; signal: AbortSignal }): WebSocketSession | Promise<WebSocketSession>;
+}
+
+/** HTTP requests remain bound to the current connection and its permission boundary. */
+export interface ContractRequest { method: string; url: string; pathParams?: Record<string,string>; query?: [string,string][]; headers?: [string,string][]; body?: Uint8Array|string|null }
+export type Category = 'calendar' | 'email' | 'messaging';
+export type Coverage = { complete: boolean; reason?: string };
+export interface Page<T> { items: T[]; nextCursor?: string; coverage: Coverage }
+export interface Resource { id: string; version?: string }
+export interface Calendar extends Resource { name: string; timeZone: string | null; canWrite: boolean | null }
+export interface CalendarEvent extends Resource {
+  calendarId: string; title: string; description?: string; location?: string;
+  start: { date: string } | { dateTime: string; timeZone: string };
+  /** All-day end dates are exclusive. */
+  end: { date: string } | { dateTime: string; timeZone: string };
+  seriesId?: string; occurrenceId?: string;
+}
+export interface MailCollection extends Resource { name: string; kind: 'folder' | 'label' | 'virtual' }
+export interface Address { address: string; name?: string }
+export interface EmailMessage extends Resource {
+  subject: string; from: Address[]; to: Address[]; collectionIds: string[];
+  text: string; html?: string; isRead: boolean | null; draft: boolean;
+}
+export interface Conversation extends Resource { title: string; kind: 'direct' | 'group' | 'channel' | 'agent'; unread: number | null }
+export interface Message extends Resource { conversationId: string; text: string; authorId: string | null; createdAt: string | null; threadId?: string; replyToId?: string }
+export interface WriteReceipt { status: 'accepted' | 'rejected' | 'uncertain'; resourceId?: string; version?: string; code?: string }
+export interface ContractContext {
+  connection: Connection; signal: AbortSignal;
+  /** Bound to this connection; uses Switchboard's normal authorization/host checks. */
+  request(input: ContractRequest): Promise<Response>;
+}
+export interface ContractOperation {
+  category: Category; readOnly: boolean;
+  inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>;
+  invoke(input: Record<string, unknown>, context: ContractContext): Promise<unknown>;
+}
+export interface ContractDefinition {
+  /** Read-only reconciliation. Checkpoint and events commit together in the core. */
+  collect?(input:{checkpoint?:string},context:ContractContext):Promise<{events:{sourceId:string;event:ChangeEvent}[];checkpoint:string}>;
+  version: 1;
+  operations: Record<string, ContractOperation>;
+  /** Must report effective connection permissions, without exposing credentials. */
+  available(connection: Connection): string[] | Promise<string[]>;
+}
+export interface ChangeEvent {
+  category: Category; type: 'created' | 'updated' | 'deleted' | 'invalidated' | 'resync.required';
+  resourceType: string; resourceId?: string; collectionId?: string; version?: string;
+  occurredAt?: string;
 }

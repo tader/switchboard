@@ -284,3 +284,10 @@ Cores with `ctx.capabilities?.deviceQr` support returning `{ device: { qrCode, i
 With `ctx.capabilities?.deviceBrowser`, return `{ device: { browser: true, instructions, expiresIn?, interval? }, pending? }` when the plugin opens its own authentication browser. Switchboard shows the plain-text instructions and a sign-in spinner without a device code or copy/open button. Explain where the browser opens, especially when Switchboard runs on another computer.
 
 With `ctx.capabilities?.deviceUpdates`, `poll()` may return `{ wait: true, device, pending?, interval? }` to replace the displayed instructions or QR. The device payload follows the same validation as `connect()`; updates never extend the original flow deadline. QR presentations may include `qrExpiresAt` (Unix milliseconds) so the browser hides an expired image while awaiting its replacement. Render QR payloads locally and never log pairing material.
+
+## Shared category contracts (staged)
+
+An optional `ServiceDefinition.contracts` extension provides category operations and
+read-only change collection alongside existing APIs. The core surface is disabled
+by default and provisional; see the [design and delivery checklist](design/shared-contracts.md)
+for its HTTP endpoints, activity/authentication rules and remaining adapter/peer work.
