@@ -44,6 +44,9 @@ export class ContractStore {
     }
     return b;
   }
+  notify() {
+    this.bus().emit("change");
+  }
   onChange(listener: () => void) {
     const b = this.bus();
     b.on("change", listener);

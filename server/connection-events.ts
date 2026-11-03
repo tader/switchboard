@@ -9,6 +9,7 @@ export function connectionChanged(id?: string) {
   for (const listener of listeners) listener(id);
 }
 
-const credentialListeners = new Set<(id: string) => void>();
-export function onCredentialsChange(listener: (id: string) => void) { credentialListeners.add(listener); return () => { credentialListeners.delete(listener); }; }
-export function credentialsChanged(id: string) { for (const listener of credentialListeners) listener(id); }
+const credentialListeners = new Set<(id: string, changed: boolean) => void>();
+export function onCredentialsChange(listener: (id: string, changed: boolean) => void) { credentialListeners.add(listener); return () => { credentialListeners.delete(listener); }; }
+/** Replacement still interrupts protocol sessions even when it preserves the same value. */
+export function credentialsChanged(id: string, changed = true) { for (const listener of credentialListeners) listener(id, changed); }

@@ -1,3 +1,6 @@
+import { contractAuthRevision } from './contracts/auth-revision.ts';
+import { config } from './config.ts';
+import { CONTRACT_PEER_FEATURE } from './peer-protocol.ts';
 import { provideCredentials } from './credential-providers.ts';
 import { one } from './db.ts';
 import { executeWebSocket } from './websocket.ts';
@@ -29,9 +32,11 @@ export function sharedCatalogue(peerId: string, targetInstance?: string) {
     return [{ id: row.id, name: c.name, serviceId: c.serviceId, serviceName: c.serviceName, kind: c.kind,
       icon: row.peer_id ? peerConnection(row.user_id, row.peer_id, row.remote_connection_id).icon : plugins.service(c.serviceId)?.icon,
       credentialProvider: !row.peer_id && one('SELECT 1 FROM connection_credential_shares WHERE connection_id = ? AND peer_id = ?', row.id, peerId) ? (() => { const method = loadConnection(row.user_id, row.id, true).method; return method.credentialProvider ? { format: method.credentialProvider.format } : undefined; })() : undefined,
+      contractAuthRevision: config.sharedContracts ? (row.peer_id ? peerConnection(row.user_id, row.peer_id, row.remote_connection_id).contractAuthRevision : plugins.service(c.serviceId)?.contracts ? contractAuthRevision(row.id) : undefined) : undefined,
+      hasContracts: config.sharedContracts && (row.peer_id ? peerConnection(row.user_id, row.peer_id, row.remote_connection_id).hasContracts : !!plugins.service(c.serviceId)?.contracts),
       hasOpenapi: c.hasOpenapi, hasWebSocket: c.hasWebSocket, status: c.status, route }];
   });
-  return { instanceId: instanceId(), connections };
+  return { instanceId: instanceId(), connections, features: config.sharedContracts ? [CONTRACT_PEER_FEATURE] : [] };
 }
 function decodeInput(raw: any): CallInput {
   return { method: String(raw?.method ?? 'GET'), url: String(raw?.url ?? ''), pathParams: raw?.pathParams, query: raw?.query, headers: raw?.headers,
@@ -54,6 +59,10 @@ export async function handleSharedRequest(peerId: string, peerUserId: string, op
   if (operation === 'credentials') {
     if (row.peer_id || !one('SELECT 1 FROM connection_credential_shares WHERE connection_id = ? AND peer_id = ?', row.id, peerId)) throw new HttpError(403, 'Authentication is not shared with this peer');
     return provideCredentials(user.id, row.id, payload.format, payload.forceAuthentication === true, signal);
+  }
+  if (operation === 'contracts') {
+    const { handleContractPeer } = await import('./contracts/peer.ts');
+    return handleContractPeer(peerWebsocketAccess(user, peerId, peerUserId, caller.tokenId!), row.id, payload, signal ?? new AbortController().signal, caller);
   }
   if (operation === 'websocket') return executeWebSocket(peerWebsocketAccess(user, peerId, peerUserId, caller.tokenId!), row.id, payload.input, signal, caller);
   if (operation === 'mcp') return executeMcp(user, row.id, payload.input, signal, caller);

@@ -1,3 +1,8 @@
+import { peerConnection } from "../peers.ts";
+import { contractCredentialsChanged } from "./auth-revision.ts";
+import { sharedConnection } from "../peer-settings.ts";
+import { peerRoute } from "../peer-protocol.ts";
+import { peerContractSource } from "./relay.ts";
 import { db, one } from "../db.ts";
 import { getConnectionRow, loadConnection } from "../connections.ts";
 import { execute } from "../proxy.ts";
@@ -12,13 +17,16 @@ import { ContractCollectors } from "./runtime.ts";
 function failure(code: string): never {
   throw Object.assign(Error(code), { code });
 }
-function actor(connection: string) {
+export function activityFor(connection: string) {
   const now = Date.now();
   const candidates = db
     .prepare(
-      "SELECT s.owner,a.principal FROM contract_subscriptions s JOIN contract_subscription_access a ON a.id=s.id WHERE s.poll_until>? AND EXISTS(SELECT 1 FROM json_each(s.connections) WHERE value=?)",
+      "SELECT s.owner,s.active_until,s.poll_until,a.principal FROM contract_subscriptions s JOIN contract_subscription_access a ON a.id=s.id WHERE s.poll_until>? AND EXISTS(SELECT 1 FROM json_each(s.connections) WHERE value=?)",
     )
     .all(now, connection) as any[];
+  let validUser: any,
+    activeUntil = 0,
+    pollUntil = 0;
   for (const row of candidates) {
     const user = one(
       "SELECT * FROM users WHERE id=? AND disabled=0",
@@ -26,7 +34,13 @@ function actor(connection: string) {
     );
     if (!user) continue;
     try {
-      getConnectionRow(row.owner, connection);
+      const current = getConnectionRow(row.owner, connection);
+      if (current.peer_id)
+        peerConnection(
+          row.owner,
+          current.peer_id,
+          current.remote_connection_id,
+        );
     } catch {
       continue;
     }
@@ -54,11 +68,36 @@ function actor(connection: string) {
         )
       )
         continue;
-    } else continue;
-    return user;
+    } else {
+      try {
+        const p = JSON.parse(row.principal);
+        if (
+          !Array.isArray(p) ||
+          p.length !== 4 ||
+          p[0] !== "peer" ||
+          !p.slice(1).every((x) => typeof x === "string" && x)
+        )
+          continue;
+        if (sharedConnection(p[1], connection).user_id !== row.owner) continue;
+      } catch {
+        continue;
+      }
+    }
+    validUser = user;
+    activeUntil = Math.max(activeUntil, row.active_until);
+    pollUntil = Math.max(pollUntil, row.poll_until);
   }
-  return failure("access_revoked");
+  if (!validUser) return failure("access_revoked");
+  return {
+    user: validUser,
+    activeForMs: Math.min(90000, Math.max(0, activeUntil - now)),
+    pollForMs: Math.min(990000, Math.max(0, pollUntil - now)),
+  };
 }
+function actor(connection: string) {
+  return activityFor(connection).user;
+}
+
 let runtime: ContractCollectors | undefined;
 export function collectors() {
   if (!runtime) {
@@ -68,6 +107,8 @@ export function collectors() {
       },
       async collect(checkpoint, signal) {
         const user = actor(connection);
+        if (getConnectionRow(user.id, connection).peer_id)
+          return failure("collector_not_supported");
         const { conn, service } = loadConnection(user.id, connection);
         const definition = service.contracts;
         if (!definition?.collect)
@@ -109,6 +150,11 @@ export function pushSources() {
       new ContractStore(db),
       (connection) => {
         const user = actor(connection);
+        const row = getConnectionRow(user.id, connection);
+        if (row.peer_id)
+          return peerContractSource(connection, row, () =>
+            activityFor(connection),
+          );
         const { conn, service } = loadConnection(user.id, connection);
         const definition = service.contracts;
         return {
@@ -116,34 +162,36 @@ export function pushSources() {
             actor(connection);
           },
           watch: definition?.watch
-            ? async (checkpoint, publish, signal) => {
-                const available = await definition.available(conn);
-                if (
-                  !available.some(
-                    (name) => definition.operations[name]?.readOnly,
+            ? (checkpoint, publish, signal) =>
+                peerRoute.exit(async () => {
+                  const available = await definition.available(conn);
+                  if (
+                    !available.some(
+                      (name) => definition.operations[name]?.readOnly,
+                    )
                   )
-                )
-                  return failure("watch_not_supported");
-                try {
-                  await definition.watch!(
-                    { checkpoint },
-                    {
-                      connection: conn,
-                      signal,
-                      publish,
-                      request: async (input) => {
-                        actor(connection);
-                        return (await execute(user, connection, input, signal))
-                          .response;
+                    return failure("watch_not_supported");
+                  try {
+                    await definition.watch!(
+                      { checkpoint },
+                      {
+                        connection: conn,
+                        signal,
+                        publish,
+                        request: async (input) => {
+                          actor(connection);
+                          return (
+                            await execute(user, connection, input, signal)
+                          ).response;
+                        },
                       },
-                    },
-                  );
-                } catch (e: any) {
-                  if (e?.status === 401 || e?.status === 403)
-                    return failure("authentication_required");
-                  throw e;
-                }
-              }
+                    );
+                  } catch (e: any) {
+                    if (e?.status === 401 || e?.status === 403)
+                      return failure("authentication_required");
+                    throw e;
+                  }
+                })
             : undefined,
         };
       },
@@ -156,7 +204,9 @@ export function startContractCollectors() {
     p = pushSources();
   r.start();
   p.start();
-  const off = onCredentialsChange((id) => {
+  const off = onCredentialsChange((id, changed) => {
+    if (!changed) return;
+    contractCredentialsChanged(id);
     r.credentialsChanged(id);
     p.reset(id);
   });
@@ -175,7 +225,7 @@ export function bindActivity(owner: string, id: string, principal: string) {
   const store = new ContractStore(db);
   const sub = store.subscription(owner, id);
   db.prepare(
-    "INSERT INTO contract_subscription_access VALUES(?,?) ON CONFLICT(id) DO UPDATE SET principal=excluded.principal",
+    "INSERT INTO contract_subscription_access(id,principal) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET principal=excluded.principal",
   ).run(id, principal);
   for (const connection of sub.connections)
     if (collectors().state(connection).error === "access_revoked") {

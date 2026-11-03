@@ -1,3 +1,5 @@
+import { config } from './config.ts';
+import { CONTRACT_PEER_FEATURE, peerFeatures } from './peer-protocol.ts';
 import { peerDisconnected } from './peer-events.ts';
 import { configuredPeerLinks, onPeersChanged, peersChanged, peerStatuses, peerToken, sharedConnection, validPeerName, validPeerUrl, type PeerStatus } from './peer-settings.ts';
 import type { Server } from 'node:http';
@@ -5,7 +7,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { encrypt, randomId, randomToken, sha256 } from './crypto.ts';
 import { all, db, now, one, run } from './db.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
-import { connectionChanged, onConnectionChange } from './connection-events.ts';
+import { connectionChanged, credentialsChanged, onConnectionChange } from './connection-events.ts';
 import { acceptRoute, peerRoute, instanceId, forwardingRoute, PEER_PROTOCOL, PEER_MAX_MESSAGE, PEER_OPERATIONS, MAX_PEER_HOPS } from './peer-protocol.ts';
 
 const PROTOCOL = PEER_PROTOCOL;
@@ -14,6 +16,8 @@ const MAX_MESSAGE = PEER_MAX_MESSAGE;
 
 export interface PeerConnection {
   id: string; name: string; serviceId: string; serviceName: string; kind: 'http' | 'mcp';
+  hasContracts?: boolean;
+  contractAuthRevision?: string;
   credentialProvider?: { format: string };
   icon?: string; hasOpenapi: boolean; hasWebSocket?: boolean; status: 'ok' | 'error' | 'unavailable'; route: string[];
 }
@@ -24,6 +28,7 @@ interface Session {
   connectedAt: number;
   lastHeartbeat: number;
   remoteInstance?: string;
+  features: string[];
   dispose(): void;
   inFlight: Map<string, { controller: AbortController; connection: string }>;
   pending: Map<string, { resolve(value: any): void; reject(error: Error): void; timer: NodeJS.Timeout }>;
@@ -178,7 +183,8 @@ export function parseRemoteServiceId(value: string): { peerId: string; serviceId
   return m ? { peerId: m[1], serviceId: m[2] } : undefined;
 }
 
-export function validatePeerCatalog(value: any): { instanceId: string; connections: PeerConnection[] } {
+export function validatePeerCatalog(value: any): { instanceId: string; connections: PeerConnection[]; features: string[] } {
+  const features = peerFeatures(value?.features);
   if (!value || typeof value.instanceId !== 'string' || !value.instanceId || value.instanceId.length > 100 || value.instanceId === instanceId() || !Array.isArray(value.connections) || value.connections.length > 1000) throw new Error('Invalid peer connection catalogue');
   const seen = new Set<string>();
   const connections = value.connections.map((c: any) => {
@@ -189,9 +195,11 @@ export function validatePeerCatalog(value: any): { instanceId: string; connectio
     seen.add(c.id);
     return { id: c.id, name: c.name.slice(0, 100), serviceId: c.serviceId, serviceName: c.serviceName.slice(0, 100), kind: c.kind, status: c.status,
       credentialProvider: c.credentialProvider && c.route.length === 1 && typeof c.credentialProvider.format === 'string' && /^[a-zA-Z0-9/._-]{1,100}$/.test(c.credentialProvider.format) ? { format: c.credentialProvider.format } : undefined,
+      hasContracts: c.hasContracts === true && features.includes(CONTRACT_PEER_FEATURE),
+      contractAuthRevision: typeof c.contractAuthRevision === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(c.contractAuthRevision) ? c.contractAuthRevision : undefined,
       hasOpenapi: !!c.hasOpenapi, hasWebSocket: c.hasWebSocket === true, icon: typeof c.icon === 'string' && c.icon.length <= 100_000 ? c.icon : undefined, route: [...c.route] };
   });
-  return { instanceId: value.instanceId, connections };
+  return { instanceId: value.instanceId, connections, features };
 }
 
 function closeSession(id: string, code: number, reason: string) {
@@ -217,9 +225,9 @@ function bindIdentity(id: string, remote: unknown): string {
 }
 
 /** Both incoming and outgoing sockets use the same catalogue, execution and cancellation paths. */
-function registerSession(socket: WebSocket, peerId: string, remote?: string) {
+function registerSession(socket: WebSocket, peerId: string, remote?: string, features: unknown = []) {
   closeSession(peerId, 4000, 'Replaced by a new connection');
-  const session: Session = { socket, peerId, connectedAt: now(), lastHeartbeat: now(), pending: new Map(), inFlight: new Map(), remoteInstance: remote, dispose: () => {} };
+  const session: Session = { socket, peerId, connectedAt: now(), lastHeartbeat: now(), pending: new Map(), inFlight: new Map(), remoteInstance: remote, features: peerFeatures(features), dispose: () => {} };
   if (remote) bindIdentity(peerId, remote);
   sessions.set(peerId, session);
   let sentCatalog = '';
@@ -257,11 +265,17 @@ function registerSession(socket: WebSocket, peerId: string, remote?: string) {
       try {
         const value = validatePeerCatalog(message.catalog);
         session.remoteInstance = bindIdentity(peerId, value.instanceId);
+        session.features = value.features;
         const previous = one('SELECT * FROM peers WHERE id = ?', peerId);
         if (JSON.stringify(catalog(previous)) !== JSON.stringify({ connections: value.connections })) {
           for (const row of all('SELECT id FROM connections WHERE peer_id = ?', peerId)) connectionChanged(row.id);
         }
         run('UPDATE peers SET catalog_json = ?, catalog_version = ?, updated_at = ? WHERE id = ?', JSON.stringify(value), String(message.version ?? '').slice(0, 100) || null, now(), peerId);
+        for (const row of all('SELECT id,remote_connection_id FROM connections WHERE peer_id = ?', peerId)) {
+          const before = catalog(previous).connections.find(c => c.id === row.remote_connection_id)?.contractAuthRevision;
+          const after = value.connections.find(c => c.id === row.remote_connection_id)?.contractAuthRevision;
+          if (after && after !== before) credentialsChanged(row.id);
+        }
         send({ type: 'catalog.accepted', version: message.version ?? null }); void refresh();
       } catch (error: any) { send({ type: 'catalog.rejected', error: String(error.message).slice(0, 500) }); socket.close(1008, 'Invalid peer catalogue or identity'); }
       return;
@@ -270,7 +284,11 @@ function registerSession(socket: WebSocket, peerId: string, remote?: string) {
     if (message.type === 'result' || message.type === 'error') {
       const pending = session.pending.get(String(message.requestId)); if (!pending) return;
       session.pending.delete(String(message.requestId)); clearTimeout(pending.timer);
-      if (message.type === 'error') pending.reject(new HttpError(Number.isInteger(message.status) && message.status >= 400 && message.status <= 599 ? message.status : 502, String(message.error ?? 'Peer request failed').slice(0, 2000)));
+      if (message.type === 'error') {
+        const error = new HttpError(Number.isInteger(message.status) && message.status >= 400 && message.status <= 599 ? message.status : 502, String(message.error ?? 'Peer request failed').slice(0, 2000));
+        if (typeof message.code === 'string' && /^[a-z][a-z0-9_.]{0,99}$/.test(message.code)) Object.assign(error, { code: message.code });
+        pending.reject(error);
+      }
       else pending.resolve(message.result);
       return;
     }
@@ -280,6 +298,7 @@ function registerSession(socket: WebSocket, peerId: string, remote?: string) {
     if (typeof message.requestId !== 'string' || !message.requestId || message.requestId.length > 100 || session.inFlight.has(message.requestId) || session.inFlight.size >= 100) { socket.close(1008, 'Invalid request id or too many pending requests'); return; }
     const controller = new AbortController(); session.inFlight.set(message.requestId, { controller, connection: message.payload?.connection });
     try {
+      if (message.operation === 'contracts' && (!config.sharedContracts || !session.features.includes(CONTRACT_PEER_FEATURE))) throw new HttpError(501, 'contract_peer_upgrade_required');
       const route = acceptRoute(message.route, message.deadline);
       if (route.path.at(-1) !== session.remoteInstance) throw new HttpError(403, 'Request route does not match authenticated peer');
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(Math.max(1, route.deadline - now()))]);
@@ -289,7 +308,7 @@ function registerSession(socket: WebSocket, peerId: string, remote?: string) {
       const response = JSON.stringify({ protocol: PROTOCOL, type: 'result', requestId: message.requestId, result });
       if (Buffer.byteLength(response) > MAX_MESSAGE) throw new HttpError(502, 'Peer result exceeded the message limit');
       if (socket.readyState === WebSocket.OPEN) socket.send(response);
-    } catch (error: any) { send({ type: 'error', requestId: message.requestId, status: error?.status ?? 502, error: String(error?.message ?? error).slice(0, 500) }); }
+    } catch (error: any) { send({ type: 'error', requestId: message.requestId, status: error?.status ?? 502, error: String(error?.message ?? error).slice(0, 500), code: typeof error?.code === 'string' && /^[a-z][a-z0-9_.]{0,99}$/.test(error.code) ? error.code : undefined }); }
     finally { session.inFlight.delete(message.requestId); }
   });
   socket.on('close', () => { if (sessions.get(peerId) === session) closeSession(peerId, 1000, 'Peer disconnected'); });
@@ -311,7 +330,7 @@ export function attachPeerWebSockets(server: Server) {
     if (!row) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(request, socket, head, ws => {
       registerSession(ws, row.id);
-      ws.send(JSON.stringify({ protocol: PROTOCOL, type: 'welcome', instanceId: instanceId(), peerId: row.id, heartbeatSeconds: 20, maxMessageBytes: MAX_MESSAGE }));
+      ws.send(JSON.stringify({ protocol: PROTOCOL, type: 'welcome', instanceId: instanceId(), peerId: row.id, heartbeatSeconds: 20, maxMessageBytes: MAX_MESSAGE, features: config.sharedContracts ? [CONTRACT_PEER_FEATURE] : [] }));
     });
   });
   return () => { for (const id of [...sessions.keys()]) closeSession(id, 1001, 'Server stopping'); wss.close(); };
@@ -338,7 +357,7 @@ export function startPeerAgent() {
           try {
             const message = JSON.parse(String(raw));
             if (message.protocol !== PROTOCOL || message.type !== 'welcome') throw new Error('Upgrade both Switchboards to peer protocol 3');
-            registerSession(current, row.id, bindIdentity(row.id, message.instanceId)); retryMs = 1000;
+            registerSession(current, row.id, bindIdentity(row.id, message.instanceId), message.features); retryMs = 1000;
             Object.assign(status, { state: 'online', connectedAt: now(), lastSeenAt: now(), lastError: null });
           } catch (error: any) { status.lastError = error.message; current.close(1008, 'Peer handshake failed'); }
         });
@@ -365,7 +384,7 @@ export async function requestPeer<T>(peerId: string, userId: string, operation: 
   if (operation === 'credentials' && (!descriptor.credentialProvider || descriptor.route.length !== 1)) throw new HttpError(403, 'Peer authentication source is unavailable');
   // A provider may recover from a stale error by refreshing or using a newly reconnected session.
   // Keep unavailable services and ordinary data calls blocked; credential grants were checked above.
-  if (descriptor.status !== 'ok' && !(operation === 'credentials' && descriptor.status === 'error')) throw new HttpError(503, 'The shared connection is unavailable on its peer');
+  if (descriptor.status !== 'ok' && operation !== 'contracts' && !(operation === 'credentials' && descriptor.status === 'error')) throw new HttpError(503, 'The shared connection is unavailable on its peer');
   if (signal?.aborted) throw new HttpError(499, 'Request cancelled; the outcome may be unknown');
   if (!userCanUsePeer(userId, peerId)) throw new HttpError(403, 'You cannot use this peer');
   const peer = getPeer(peerId);
@@ -375,6 +394,7 @@ export async function requestPeer<T>(peerId: string, userId: string, operation: 
     error.code = 'peer_offline';
     throw error;
   }
+  if (operation === 'contracts' && (!config.sharedContracts || !session.features.includes(CONTRACT_PEER_FEATURE))) throw new HttpError(501, 'contract_peer_upgrade_required');
   if (session.pending.size >= 100) throw new HttpError(429, 'Too many pending peer requests');
   const requestId = randomId('pr');
   const handles = new Set(all<{ id: string }>('SELECT id FROM connections WHERE peer_id = ? AND remote_connection_id = ?', peerId, remote).map(c => c.id));

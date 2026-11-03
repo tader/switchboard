@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { all, db, now, one, run } from './db.ts';
 import { decrypt, encrypt, randomId } from './crypto.ts';
 import { connectionChanged, credentialsChanged } from './connection-events.ts';
@@ -84,14 +85,14 @@ function transaction<T>(fn: () => T): T {
   db.exec('BEGIN IMMEDIATE');
   try { const result = fn(); db.exec('COMMIT'); return result; } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
-export function notifyCredential(id: string, interrupt = true) {
-  for (const row of all('SELECT id FROM connections WHERE credential_id = ?', id)) { credentialsChanged(row.id); if (interrupt) connectionChanged(row.id); }
+export function notifyCredential(id: string, interrupt = true, changed = true) {
+  for (const row of all('SELECT id FROM connections WHERE credential_id = ?', id)) { credentialsChanged(row.id, changed); if (interrupt) connectionChanged(row.id); }
 }
 export function replaceCredential(row: any, credentials: any, config?: Record<string, any>, account?: Connection['account'], interrupt = false) {
   const result = run("UPDATE credentials SET credentials_enc = ?, config_enc = ?, status = 'ok', status_message = NULL, version = version + 1, updated_at = ?, account_id = COALESCE(?, account_id), account_label = COALESCE(?, account_label), account_avatar = COALESCE(?, account_avatar) WHERE id = ? AND version = ?", encrypt(credentials), config ? encrypt(config) : row.config_enc, now(), account?.id ?? null, account?.label ?? null, account?.avatarUrl ?? null, row.id, row.version);
   if (!result.changes) throw new HttpError(409, 'The credential changed; reload before retrying');
   if (interrupt) run("UPDATE connections SET status = 'ok', status_message = NULL WHERE credential_id = ?", row.id);
-  notifyCredential(row.id, interrupt);
+  notifyCredential(row.id, interrupt, !isDeepStrictEqual(decrypt(row.credentials_enc), credentials));
 }
 export async function promoteCredential(user: User, ref: string, name: string) {
   if (typeof ref !== 'string' || !ref.trim()) throw badRequest('A source connection is required');

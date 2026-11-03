@@ -185,6 +185,7 @@ export class ContractPushSources {
         error: "source_unavailable",
       });
     } finally {
+      task.controller.abort();
       this.tasks.delete(id);
       // Reset/abort must not overwrite a newer configuration reset or terminal auth pause.
       const state = this.state(id);

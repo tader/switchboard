@@ -79,6 +79,7 @@ export class ContractCollectors {
         "INSERT INTO contract_collectors VALUES(?,?) ON CONFLICT(connection) DO UPDATE SET state=excluded.state",
       )
       .run(connection, JSON.stringify(state));
+    this.store.notify();
   }
   /** Explicit reauthentication/configuration changes are the only way out of terminal auth pause. */
   credentialsChanged(connection: string) {

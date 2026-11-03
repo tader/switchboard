@@ -1,6 +1,5 @@
-import { terminalAuthenticationError } from "../auth-errors.ts";
-import { messagingOperations } from "./messaging-schema.ts";
-import { calendarOperations } from "./calendar-schema.ts";
+import { refreshPeerContract } from "./relay.ts";
+import { describeContract, callContract, contractFailure } from "./engine.ts";
 import { bindActivity, collectors, pushSources } from "./service.ts";
 import { onConnectionChange } from "../connection-events.ts";
 import { onAccessChange } from "../access-events.ts";
@@ -8,38 +7,13 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { callerFrom, record } from "../audit.ts";
 import { streamSSE } from "hono/streaming";
-import { Ajv } from "ajv";
 import { requireUser, type Env, assertConnectionAccess } from "../auth.ts";
 import { db } from "../db.ts";
-import {
-  getConnectionRow,
-  listConnections,
-  loadConnection,
-} from "../connections.ts";
-import { execute } from "../proxy.ts";
+import { getConnectionRow, listConnections } from "../connections.ts";
 import { websocketAccess } from "../websocket-access.ts";
 import { HttpError, badRequest } from "../http.ts";
 import { ContractStore } from "./store.ts";
 import { CATEGORIES } from "./model.ts";
-const commonOperations = { ...calendarOperations, ...messagingOperations };
-const ajv = new Ajv({ strict: false, allErrors: true });
-const validators = new WeakMap<object, ReturnType<typeof ajv.compile>>();
-function validate(
-  schema: Record<string, unknown>,
-  value: unknown,
-  output = false,
-) {
-  let f = validators.get(schema);
-  if (!f) {
-    f = ajv.compile(schema);
-    validators.set(schema, f);
-  }
-  if (!f(value))
-    throw new HttpError(
-      output ? 502 : 400,
-      output ? "invalid_contract_response" : "invalid_contract_arguments",
-    );
-}
 async function json(c: any) {
   try {
     return await c.req.json();
@@ -53,8 +27,8 @@ function store() {
 function checked(c: any, ref: string) {
   const row = getConnectionRow(c.get("user").id, ref);
   assertConnectionAccess(c, row.id);
-  if (row.peer_id) throw new HttpError(501, "contract_peer_upgrade_required");
-  return loadConnection(c.get("user").id, row.id);
+  websocketAccess(c).check(row.id);
+  return row;
 }
 function owned(c: any, id: string) {
   const s = store().subscription(c.get("user").id, id);
@@ -87,32 +61,8 @@ contracts.use("/connections/:ref/contracts/v1/call", async (c, next) => {
   }
 });
 contracts.onError((error, c) => {
-  const codes: Record<string, number> = {
-    subscription_not_found: 404,
-    invalid_cursor: 409,
-    idempotency_conflict: 409,
-    invalid_subscription: 400,
-    invalid_limit: 400,
-    invalid_idempotency_key: 400,
-    not_found: 404,
-    conflict: 409,
-    invalid_request: 400,
-    permission_denied: 403,
-    authentication_required: 409,
-    rate_limited: 429,
-    contract_peer_upgrade_required: 501,
-    contract_not_supported: 501,
-    collector_not_supported: 501,
-  };
-  const code = (error as any).code ?? error.message;
-  const status =
-    codes[code] ?? (error instanceof HttpError ? error.status : 500);
-  return c.json(
-    {
-      error: { code: status >= 500 && !codes[code] ? "contract_failed" : code },
-    },
-    status as any,
-  );
+  const failure = contractFailure(error);
+  return c.json({ error: { code: failure.code } }, failure.status as any);
 });
 contracts.get("/contracts/v1/connections", async (c) => {
   const category = c.req.query("category");
@@ -124,29 +74,22 @@ contracts.get("/contracts/v1/connections", async (c) => {
     c.get("token")?.connectionIds,
   )) {
     try {
-      const { conn, service } = checked(c, row.id);
-      const definition = service.contracts;
-      if (!definition) continue;
-      const available = await definition.available(conn);
-      const operations = available.filter(
-        (name) =>
-          definition.operations[name] &&
-          (!category || definition.operations[name].category === category),
+      const view = await describeContract(
+        websocketAccess(c),
+        row.id,
+        c.req.raw.signal,
+        callerFrom(c, "call"),
       );
+      const operations = view.operations
+        .filter((o) => !category || o.category === category)
+        .map((o) => o.name);
       if (operations.length)
         out.push({
           id: row.id,
           name: row.name,
           version: 1,
           operations,
-          changes: {
-            native:
-              typeof definition.watch === "function" &&
-              available.some((name) => definition.operations[name]?.readOnly),
-            reconciliation:
-              typeof definition.collect === "function" &&
-              available.some((name) => definition.operations[name]?.readOnly),
-          },
+          changes: view.changes,
         });
     } catch (e) {
       if (!(e instanceof HttpError)) throw e;
@@ -154,109 +97,26 @@ contracts.get("/contracts/v1/connections", async (c) => {
   }
   return c.json({ connections: out });
 });
-contracts.get("/connections/:ref/contracts/v1", async (c) => {
-  const { conn, service } = checked(c, c.req.param("ref"));
-  const definition = service.contracts;
-  if (!definition) throw new HttpError(501, "contract_not_supported");
-  const names = await definition.available(conn);
-  return c.json({
-    version: 1,
-    changes: {
-      native:
-        typeof definition.watch === "function" &&
-        names.some((name) => definition.operations[name]?.readOnly),
-      reconciliation:
-        typeof definition.collect === "function" &&
-        names.some((name) => definition.operations[name]?.readOnly),
-    },
-    operations: names
-      .filter((n) => definition.operations[n])
-      .map((n) => {
-        const o = definition.operations[n];
-        return {
-          name: n,
-          category: o.category,
-          readOnly: o.readOnly,
-          inputSchema: commonOperations[n]?.inputSchema ?? o.inputSchema,
-          outputSchema: commonOperations[n]?.outputSchema ?? o.outputSchema,
-          inputConstraints: o.inputSchema,
-        };
-      }),
-  });
-});
+contracts.get("/connections/:ref/contracts/v1", async (c) =>
+  c.json(
+    await describeContract(
+      websocketAccess(c),
+      c.req.param("ref"),
+      c.req.raw.signal,
+      callerFrom(c, "call"),
+    ),
+  ),
+);
 contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
-  const { conn, service } = checked(c, c.req.param("ref"));
-  const definition = service.contracts;
-  if (!definition) throw new HttpError(501, "contract_not_supported");
-  const input = await json(c);
-  if (!input || typeof input.operation !== "string")
-    throw badRequest("Operation required");
-  const op = Object.hasOwn(definition.operations, input.operation)
-    ? definition.operations[input.operation]
-    : undefined;
-  if (!op || !(await definition.available(conn)).includes(input.operation))
-    throw new HttpError(403, "operation_not_available");
-  const args = input.arguments ?? {};
-  const common = Object.hasOwn(commonOperations, input.operation)
-    ? commonOperations[input.operation]
-    : undefined;
-  if (common) validate(common.inputSchema, args);
-  validate(op.inputSchema, args);
-  if (!op.readOnly) {
-    if (collectors().state(conn.id).status === "auth_required")
-      throw new HttpError(409, "authentication_required");
-    if (typeof input.idempotencyKey !== "string")
-      throw badRequest("Idempotency key required");
-    const prior = store().intent(conn.id, input.idempotencyKey, {
-      operation: input.operation,
-      arguments: args,
-    });
-    if (prior) return c.json(prior);
-  }
-  try {
-    let result = await op.invoke(args, {
-      connection: conn,
-      signal: c.req.raw.signal,
-      idempotencyKey: op.readOnly ? undefined : input.idempotencyKey,
-      request: async (request) => {
-        websocketAccess(c).check(conn.id);
-        return (
-          await execute(c.get("user"), conn.id, request, c.req.raw.signal)
-        ).response;
-      },
-    });
-    if (!op.readOnly) {
-      if (
-        !result ||
-        !["accepted", "rejected", "uncertain"].includes((result as any).status)
-      )
-        throw badRequest("Invalid write receipt");
-      const receipt = result as Record<string, unknown>;
-      result = Object.fromEntries(
-        ["status", "resourceId", "version", "code"]
-          .filter((key) => receipt[key] !== undefined)
-          .map((key) => {
-            if (
-              typeof receipt[key] !== "string" ||
-              (receipt[key] as string).length > 1024
-            )
-              throw badRequest("Invalid receipt field");
-            return [key, receipt[key]];
-          }),
-      );
-    }
-    if (common) validate(common.outputSchema, result, true);
-    validate(op.outputSchema, result, true);
-    if (!op.readOnly) {
-      store().receipt(conn.id, input.idempotencyKey, result);
-    }
-    return c.json(result as any);
-  } catch (e: any) {
-    if (terminalAuthenticationError(e) || e?.status === 401)
-      collectors().pauseAuthentication(conn.id);
-    if (!op.readOnly) return c.json({ status: "uncertain" }, 202);
-    throw e;
-  }
+  const response = await callContract(
+    websocketAccess(c),
+    c.req.param("ref"),
+    await json(c),
+    c.req.raw.signal,
+    callerFrom(c, "call"),
+    collectors(),
+  );
+  return c.json(response.result, response.status);
 });
 contracts.post("/contracts/v1/subscriptions", async (c) => {
   const b = await json(c);
@@ -264,7 +124,7 @@ contracts.post("/contracts/v1/subscriptions", async (c) => {
     throw badRequest("Connections required");
   const ids = b.connections.map((id: unknown) => {
     if (typeof id !== "string") throw badRequest("Invalid connection");
-    return checked(c, id).conn.id;
+    return checked(c, id).id;
   });
   const sub = store().create(c.get("user").id, ids);
   bindActivity(c.get("user").id, sub.id, websocketAccess(c).principal);
@@ -361,8 +221,14 @@ contracts.post("/contracts/v1/subscriptions/:id/refresh", async (c) => {
     !sub.connections.includes(input.connectionId)
   )
     throw badRequest("Connection outside subscription");
-  const { service } = checked(c, input.connectionId);
-  if (!service.contracts?.collect)
+  const row = checked(c, input.connectionId);
+  const description = await describeContract(
+    websocketAccess(c),
+    row.id,
+    c.req.raw.signal,
+    callerFrom(c, "call"),
+  );
+  if (!description.changes.reconciliation)
     throw new HttpError(501, "collector_not_supported");
   bindActivity(c.get("user").id, sub.id, websocketAccess(c).principal);
   // Explicit refresh grants one short-lived read window; it never marks the UI as active.
@@ -372,7 +238,12 @@ contracts.post("/contracts/v1/subscriptions/:id/refresh", async (c) => {
     "UPDATE contract_subscriptions SET poll_until=MAX(poll_until,?) WHERE id=?",
   ).run(until, sub.id);
   try {
-    return c.json(await collectors().refresh(input.connectionId, true));
+    const result = row.peer_id
+      ? await refreshPeerContract(row.id, row, c.get("user"), c.req.raw.signal)
+      : await collectors().refresh(input.connectionId, true);
+    if (result.status === "auth_required")
+      collectors().pauseAuthentication(row.id);
+    return c.json(result);
   } finally {
     db.prepare(
       "UPDATE contract_subscriptions SET poll_until=? WHERE id=? AND poll_until=?",

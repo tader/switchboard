@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { credentialCall, credentialMethod } from './credential-providers.ts';
 import { assertBinding, assertCompatible, binding, covers, exportCredential, importCredential, getCredential, notifyCredential, privateConfig, replaceCredential, sourceConnection } from './credentials.ts';
 import { callbackUrl } from './config.ts';
@@ -164,7 +165,7 @@ export function loadConnection(userId: string, ref: string, management = false) 
         if (result.credentials !== undefined) persist(result.credentials);
         return { ...result, credentials: undefined };
       } catch (error: any) {
-        if (error.code === 'invalid_grant' && run("UPDATE credentials SET status = 'error', status_message = 'OAuth authorization expired or revoked' WHERE id = ? AND version = ?", row.credential_id, current.sourceRow.version).changes) notifyCredential(row.credential_id);
+        if (error.code === 'invalid_grant' && run("UPDATE credentials SET status = 'error', status_message = 'OAuth authorization expired or revoked' WHERE id = ? AND version = ?", row.credential_id, current.sourceRow.version).changes) notifyCredential(row.credential_id, true, false);
         if (error instanceof HttpError) throw error;
         throw new HttpError(502, error.code === 'invalid_grant' ? 'The shared OAuth authorization expired or was revoked; reconnect it' : 'Could not refresh the shared OAuth authorization');
       }
@@ -237,10 +238,10 @@ export async function deleteConnection(userId: string, ref: string) {
 }
 
 export function saveCredentials(id: string, credentials: unknown) {
-  const linked = one('SELECT credential_id, user_id FROM connections WHERE id = ?', id);
+  const linked = one('SELECT credential_id, user_id, credentials_enc FROM connections WHERE id = ?', id);
   if (linked?.credential_id) { replaceCredential(getCredential(linked.user_id, linked.credential_id), exportCredential(loadConnection(linked.user_id, id, true).method, credentials)); return; }
   run(`UPDATE connections SET credentials_enc = ?, updated_at = ? WHERE id = ?`, encrypt(credentials), now(), id);
-  credentialsChanged(id);
+  credentialsChanged(id, !isDeepStrictEqual(decrypt(linked?.credentials_enc), credentials));
 }
 
 const errorRevisions = new Map<string, number>();
@@ -578,6 +579,7 @@ function storeConnectionUnchecked(user: User, f: FlowInfo, result: Connected): C
       user.id, f.service.id, f.method.id, account.id,
     )?.id;
   }
+  const previousCredentials = id ? rowToConnection(one('SELECT * FROM connections WHERE id = ?', id)).credentials : undefined;
   let sharedSource: any;
   let providerReuseOnly = false;
   if (request?.id) {
@@ -636,7 +638,9 @@ function storeConnectionUnchecked(user: User, f: FlowInfo, result: Connected): C
     if (!request?.reuseOnly && !providerReuseOnly) replaceCredential(sharedSource, exportCredential(f.method, result.credentials), sharedSource.kind === 'oauth' ? cfg : undefined, sharedSource.kind === 'oauth' ? account : undefined, true);
     run('UPDATE connections SET credential_id = ?, credentials_enc = NULL, credential_binding_enc = ?, config_enc = ? WHERE id = ?', sharedSource.id, encrypt(binding({ ...rowToConnection(one('SELECT * FROM connections WHERE id = ?', id)), config: cfg }, f.method)), encrypt(privateConfig(cfg, JSON.parse(sharedSource.config_keys))), id);
   } else if (request?.independent) run('UPDATE connections SET credential_id = NULL, credential_binding_enc = NULL WHERE id = ?', id);
-  return toView(one('SELECT * FROM connections WHERE id = ?', id));
+  const saved = one('SELECT * FROM connections WHERE id = ?', id);
+  if (!isDeepStrictEqual(previousCredentials, rowToConnection(saved).credentials)) credentialsChanged(id);
+  return toView(saved);
 }
 
 function defaultName(service: ServiceDefinition, label?: string) {

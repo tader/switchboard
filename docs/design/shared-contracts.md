@@ -28,7 +28,7 @@ The implementation is split into reviewable changes, in this order:
 - [x] Core native receiver lifecycle and durable, separately checkpointed publication.
 - [ ] Native provider wiring: Signal callback; durable WhatsApp helper feed; optional
       Slack/Google/Microsoft subscriptions without automatic cloud setup or scope expansion.
-- [ ] Peer transport: feature negotiation beside protocol 3, scoped calls, upstream
+- [x] Peer transport: feature negotiation beside protocol 3, scoped calls, upstream
       subscriptions and durable local replay; reconnect/gap conformance tests.
 - [ ] Rollout: release the core and adapters after category and transport conformance.
 
@@ -40,8 +40,10 @@ Do not merge or deploy this staging flag as a claim of completed provider suppor
 ## Core HTTP surface
 
 All paths are relative to `/api`, use normal session/bearer authentication and enforce
-current user, token and connection permissions. Peer-backed connections currently
-return `501 contract_peer_upgrade_required` rather than silently bypassing peers.
+current user, token and connection permissions. Peer-backed connections use the same
+contracts through explicitly shared links. A hop without the negotiated `contracts.v1`
+feature returns `501 contract_peer_upgrade_required`; classic peer operations remain
+available without this extension.
 
 - `GET /contracts/v1/connections?category=calendar|email|messaging`: effective operations.
 - `GET /connections/:ref/contracts/v1`: operation schemas and mutation classification.
@@ -129,9 +131,9 @@ work. Credential changes invalidate old jobs; late successes or failures cannot
 overwrite a newer authentication state. Native availability and reconciliation
 support appear in discovery as `changes.native` and `changes.reconciliation`.
 
-Native provider callbacks/subscription registration and peer forwarding are still
-pending. A polling collector plus local SSE is not native provider push; adding this
-core receive lifecycle does not make an unwired provider push-capable.
+Provider callbacks/subscription registration are adapter-specific. A polling collector
+plus local SSE is not native provider push; adding this core receive lifecycle does
+not make an unwired provider push-capable.
 
 
 ## Calendar schema snapshot
@@ -194,3 +196,43 @@ capability recheck; they do not generate fake polling failures or empty snapshot
 An individual forbidden resource returns a permission error without pausing the
 whole connection. Native/reconciliation support is advertised only when the
 connection has an effective read operation; write-only bindings remain usable.
+
+
+## Peer extension
+
+Peer protocol remains version 3. Enabled nodes advertise `contracts.v1` in welcome
+and catalogue messages. Legacy peers omit it and retain their existing HTTP/MCP/
+WebSocket operations. No provider credentials are added to contract RPCs. Each hop
+checks the current peer grant, owner, connection and caller; upstream subscription
+identifiers are bound to that peer principal and a single shared connection.
+
+Describe/call, subscription open/activity/read/close and explicit refresh use the
+existing authenticated WebSocket RPC transport. Writes use the same canonical
+validation and durable intent/receipt engine as HTTP calls. A per-hop namespace
+preserves retry identity while isolating independent downstream connection handles.
+Ambiguous dispatch remains uncertain and must never cause an automatic resend.
+
+A node maintains one upstream relay per locally needed connection. Relay reads are
+20-second long polls of the upstream durable log, not provider polling. Each node
+atomically commits relayed metadata events and its upstream checkpoint, then serves
+its own durable SSE log. Local sequence numbers and relay generations scope delivery
+identity. Transport reconnects replay the stored cursor; an evicted/future upstream
+cursor emits `resync.required` so consumers take a fresh snapshot. Delivery remains
+at least once. Lost upstream subscriptions can be recreated without discarding a
+retained cursor. Closing a relay best-effort closes its upstream subscription; if a
+link is down, its finite lease still expires.
+
+Activity forwards only the remaining active/poll TTL, capped at the same local
+limits. An upstream read, peer heartbeat or reconnect never grants a new activity
+lease. Only the owning node runs the provider collector/native receiver. Explicit
+refresh travels to that owner and obeys its coalescing/cooldown/authentication state.
+A terminal owner authentication pause propagates downstream. An opaque random
+credential revision travels through catalogues after credentials change, allowing
+persistent downstream pauses to clear without exposing tokens or credential hashes.
+Unchanged credentials, normal heartbeats and refresh requests do not clear the pause.
+
+The offline transport test starts real servers in a two-hop chain. It checks scoped
+reads, canonical writes and uncertain-write replay, SSE durability, reconnect and
+retention gaps, share revocation, terminal authentication and reconnection, remaining
+lease expiry, metadata-only persistence, native receiver cleanup and compatibility
+with peers that do not advertise this extension. Provider writes use a local fixture.
