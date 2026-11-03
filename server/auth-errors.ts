@@ -15,7 +15,6 @@ export function terminalAuthenticationError(error: unknown): boolean {
       "permission_unavailable",
       "invalid_credentials",
       "account_mismatch",
-      "permission_denied",
     ].includes(e.code ?? "")
   );
 }

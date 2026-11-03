@@ -142,6 +142,14 @@ export class ContractPushSources {
       throw Object.assign(Error("source_closed"), { code: "source_closed" });
     } catch (error: any) {
       if (signal.aborted || this.stopped || error?.code === "cancelled") return;
+      if (error?.code === "watch_not_supported") {
+        this.save(id, {
+          ...this.state(id),
+          status: "unsupported",
+          error: undefined,
+        });
+        return;
+      }
       if (
         terminalAuthenticationError(error) ||
         error?.code === "access_revoked"

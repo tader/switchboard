@@ -76,7 +76,7 @@ export function collectors() {
           });
         const available = await definition.available(conn);
         if (!available.some((name) => definition.operations[name]?.readOnly))
-          return failure("permission_denied");
+          return failure("collector_not_supported");
         try {
           return await definition.collect(
             { checkpoint },
@@ -123,7 +123,7 @@ export function pushSources() {
                     (name) => definition.operations[name]?.readOnly,
                   )
                 )
-                  return failure("permission_denied");
+                  return failure("watch_not_supported");
                 try {
                   await definition.watch!(
                     { checkpoint },

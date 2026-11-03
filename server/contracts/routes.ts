@@ -140,8 +140,12 @@ contracts.get("/contracts/v1/connections", async (c) => {
           version: 1,
           operations,
           changes: {
-            native: typeof definition.watch === "function",
-            reconciliation: typeof definition.collect === "function",
+            native:
+              typeof definition.watch === "function" &&
+              available.some((name) => definition.operations[name]?.readOnly),
+            reconciliation:
+              typeof definition.collect === "function" &&
+              available.some((name) => definition.operations[name]?.readOnly),
           },
         });
     } catch (e) {
@@ -158,8 +162,12 @@ contracts.get("/connections/:ref/contracts/v1", async (c) => {
   return c.json({
     version: 1,
     changes: {
-      native: typeof definition.watch === "function",
-      reconciliation: typeof definition.collect === "function",
+      native:
+        typeof definition.watch === "function" &&
+        names.some((name) => definition.operations[name]?.readOnly),
+      reconciliation:
+        typeof definition.collect === "function" &&
+        names.some((name) => definition.operations[name]?.readOnly),
     },
     operations: names
       .filter((n) => definition.operations[n])
@@ -244,11 +252,7 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
     }
     return c.json(result as any);
   } catch (e: any) {
-    if (
-      terminalAuthenticationError(e) ||
-      e?.status === 401 ||
-      e?.status === 403
-    )
+    if (terminalAuthenticationError(e) || e?.status === 401)
       collectors().pauseAuthentication(conn.id);
     if (!op.readOnly) return c.json({ status: "uncertain" }, 202);
     throw e;

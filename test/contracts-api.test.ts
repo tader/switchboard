@@ -50,7 +50,14 @@ plugins.services.set("fixture", {
           readOnly: true,
           inputSchema: { type: "object" },
           outputSchema: { type: "object" },
-          invoke: async () => ({ items: [], coverage: { complete: true } }),
+          invoke: async (input) => {
+            if (input.conversationId === "denied")
+              throw Object.assign(Error("Resource denied"), {
+                code: "permission_denied",
+                status: 403,
+              });
+            return { items: [], coverage: { complete: true } };
+          },
         },
         "messaging.messages.send": {
           category: "messaging",
@@ -555,6 +562,24 @@ test("contract input body limits and malformed JSON return client errors", async
     },
   );
   assert.equal(invalid.status, 400);
+});
+test("a forbidden resource does not pause other reads on the connection", async () => {
+  const denied = await call("/connections/first/contracts/v1/call", {
+    operation: "messaging.messages.list",
+    arguments: { conversationId: "denied" },
+  });
+  assert.equal(denied.status, 403);
+  const { collectors } = await import("../server/contracts/service.ts");
+  assert.notEqual(collectors().state("first").status, "auth_required");
+  assert.equal(
+    (
+      await call("/connections/first/contracts/v1/call", {
+        operation: "messaging.messages.list",
+        arguments: { conversationId: "allowed" },
+      })
+    ).status,
+    200,
+  );
 });
 after(async () => {
   const { pushSources, collectors } = await import(

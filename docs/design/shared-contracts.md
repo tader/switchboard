@@ -77,7 +77,7 @@ window; it does not mark the UI active. The runtime checks due work every 30 sec
 and aborts reads that lose their last activity lease. Events and checkpoint commit in
 one SQLite transaction; a failed/aborted read cannot advance the checkpoint.
 
-Terminal authentication/permission failures persist an `auth_required` pause across
+Terminal credential/scope failures persist an `auth_required` pause across
 restarts, blocking new polling and writes. An actual credentials-change event resets
 it; mere activity or refresh does not. Revoked client permissions are rechecked before
 network operations and before commit. A new authorized heartbeat may clear only an
@@ -190,3 +190,7 @@ key on retry. Core receipts are reduced to metadata before common schema validat
 and persistence. Provider message bodies cannot be stored in a write receipt.
 Native-only sources have an unsupported reconciliation status, with a bounded
 capability recheck; they do not generate fake polling failures or empty snapshots.
+
+An individual forbidden resource returns a permission error without pausing the
+whole connection. Native/reconciliation support is advertised only when the
+connection has an effective read operation; write-only bindings remain usable.
