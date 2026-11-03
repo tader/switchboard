@@ -91,19 +91,29 @@ export async function describeContract(
       native: reads && typeof definition.watch === "function",
       reconciliation: reads && typeof definition.collect === "function",
     },
-    operations: names
-      .filter((n) => !operation || n === operation)
-      .map((name) => {
-        const op = definition.operations[name];
-        return {
-          name,
-          category: op.category,
-          readOnly: op.readOnly,
-          inputSchema: common[name]?.inputSchema ?? op.inputSchema,
-          outputSchema: common[name]?.outputSchema ?? op.outputSchema,
-          inputConstraints: op.inputSchema,
-        };
-      }),
+    operations: await Promise.all(
+      names
+        .filter((n) => !operation || n === operation)
+        .map(async (name) => {
+          const op = definition.operations[name];
+          return {
+            name,
+            category: op.category,
+            readOnly: op.readOnly,
+            inputSchema: common[name]?.inputSchema ?? op.inputSchema,
+            outputSchema: common[name]?.outputSchema ?? op.outputSchema,
+            inputConstraints: op.inputConstraints
+              ? {
+                  ...op.inputSchema,
+                  allOf: [
+                    ...((op.inputSchema.allOf as unknown[]) ?? []),
+                    await op.inputConstraints(conn),
+                  ],
+                }
+              : op.inputSchema,
+          };
+        }),
+    ),
   };
 }
 function receipt(value: any) {

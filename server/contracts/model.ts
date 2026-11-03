@@ -82,7 +82,9 @@ export function validateDefinition(
       typeof op.readOnly !== "boolean" ||
       typeof op.invoke !== "function" ||
       !op.inputSchema ||
-      !op.outputSchema
+      !op.outputSchema ||
+      (op.inputConstraints !== undefined &&
+        typeof op.inputConstraints !== "function")
     )
       throw Error("Invalid contract operation " + name);
     const read = /\.(list|get)$/.test(name);

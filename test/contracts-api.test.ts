@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { emailOperations } from "../server/contracts/email-schema.ts";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "contract-api-"));
 process.env.SWITCHBOARD_DATA_DIR = temp;
 const database = await import("../server/db.ts");
@@ -148,9 +149,10 @@ plugins.services.set("email-fixture", {
           }),
         },
         "email.messages.send": {
+          inputConstraints: () => ({ properties: { html: false } }),
           category: "email",
           readOnly: false,
-          inputSchema: {},
+          inputSchema: emailOperations["email.messages.send"].inputSchema,
           outputSchema: {},
           invoke: async () => {
             emailWrites++;
@@ -676,6 +678,34 @@ test("canonical email validation cannot be bypassed by permissive adapter schema
     arguments: { to: [], subject: "Missing recipients", text: "private body" },
   });
   assert.equal(invalid.status, 400);
+  assert.equal(emailWrites, 0);
+  const unsupported = await emailCall({
+    operation: "email.messages.send",
+    idempotencyKey: "unsupported-html",
+    arguments: {
+      to: [{ address: "person@example.com" }],
+      subject: "Rich body",
+      html: "<p>body</p>",
+    },
+  });
+  assert.equal(unsupported.status, 400);
+  assert.equal(
+    database.all(
+      "SELECT * FROM contract_receipts WHERE connection=? AND key=?",
+      "email",
+      "unsupported-html",
+    ).length,
+    0,
+  );
+  const descriptor = (await (
+    await call("/connections/email/contracts/v1", undefined, emailToken)
+  ).json()) as any;
+  assert.equal(
+    descriptor.operations
+      .find((op: any) => op.name === "email.messages.send")
+      .inputConstraints.allOf.at(-1).properties.html,
+    false,
+  );
   assert.equal(emailWrites, 0);
   const send = {
     operation: "email.messages.send",

@@ -107,6 +107,9 @@ never capture contract argument bodies. Input bodies are limited to 1 MiB.
 
 `ServiceDefinition.contracts` is optional. Version 1 defines `available(connection)`
 and named operations with category, readOnly, JSON input/output schema and invoke.
+An operation may add `inputConstraints(connection)` for binding-specific option
+limits. Discovery intersects these with its static schema; execution enforces the
+same intersection alongside the canonical schema before recording write intent.
 Only list/get operations are read-only. Report effective permissions; do not assume
 configured scope selection equals granted provider scope. Unsupported features are
 absent, never empty-success responses. All pages include explicit coverage.

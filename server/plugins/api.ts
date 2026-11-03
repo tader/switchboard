@@ -360,6 +360,8 @@ export interface ContractContext {
 export interface ContractOperation {
   category: Category; readOnly: boolean;
   inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>;
+  /** Additional constraints for this binding, intersected with canonical/static schemas. */
+  inputConstraints?(connection: Connection): Record<string, unknown> | Promise<Record<string, unknown>>;
   invoke(input: Record<string, unknown>, context: ContractContext): Promise<unknown>;
 }
 export interface ContractChangeBatch { events: {sourceId:string;event:ChangeEvent}[]; checkpoint:string }
