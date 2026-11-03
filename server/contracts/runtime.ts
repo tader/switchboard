@@ -16,7 +16,13 @@ export interface CollectorSource {
 export const CONTRACT_RUNTIME_SCHEMA =
   "CREATE TABLE IF NOT EXISTS contract_collectors(connection TEXT PRIMARY KEY,state TEXT NOT NULL);";
 export interface CollectorState {
-  status: "idle" | "running" | "ready" | "auth_required" | "backoff";
+  status:
+    | "idle"
+    | "running"
+    | "ready"
+    | "auth_required"
+    | "backoff"
+    | "unsupported";
   lastSuccess: number | null;
   nextAllowed: number;
   error?: string;
@@ -32,7 +38,8 @@ export interface RefreshResult {
     | "deferred"
     | "auth_required"
     | "idle"
-    | "failed";
+    | "failed"
+    | "unsupported";
   retryAfterMs?: number;
 }
 /** One runtime per owning Switchboard. Clients never invoke provider polling loops. */
@@ -122,7 +129,7 @@ export class ContractCollectors {
       return { status: "coalesced" };
     }
     const due = Math.max(
-      old.nextAllowed,
+      manual && old.status === "unsupported" ? 0 : old.nextAllowed,
       !manual && old.lastSuccess !== null ? old.lastSuccess + POLL_INTERVAL : 0,
     );
     if (now < due) return { status: "deferred", retryAfterMs: due - now };
@@ -169,6 +176,15 @@ export class ContractCollectors {
         if (controller.signal.aborted) {
           this.update(connection, { ...old, status: "idle" });
           return { status: "idle" };
+        }
+        if (error?.code === "collector_not_supported") {
+          this.update(connection, {
+            ...old,
+            status: "unsupported",
+            error: undefined,
+            nextAllowed: this.clock() + POLL_INTERVAL,
+          });
+          return { status: "unsupported" };
         }
         const terminal =
           terminalAuthenticationError(error) ||

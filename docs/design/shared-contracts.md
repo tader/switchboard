@@ -17,7 +17,8 @@ The implementation is split into reviewable changes, in this order:
 - [x] Core: durable write intent/receipt, atomic checkpoint/event persistence, SSE replay.
 - [x] Core: activity leases, bounded polling, refresh coalescing and persistent auth pause.
 - [x] Enforce canonical Calendar operation argument/result schemas.
-- [ ] Email/Messaging schemas and cross-provider adapter conformance.
+- [x] Canonical Messaging schemas, explicit partial/restricted content and optional operations.
+- [ ] Email schemas and cross-provider adapter conformance.
 - [ ] Calendar: Google Calendar and Outlook list/get/create/update/delete with versions,
       all-day exclusive ends, timezones, recurrence instances and deletion coverage.
 - [ ] Email: Gmail and Outlook folders/labels, messages, drafts, read/organize/trash,
@@ -157,3 +158,33 @@ version. Stale versions return a rejected conflict receipt. Recurrence-rule edit
 attendee management, reminders and invitation policies are not in this first common
 schema; provider-specific operations remain available. Series/occurrence identifiers
 preserve identity when reading expanded events.
+
+
+## Messaging schema snapshot
+
+`server/contracts/messaging-v1.json` defines common conversation/message reads,
+message send, and optional conversation creation, edits, deletion, threads,
+reactions and read-state updates. Advertise only implemented operations. A read
+must not send read receipts or mutate read state. The explicit read-state mutation
+requires a target message id; clients must not infer it from opening a history page.
+
+`Message.contentState` distinguishes available, unavailable, restricted and deleted
+content. The latter three require `text: null`; never map missing/restricted text to
+an empty successful message. `contentType` describes text/media/poll/system/unknown.
+Unknown unread counts, authors, timestamps, reaction totals and own-reaction state
+remain null. Partial history uses `coverage.complete: false` with a reason, even on
+a final page with no next cursor. Clients cannot treat partial absence as deletion.
+Conversation/message ids and page cursors are opaque and connection-bound.
+
+Discovery returns the common `inputSchema`/`outputSchema` plus `inputConstraints`.
+Validate the common input and the constraints independently; do not naively nest
+schemas with root-relative `$ref` definitions into a single `allOf`. This allows a
+provider to advertise a smaller text limit or exclude unsupported optional fields
+without inventing provider-specific operation names. Core enforces both schemas.
+
+Write invocation contexts include the original intent `idempotencyKey`. Adapters
+with their own durable ledger must namespace/reuse it rather than generate a fresh
+key on retry. Core receipts are reduced to metadata before common schema validation
+and persistence. Provider message bodies cannot be stored in a write receipt.
+Native-only sources have an unsupported reconciliation status, with a bounded
+capability recheck; they do not generate fake polling failures or empty snapshots.

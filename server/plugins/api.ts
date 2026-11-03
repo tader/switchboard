@@ -322,10 +322,17 @@ export interface EmailMessage extends Resource {
   text: string; html?: string; isRead: boolean | null; draft: boolean;
 }
 export interface Conversation extends Resource { title: string; kind: 'direct' | 'group' | 'channel' | 'agent'; unread: number | null }
-export interface Message extends Resource { conversationId: string; text: string; authorId: string | null; createdAt: string | null; threadId?: string; replyToId?: string }
+export interface Message extends Resource {
+ conversationId:string; text:string|null; authorId:string|null; createdAt:string|null;
+ contentState:'available'|'unavailable'|'restricted'|'deleted'; contentType:'text'|'media'|'poll'|'system'|'unknown';
+ threadId?:string;replyToId?:string;
+ reactions?:{emoji:string;count:number|null;me:boolean|null}[];
+}
 export interface WriteReceipt { status: 'accepted' | 'rejected' | 'uncertain'; resourceId?: string; version?: string; code?: string }
 export interface ContractContext {
   connection: Connection; signal: AbortSignal;
+  /** Core write intent key; absent for reads. Reuse when calling a nested durable write ledger. */
+  idempotencyKey?:string;
   /** Bound to this connection; uses Switchboard's normal authorization/host checks. */
   request(input: ContractRequest): Promise<Response>;
 }

@@ -253,3 +253,32 @@ test("a pause before dispatch releases the task so reauthentication can resume",
   await f.runtime.stop();
   f.db.close();
 });
+
+test("native-only sources have no polling failure and respect a bounded capability recheck", async () => {
+  const f = fixture();
+  let attempts = 0;
+  const runtime = new ContractCollectors(
+    f.store,
+    () => ({
+      check() {},
+      async collect() {
+        attempts++;
+        throw Object.assign(Error("unsupported"), {
+          code: "collector_not_supported",
+        });
+      },
+    }),
+    () => 1_000_000,
+  );
+  f.store.activity("owner", f.sub.id, true);
+  try {
+    assert.equal((await runtime.refresh("c")).status, "unsupported");
+    assert.equal(runtime.state("c").error, undefined);
+    assert.equal(runtime.state("c").status, "unsupported");
+    assert.equal((await runtime.refresh("c")).status, "deferred");
+    assert.equal(attempts, 1);
+  } finally {
+    await runtime.stop();
+    f.db.close();
+  }
+});

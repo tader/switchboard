@@ -58,7 +58,10 @@ plugins.services.set("fixture", {
           inputSchema: {
             type: "object",
             required: ["text"],
-            properties: { text: { type: "string" } },
+            properties: {
+              text: { type: "string" },
+              conversationId: { type: "string" },
+            },
             additionalProperties: false,
           },
           outputSchema: { type: "object" },
@@ -209,7 +212,7 @@ test("scoped discovery and execution never expose another connection", async () 
 test("writes validate and replay without sending twice", async () => {
   const input = {
     operation: "messaging.messages.send",
-    arguments: { text: "fixture" },
+    arguments: { text: "fixture", conversationId: "chat" },
     idempotencyKey: "key",
   };
   for (let n = 0; n < 2; n++) {
@@ -296,7 +299,7 @@ test("authentication pause blocks new writes before dispatch", async () => {
     (
       await call("/connections/first/contracts/v1/call", {
         operation: "messaging.messages.send",
-        arguments: { text: "fixture" },
+        arguments: { text: "fixture", conversationId: "chat" },
         idempotencyKey: "blocked",
       })
     ).status,

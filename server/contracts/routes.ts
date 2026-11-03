@@ -1,4 +1,5 @@
 import { terminalAuthenticationError } from "../auth-errors.ts";
+import { messagingOperations } from "./messaging-schema.ts";
 import { calendarOperations } from "./calendar-schema.ts";
 import { bindActivity, collectors, pushSources } from "./service.ts";
 import { onConnectionChange } from "../connection-events.ts";
@@ -20,6 +21,7 @@ import { websocketAccess } from "../websocket-access.ts";
 import { HttpError, badRequest } from "../http.ts";
 import { ContractStore } from "./store.ts";
 import { CATEGORIES } from "./model.ts";
+const commonOperations = { ...calendarOperations, ...messagingOperations };
 const ajv = new Ajv({ strict: false, allErrors: true });
 const validators = new WeakMap<object, ReturnType<typeof ajv.compile>>();
 function validate(
@@ -167,8 +169,9 @@ contracts.get("/connections/:ref/contracts/v1", async (c) => {
           name: n,
           category: o.category,
           readOnly: o.readOnly,
-          inputSchema: calendarOperations[n]?.inputSchema ?? o.inputSchema,
-          outputSchema: calendarOperations[n]?.outputSchema ?? o.outputSchema,
+          inputSchema: commonOperations[n]?.inputSchema ?? o.inputSchema,
+          outputSchema: commonOperations[n]?.outputSchema ?? o.outputSchema,
+          inputConstraints: o.inputSchema,
         };
       }),
   });
@@ -186,8 +189,8 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
   if (!op || !(await definition.available(conn)).includes(input.operation))
     throw new HttpError(403, "operation_not_available");
   const args = input.arguments ?? {};
-  const common = Object.hasOwn(calendarOperations, input.operation)
-    ? calendarOperations[input.operation]
+  const common = Object.hasOwn(commonOperations, input.operation)
+    ? commonOperations[input.operation]
     : undefined;
   if (common) validate(common.inputSchema, args);
   validate(op.inputSchema, args);
@@ -206,6 +209,7 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
     let result = await op.invoke(args, {
       connection: conn,
       signal: c.req.raw.signal,
+      idempotencyKey: op.readOnly ? undefined : input.idempotencyKey,
       request: async (request) => {
         websocketAccess(c).check(conn.id);
         return (
@@ -213,8 +217,6 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
         ).response;
       },
     });
-    if (common) validate(common.outputSchema, result, true);
-    validate(op.outputSchema, result, true);
     if (!op.readOnly) {
       if (
         !result ||
@@ -234,6 +236,10 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
             return [key, receipt[key]];
           }),
       );
+    }
+    if (common) validate(common.outputSchema, result, true);
+    validate(op.outputSchema, result, true);
+    if (!op.readOnly) {
       store().receipt(conn.id, input.idempotencyKey, result);
     }
     return c.json(result as any);
