@@ -13,9 +13,14 @@ import type { ContractCollectors } from "./runtime.ts";
 import { ContractStore } from "./store.ts";
 import { calendarOperations } from "./calendar-schema.ts";
 import { messagingOperations } from "./messaging-schema.ts";
+import { emailOperations } from "./email-schema.ts";
 import { CONTRACT_OPERATIONS } from "./model.ts";
 import type { Category } from "./model.ts";
-const common = { ...calendarOperations, ...messagingOperations };
+const common = {
+  ...calendarOperations,
+  ...messagingOperations,
+  ...emailOperations,
+};
 const known = new Set<string>(Object.values(CONTRACT_OPERATIONS).flat());
 const ajv = new Ajv({ strict: false, allErrors: true }),
   validators = new WeakMap<object, ReturnType<typeof ajv.compile>>();

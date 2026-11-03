@@ -9,6 +9,7 @@ export type {
   MailCollection,
   Address,
   EmailMessage,
+  EmailDraft,
   Conversation,
   Message,
   WriteReceipt,

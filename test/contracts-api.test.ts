@@ -124,6 +124,56 @@ run(
   Date.now(),
   Date.now(),
 );
+let emailWrites = 0;
+plugins.services.set("email-fixture", {
+  pluginId: "fixture",
+  service: {
+    id: "email-fixture",
+    name: "Email fixture",
+    authMethods: [
+      { id: "fixture", label: "Fixture", authorize: async () => {} } as any,
+    ],
+    contracts: {
+      version: 1,
+      available: () => ["email.messages.get", "email.messages.send"],
+      operations: {
+        "email.messages.get": {
+          category: "email",
+          readOnly: true,
+          inputSchema: {},
+          outputSchema: {},
+          invoke: async () => ({
+            id: "m",
+            text: "body without canonical metadata",
+          }),
+        },
+        "email.messages.send": {
+          category: "email",
+          readOnly: false,
+          inputSchema: {},
+          outputSchema: {},
+          invoke: async () => {
+            emailWrites++;
+            return { status: "accepted", resourceId: "sent" };
+          },
+        },
+      },
+    },
+  },
+});
+run(
+  "INSERT INTO connections(id,user_id,service_id,method_id,name,config_enc,credentials_enc,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+  "email",
+  user.id,
+  "email-fixture",
+  "fixture",
+  "email",
+  encrypt({}),
+  encrypt({}),
+  "ok",
+  Date.now(),
+  Date.now(),
+);
 let authAttempts = 0;
 plugins.services.set("expired-auth", {
   pluginId: "fixture",
@@ -610,6 +660,35 @@ test("deleting a subscription closes a waiting SSE stream normally", async () =>
     clearTimeout(timer);
     await reader.cancel();
   }
+});
+test("canonical email validation cannot be bypassed by permissive adapter schemas", async () => {
+  const emailToken = createToken(user.id, "email-only", ["email"]).secret;
+  const emailCall = (body: unknown) =>
+    call("/connections/email/contracts/v1/call", body, emailToken);
+  const output = await emailCall({
+    operation: "email.messages.get",
+    arguments: { id: "m" },
+  });
+  assert.equal(output.status, 502);
+  const invalid = await emailCall({
+    operation: "email.messages.send",
+    idempotencyKey: "invalid-email",
+    arguments: { to: [], subject: "Missing recipients", text: "private body" },
+  });
+  assert.equal(invalid.status, 400);
+  assert.equal(emailWrites, 0);
+  const send = {
+    operation: "email.messages.send",
+    idempotencyKey: "email-replay",
+    arguments: {
+      to: [{ address: "person@example.com" }],
+      subject: "Fixture",
+      text: "private body",
+    },
+  };
+  assert.equal((await emailCall(send)).status, 200);
+  assert.equal((await emailCall(send)).status, 200);
+  assert.equal(emailWrites, 1);
 });
 after(async () => {
   const { pushSources, collectors } = await import(

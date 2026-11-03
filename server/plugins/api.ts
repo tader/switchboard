@@ -315,12 +315,33 @@ export interface CalendarEvent extends Resource {
   end: { date: string } | { dateTime: string; timeZone: string };
   seriesId?: string; occurrenceId?: string;
 }
-export interface MailCollection extends Resource { name: string; kind: 'folder' | 'label' | 'virtual' }
+export interface MailCollection extends Resource {
+  name: string;
+  kind: 'folder' | 'label' | 'virtual';
+  role?: 'inbox' | 'sent' | 'drafts' | 'trash' | 'archive' | 'spam' | null;
+  canWrite?: boolean | null;
+}
 export interface Address { address: string; name?: string }
 export interface EmailMessage extends Resource {
-  subject: string; from: Address[]; to: Address[]; collectionIds: string[];
-  text: string; html?: string; isRead: boolean | null; draft: boolean;
+  subject: string;
+  from: Address[];
+  to: Address[];
+  collectionIds: string[];
+  text: string | null;
+  html?: string | null;
+  isRead: boolean | null;
+  draft: boolean;
+  cc?: Address[];
+  bcc?: Address[];
+  replyTo?: Address[];
+  isFlagged?: boolean | null;
+  receivedAt?: string | null;
+  sentAt?: string | null;
+  threadId?: string;
+  hasAttachments?: boolean | null;
+  contentState: 'available' | 'unavailable' | 'restricted' | 'deleted';
 }
+export interface EmailDraft extends Resource { message: EmailMessage }
 export interface Conversation extends Resource { title: string; kind: 'direct' | 'group' | 'channel' | 'agent'; unread: number | null; updatedAt?:string|null }
 export interface Message extends Resource {
  conversationId:string; text:string|null; authorId:string|null; createdAt:string|null; isOwn:boolean|null;

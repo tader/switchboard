@@ -18,7 +18,8 @@ The implementation is split into reviewable changes, in this order:
 - [x] Core: activity leases, bounded polling, refresh coalescing and persistent auth pause.
 - [x] Enforce canonical Calendar operation argument/result schemas.
 - [x] Canonical Messaging schemas, explicit partial/restricted content and optional operations.
-- [ ] Email schemas and cross-provider adapter conformance.
+- [x] Canonical Email schemas, draft/message separation and core enforcement.
+- [ ] Cross-provider Email adapter conformance.
 - [ ] Calendar: Google Calendar and Outlook list/get/create/update/delete with versions,
       all-day exclusive ends, timezones, recurrence instances and deletion coverage.
 - [ ] Email: Gmail and Outlook folders/labels, messages, drafts, read/organize/trash,
@@ -242,3 +243,59 @@ its replies within a conversation. Omit it for the normal conversation history.
 An adapter that cannot filter by thread must exclude the property in its
 `inputConstraints` and reject it, never silently return the unfiltered history.
 Thread history carries its own query-bound cursor and explicit coverage.
+
+## Email schema snapshot
+
+`server/contracts/email-v1.json` defines fifteen operations for collections,
+messages and drafts; the core validates canonical arguments and results even if
+an adapter supplies permissive schemas. Adapters vendor the matching JSON and
+wrapper, then constrain unsupported options and advertise only effective grants.
+There are no provider-specific query strings or raw MIME escape hatches.
+
+A mailbox is a folder, label or virtual collection. Optional semantic `role` avoids
+requiring clients to recognize provider IDs or localized names. Messages list all
+known `collectionIds`. Listing without `collectionId` requests the accessible
+message scope, not a guessed inbox; unsupported scopes must be rejected explicitly.
+A list read never changes read state. Cursor continuation binds connection, account,
+filters and page size. Every page discloses coverage; incomplete pages or bounded
+snapshots cannot establish deletion or exhaustive absence.
+
+Message subjects, addresses, bodies, state and collection membership use common
+fields. Missing read/flag/timestamp/attachment knowledge stays null or absent; it
+is not inferred as false. `contentState` distinguishes available, unavailable,
+restricted and deleted bodies. Nonavailable bodies require null text and null or
+absent HTML. HTML is untrusted content: consumers must sanitize it and block remote
+resources as appropriate before displaying it. The common contract does not fetch
+attachments. Unsupported attachment preservation when forwarding must fail before
+dispatch rather than silently dropping original content.
+
+`messages.update` changes read/flag state, not delivered subject/body.
+`messages.move` targets one destination collection. Folder adapters move the message;
+label adapters add the destination and remove only `sourceCollectionId` if supplied,
+retaining unrelated labels. They reject impossible source/destination combinations.
+Moving may change a provider's resource ID; use the returned receipt's resourceId.
+Trash is reversible provider trash, never permanent deletion. An adapter that cannot
+provide these semantics must omit the operation or reject unsupported inputs.
+
+Sends require explicit nonempty recipients, subject and text and/or HTML. Empty
+body strings are allowed intentionally. Header values cannot contain CR/LF.
+Reply uses an exact existing message; `replyAll` defaults to false. Forward targets
+explicit recipients and includes an explicit introductory body. Neither operation
+lets the caller inject a different sender or arbitrary headers. Provider reply/thread
+metadata is constructed by the adapter from the selected source message. Sending
+returns acceptance, not proof of delivery.
+
+Draft IDs are independent of their embedded message IDs. Unfinished drafts may
+have no recipients or subject. Draft updates patch only supplied fields; an empty
+recipient list or empty body explicitly clears that field. Unspecified fields stay
+unchanged. Only draft deletion is exposed; a send-draft operation validates the
+current draft and does not silently create a replacement on failure.
+
+Mutations accept optional `ifVersion` where listed. When supplied it is a real
+conditional-write precondition: stale versions reject with conflict; adapters that
+cannot enforce it atomically reject the option rather than presenting a prior read
+as a guarantee. Clients can discover stricter per-adapter input constraints. An
+omitted precondition explicitly accepts unconditional provider semantics. Ordinary
+send/reply/forward instead use the core's durable idempotency key. All mutations
+return metadata-only receipts, with accepted/uncertain attempts never automatically
+resent. Draft and organization mutations use the same durable intent machinery.
