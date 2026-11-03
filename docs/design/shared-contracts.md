@@ -236,3 +236,9 @@ reads, canonical writes and uncertain-write replay, SSE durability, reconnect an
 retention gaps, share revocation, terminal authentication and reconnection, remaining
 lease expiry, metadata-only persistence, native receiver cleanup and compatibility
 with peers that do not advertise this extension. Provider writes use a local fixture.
+
+`messaging.messages.list` accepts an optional opaque `threadId` to read a root and
+its replies within a conversation. Omit it for the normal conversation history.
+An adapter that cannot filter by thread must exclude the property in its
+`inputConstraints` and reject it, never silently return the unfiltered history.
+Thread history carries its own query-bound cursor and explicit coverage.

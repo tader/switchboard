@@ -36,3 +36,15 @@ test("common mutations return receipts instead of provider message bodies", () =
     false,
   );
 });
+
+test("message history can target a thread and rejects an empty thread filter", () => {
+  const schema = messagingOperations["messaging.messages.list"].inputSchema;
+  assert.equal(
+    ajv.validate(schema, { conversationId: "channel", threadId: "thread" }),
+    true,
+  );
+  assert.equal(
+    ajv.validate(schema, { conversationId: "channel", threadId: "" }),
+    false,
+  );
+});
