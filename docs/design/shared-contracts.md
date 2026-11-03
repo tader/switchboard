@@ -1,6 +1,6 @@
 # Shared Calendar, Email and Messaging contracts
 
-Status: staged implementation, disabled by default (`SHARED_CONTRACTS=1` enables it).
+Status: staged implementation, disabled by default (`SWITCHBOARD_SHARED_CONTRACTS=1` enables it).
 The v1 surface is provisional until the provider adapters and conformance suite land.
 Existing plugin HTTP, saved-call, MCP and WebSocket APIs remain available.
 
@@ -171,7 +171,9 @@ requires a target message id; clients must not infer it from opening a history p
 `Message.contentState` distinguishes available, unavailable, restricted and deleted
 content. The latter three require `text: null`; never map missing/restricted text to
 an empty successful message. `contentType` describes text/media/poll/system/unknown.
-Unknown unread counts, authors, timestamps, reaction totals and own-reaction state
+`Message.isOwn` identifies the sender relative to the connected account without
+provider-specific user-id mapping. Optional conversation `updatedAt` lets consumers
+merge activity across sources. Unknown unread counts, ownership, authors, timestamps, reaction totals and own-reaction state
 remain null. Partial history uses `coverage.complete: false` with a reason, even on
 a final page with no next cursor. Clients cannot treat partial absence as deletion.
 Conversation/message ids and page cursors are opaque and connection-bound.

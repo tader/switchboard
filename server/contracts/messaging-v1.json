@@ -487,6 +487,12 @@
             "null"
           ],
           "minimum": 0
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -592,6 +598,12 @@
             ],
             "additionalProperties": false
           }
+        },
+        "isOwn": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -601,7 +613,8 @@
         "authorId",
         "createdAt",
         "contentState",
-        "contentType"
+        "contentType",
+        "isOwn"
       ],
       "additionalProperties": false,
       "allOf": [

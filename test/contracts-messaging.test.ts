@@ -11,6 +11,7 @@ test("canonical messaging schemas reject hidden restricted bodies and unknown re
     text: null,
     authorId: null,
     createdAt: null,
+    isOwn: null,
     contentState: "restricted",
     contentType: "unknown",
   };
