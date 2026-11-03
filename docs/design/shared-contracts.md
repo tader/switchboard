@@ -24,7 +24,8 @@ The implementation is split into reviewable changes, in this order:
       send/reply/forward, with explicit partial coverage and optional capabilities.
 - [ ] Messaging: Signal, WhatsApp, Teams and Slack conversations, history and send;
       advertise optional edit/delete/thread/reaction/read-state capabilities separately.
-- [ ] Native change sources: Signal callback; durable WhatsApp helper feed; optional
+- [x] Core native receiver lifecycle and durable, separately checkpointed publication.
+- [ ] Native provider wiring: Signal callback; durable WhatsApp helper feed; optional
       Slack/Google/Microsoft subscriptions without automatic cloud setup or scope expansion.
 - [ ] Peer transport: feature negotiation beside protocol 3, scoped calls, upstream
       subscriptions and durable local replay; reconnect/gap conformance tests.
@@ -47,6 +48,7 @@ return `501 contract_peer_upgrade_required` rather than silently bypassing peers
 - `POST /contracts/v1/subscriptions`: `{connections: [connectionId, ...]}` -> `{id,cursor}`.
 - `POST /contracts/v1/subscriptions/:id/activity`: `{active: boolean}`.
 - `POST /contracts/v1/subscriptions/:id/refresh`: `{connectionId}`.
+- `GET /contracts/v1/subscriptions/:id/status`: activity expiry and sanitized source state; no provider calls.
 - `GET /contracts/v1/subscriptions/:id/events`: SSE; `Last-Event-ID` or `?cursor=`.
 - `DELETE /contracts/v1/subscriptions/:id`: stop that consumer's subscription.
 
@@ -110,8 +112,25 @@ provider delivery ids and a checkpoint only after completing the corresponding p
 or scope. Use invalidation/resync events where exact deltas or delete coverage are
 unavailable. Route HTTP through `context.request`, bound to the connection's normal
 credential/host enforcement and cancellation. Never perform writes in collect.
-Native push registration/lifecycle and peer forwarding are still pending; a polling
-collector plus local SSE is not native provider push.
+`watch({checkpoint}, context)` is the optional native receive loop. It runs until
+`context.signal` aborts and must release its listeners/sockets in `finally`. Use
+`await context.publish({events,checkpoint})` before acknowledging the corresponding
+upstream delivery. Publication checks live permissions/activity, commits events and
+its native checkpoint atomically, and wakes the same durable SSE feed. Native and
+polling checkpoints are independent; delivery ids share a deduplication namespace.
+
+Core shares one native receiver per active connection and starts it on a foreground
+heartbeat. The receiver stops after the last activity grace, on access/config/plugin
+changes, or during shutdown. Unexpected closures use exponential reconnect delays
+(60 seconds up to 15 minutes); provider Retry-After is honored up to 24 hours and
+backoff survives restart. Terminal authentication pauses both native and polling
+work. Credential changes invalidate old jobs; late successes or failures cannot
+overwrite a newer authentication state. Native availability and reconciliation
+support appear in discovery as `changes.native` and `changes.reconciliation`.
+
+Native provider callbacks/subscription registration and peer forwarding are still
+pending. A polling collector plus local SSE is not native provider push; adding this
+core receive lifecycle does not make an unwired provider push-capable.
 
 
 ## Calendar schema snapshot

@@ -1,3 +1,4 @@
+import { CONTRACT_PUSH_SCHEMA } from './contracts/push.ts';
 import { CONTRACT_RUNTIME_SCHEMA } from './contracts/runtime.ts';
 import { CONTRACT_SCHEMA } from './contracts/store.ts';
 import { DatabaseSync } from 'node:sqlite';
@@ -297,6 +298,7 @@ const migrations: string[] = [
   CONTRACT_SCHEMA,
   CONTRACT_RUNTIME_SCHEMA,
   `CREATE TABLE IF NOT EXISTS contract_subscription_access(id TEXT PRIMARY KEY REFERENCES contract_subscriptions(id) ON DELETE CASCADE,principal TEXT NOT NULL);`,
+  CONTRACT_PUSH_SCHEMA,
 ];
 
 export function initDb() {

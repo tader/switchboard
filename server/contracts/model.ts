@@ -13,6 +13,8 @@ export type {
   Message,
   WriteReceipt,
   ContractContext,
+  ContractChangeBatch,
+  ContractWatchContext,
   ContractOperation,
   ContractDefinition,
   ChangeEvent,
@@ -69,6 +71,9 @@ export function validateDefinition(
     typeof value.operations !== "object"
   )
     throw Error("Invalid shared contract");
+  for (const key of ["collect", "watch"] as const)
+    if (value[key] !== undefined && typeof value[key] !== "function")
+      throw Error("Invalid contract " + key);
   for (const [name, op] of Object.entries(value.operations)) {
     if (
       !CATEGORIES.includes(op.category) ||

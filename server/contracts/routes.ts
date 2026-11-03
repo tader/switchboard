@@ -1,5 +1,6 @@
+import { terminalAuthenticationError } from "../auth-errors.ts";
 import { calendarOperations } from "./calendar-schema.ts";
-import { bindActivity, collectors } from "./service.ts";
+import { bindActivity, collectors, pushSources } from "./service.ts";
 import { onConnectionChange } from "../connection-events.ts";
 import { onAccessChange } from "../access-events.ts";
 import { Hono } from "hono";
@@ -37,6 +38,13 @@ function validate(
       output ? "invalid_contract_response" : "invalid_contract_arguments",
     );
 }
+async function json(c: any) {
+  try {
+    return await c.req.json();
+  } catch {
+    throw badRequest("invalid_json");
+  }
+}
 function store() {
   return new ContractStore(db);
 }
@@ -54,7 +62,13 @@ function owned(c: any, id: string) {
 }
 export const contracts = new Hono<Env>();
 contracts.use("*", requireUser);
-contracts.use("*", bodyLimit({ maxSize: 1024 * 1024 }));
+contracts.use(
+  "*",
+  bodyLimit({
+    maxSize: 1024 * 1024,
+    onError: (c) => c.json({ error: { code: "body_too_large" } }, 413),
+  }),
+);
 contracts.use("/connections/:ref/contracts/v1/call", async (c, next) => {
   const started = Date.now();
   try {
@@ -84,15 +98,17 @@ contracts.onError((error, c) => {
     permission_denied: 403,
     authentication_required: 409,
     rate_limited: 429,
+    contract_peer_upgrade_required: 501,
+    contract_not_supported: 501,
+    collector_not_supported: 501,
   };
-  const code =
-    error instanceof HttpError
-      ? error.message
-      : ((error as any).code ?? error.message);
+  const code = (error as any).code ?? error.message;
   const status =
-    error instanceof HttpError ? error.status : (codes[code] ?? 500);
+    codes[code] ?? (error instanceof HttpError ? error.status : 500);
   return c.json(
-    { error: { code: status === 500 ? "contract_failed" : code } },
+    {
+      error: { code: status >= 500 && !codes[code] ? "contract_failed" : code },
+    },
     status as any,
   );
 });
@@ -116,7 +132,16 @@ contracts.get("/contracts/v1/connections", async (c) => {
           (!category || definition.operations[name].category === category),
       );
       if (operations.length)
-        out.push({ id: row.id, name: row.name, version: 1, operations });
+        out.push({
+          id: row.id,
+          name: row.name,
+          version: 1,
+          operations,
+          changes: {
+            native: typeof definition.watch === "function",
+            reconciliation: typeof definition.collect === "function",
+          },
+        });
     } catch (e) {
       if (!(e instanceof HttpError)) throw e;
     }
@@ -130,6 +155,10 @@ contracts.get("/connections/:ref/contracts/v1", async (c) => {
   const names = await definition.available(conn);
   return c.json({
     version: 1,
+    changes: {
+      native: typeof definition.watch === "function",
+      reconciliation: typeof definition.collect === "function",
+    },
     operations: names
       .filter((n) => definition.operations[n])
       .map((n) => {
@@ -148,7 +177,7 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
   const { conn, service } = checked(c, c.req.param("ref"));
   const definition = service.contracts;
   if (!definition) throw new HttpError(501, "contract_not_supported");
-  const input = await c.req.json();
+  const input = await json(c);
   if (!input || typeof input.operation !== "string")
     throw badRequest("Operation required");
   const op = Object.hasOwn(definition.operations, input.operation)
@@ -210,14 +239,9 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
     return c.json(result as any);
   } catch (e: any) {
     if (
-      [
-        "auth_required",
-        "authentication_required",
-        "invalid_grant",
-        "permission_denied",
-      ].includes(e.code) ||
-      e.status === 401 ||
-      e.status === 403
+      terminalAuthenticationError(e) ||
+      e?.status === 401 ||
+      e?.status === 403
     )
       collectors().pauseAuthentication(conn.id);
     if (!op.readOnly) return c.json({ status: "uncertain" }, 202);
@@ -225,7 +249,7 @@ contracts.post("/connections/:ref/contracts/v1/call", async (c) => {
   }
 });
 contracts.post("/contracts/v1/subscriptions", async (c) => {
-  const b = await c.req.json();
+  const b = await json(c);
   if (!Array.isArray(b.connections) || !b.connections.length)
     throw badRequest("Connections required");
   const ids = b.connections.map((id: unknown) => {
@@ -238,7 +262,7 @@ contracts.post("/contracts/v1/subscriptions", async (c) => {
 });
 contracts.post("/contracts/v1/subscriptions/:id/activity", async (c) => {
   owned(c, c.req.param("id"));
-  const b = await c.req.json();
+  const b = await json(c);
   if (typeof b.active !== "boolean") throw badRequest("active must be boolean");
   bindActivity(
     c.get("user").id,
@@ -246,12 +270,26 @@ contracts.post("/contracts/v1/subscriptions/:id/activity", async (c) => {
     websocketAccess(c).principal,
   );
   store().activity(c.get("user").id, c.req.param("id"), b.active);
+  if (b.active) await pushSources().tick();
   return c.json({ saved: true });
 });
-contracts.delete("/contracts/v1/subscriptions/:id", (c) => {
+contracts.delete("/contracts/v1/subscriptions/:id", async (c) => {
   owned(c, c.req.param("id"));
   store().remove(c.get("user").id, c.req.param("id"));
+  await pushSources().tick();
   return c.json({ deleted: true });
+});
+contracts.get("/contracts/v1/subscriptions/:id/status", (c) => {
+  const sub = owned(c, c.req.param("id"));
+  return c.json({
+    activeUntil: sub.active_until,
+    pollUntil: sub.poll_until,
+    sources: sub.connections.map((connectionId: string) => ({
+      connectionId,
+      reconciliation: collectors().state(connectionId),
+      native: pushSources().state(connectionId),
+    })),
+  });
 });
 contracts.get("/contracts/v1/subscriptions/:id/events", async (c) => {
   const id = c.req.param("id");
@@ -307,7 +345,7 @@ contracts.get("/contracts/v1/subscriptions/:id/events", async (c) => {
 
 contracts.post("/contracts/v1/subscriptions/:id/refresh", async (c) => {
   const sub = owned(c, c.req.param("id"));
-  const input = await c.req.json();
+  const input = await json(c);
   if (
     typeof input.connectionId !== "string" ||
     !sub.connections.includes(input.connectionId)

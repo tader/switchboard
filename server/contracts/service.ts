@@ -1,7 +1,12 @@
 import { db, one } from "../db.ts";
 import { getConnectionRow, loadConnection } from "../connections.ts";
 import { execute } from "../proxy.ts";
-import { onCredentialsChange } from "../connection-events.ts";
+import {
+  onCredentialsChange,
+  onConnectionChange,
+} from "../connection-events.ts";
+import { onAccessChange } from "../access-events.ts";
+import { ContractPushSources } from "./push.ts";
 import { ContractStore } from "./store.ts";
 import { ContractCollectors } from "./runtime.ts";
 function failure(code: string): never {
@@ -86,7 +91,7 @@ export function collectors() {
             },
           );
         } catch (e: any) {
-          if (e.status === 401 || e.status === 403)
+          if (e?.status === 401 || e?.status === 403)
             throw Object.assign(Error("authentication_required"), {
               code: "authentication_required",
             });
@@ -97,14 +102,73 @@ export function collectors() {
   }
   return runtime;
 }
+let pushes: ContractPushSources | undefined;
+export function pushSources() {
+  if (!pushes)
+    pushes = new ContractPushSources(
+      new ContractStore(db),
+      (connection) => {
+        const user = actor(connection);
+        const { conn, service } = loadConnection(user.id, connection);
+        const definition = service.contracts;
+        return {
+          check() {
+            actor(connection);
+          },
+          watch: definition?.watch
+            ? async (checkpoint, publish, signal) => {
+                const available = await definition.available(conn);
+                if (
+                  !available.some(
+                    (name) => definition.operations[name]?.readOnly,
+                  )
+                )
+                  return failure("permission_denied");
+                try {
+                  await definition.watch!(
+                    { checkpoint },
+                    {
+                      connection: conn,
+                      signal,
+                      publish,
+                      request: async (input) => {
+                        actor(connection);
+                        return (await execute(user, connection, input, signal))
+                          .response;
+                      },
+                    },
+                  );
+                } catch (e: any) {
+                  if (e?.status === 401 || e?.status === 403)
+                    return failure("authentication_required");
+                  throw e;
+                }
+              }
+            : undefined,
+        };
+      },
+      collectors(),
+    );
+  return pushes;
+}
 export function startContractCollectors() {
-  const r = collectors();
+  const r = collectors(),
+    p = pushSources();
   r.start();
-  const off = onCredentialsChange((id) => r.credentialsChanged(id));
+  p.start();
+  const off = onCredentialsChange((id) => {
+    r.credentialsChanged(id);
+    p.reset(id);
+  });
+  const changed = onConnectionChange((id) => p.reset(id));
+  const access = onAccessChange(() => p.reset());
   return async () => {
     off();
-    await r.stop();
+    changed();
+    access();
+    await Promise.all([r.stop(), p.stop()]);
     runtime = undefined;
+    pushes = undefined;
   };
 }
 export function bindActivity(owner: string, id: string, principal: string) {
@@ -114,6 +178,8 @@ export function bindActivity(owner: string, id: string, principal: string) {
     "INSERT INTO contract_subscription_access VALUES(?,?) ON CONFLICT(id) DO UPDATE SET principal=excluded.principal",
   ).run(id, principal);
   for (const connection of sub.connections)
-    if (collectors().state(connection).error === "access_revoked")
+    if (collectors().state(connection).error === "access_revoked") {
       collectors().credentialsChanged(connection);
+      pushes?.reset(connection);
+    }
 }

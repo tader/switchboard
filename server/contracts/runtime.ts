@@ -1,4 +1,5 @@
 import { ACTIVITY_LEASE, POLL_INTERVAL, ContractStore } from "./store.ts";
+import { terminalAuthenticationError } from "../auth-errors.ts";
 import type { ChangeEvent } from "./model.ts";
 export interface CollectionBatch {
   events: { sourceId: string; event: ChangeEvent }[];
@@ -38,6 +39,7 @@ export interface RefreshResult {
 export class ContractCollectors {
   private states = new Map<string, CollectorState>();
   private tasks = new Map<string, Task>();
+  private generations = new Map<string, number>();
   private timer?: ReturnType<typeof setInterval>;
   private stopped = false;
   readonly store: ContractStore;
@@ -73,20 +75,35 @@ export class ContractCollectors {
   }
   /** Explicit reauthentication/configuration changes are the only way out of terminal auth pause. */
   credentialsChanged(connection: string) {
+    this.generations.set(
+      connection,
+      (this.generations.get(connection) ?? 0) + 1,
+    );
+    this.tasks.get(connection)?.controller.abort();
     const old = this.state(connection);
     this.update(connection, {
       ...old,
       status: "idle",
+      lastSuccess: null,
       error: undefined,
       nextAllowed: 0,
     });
   }
-  pauseAuthentication(connection: string) {
+  pauseAuthentication(
+    connection: string,
+    reason:
+      | "authentication_required"
+      | "access_revoked" = "authentication_required",
+  ) {
+    this.generations.set(
+      connection,
+      (this.generations.get(connection) ?? 0) + 1,
+    );
     const old = this.state(connection);
     this.update(connection, {
       ...old,
       status: "auth_required",
-      error: "authentication_required",
+      error: reason,
     });
     this.tasks.get(connection)?.controller.abort();
   }
@@ -110,10 +127,20 @@ export class ContractCollectors {
     );
     if (now < due) return { status: "deferred", retryAfterMs: due - now };
     const controller = new AbortController();
+    const generation = this.generations.get(connection) ?? 0;
+    const stale = () => generation !== (this.generations.get(connection) ?? 0);
+    const staleResult = (): RefreshResult => ({
+      status:
+        this.state(connection).status === "auth_required"
+          ? "auth_required"
+          : "idle",
+    });
     // Dispatch after registering the task, so synchronous/reentrant requests also coalesce.
     const promise = Promise.resolve().then(async (): Promise<RefreshResult> => {
-      this.update(connection, { ...old, status: "running" });
       try {
+        if (stale()) return staleResult();
+        if (controller.signal.aborted) return { status: "idle" };
+        this.update(connection, { ...old, status: "running" });
         const source = this.resolve(connection);
         source.check();
         const checkpoint = (
@@ -124,7 +151,11 @@ export class ContractCollectors {
             .get(connection) as any
         )?.cursor;
         const batch = await source.collect(checkpoint, controller.signal);
-        if (controller.signal.aborted) return { status: "idle" };
+        if (stale()) return staleResult();
+        if (controller.signal.aborted) {
+          this.update(connection, { ...old, status: "idle" });
+          return { status: "idle" };
+        }
         source.check();
         this.store.append(connection, batch.events, batch.checkpoint);
         this.update(connection, {
@@ -134,20 +165,17 @@ export class ContractCollectors {
         });
         return { status: "completed" };
       } catch (error: any) {
+        if (stale()) return staleResult();
         if (controller.signal.aborted) {
           this.update(connection, { ...old, status: "idle" });
           return { status: "idle" };
         }
-        const terminal = [
-          "auth_required",
-          "authentication_required",
-          "invalid_grant",
-          "permission_denied",
-          "access_revoked",
-        ].includes(error.code);
+        const terminal =
+          terminalAuthenticationError(error) ||
+          error?.code === "access_revoked";
         const delay = Math.max(
           60_000,
-          Math.min(86400_000, Number(error.retryAfterMs) || POLL_INTERVAL),
+          Math.min(86400_000, Number(error?.retryAfterMs) || POLL_INTERVAL),
         );
         // Error text from providers may contain secrets or message contents: store codes only.
         this.update(connection, {
@@ -155,7 +183,7 @@ export class ContractCollectors {
           status: terminal ? "auth_required" : "backoff",
           nextAllowed: this.clock() + delay,
           error: terminal
-            ? error.code === "access_revoked"
+            ? error?.code === "access_revoked"
               ? "access_revoked"
               : "authentication_required"
             : "source_unavailable",

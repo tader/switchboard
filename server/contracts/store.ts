@@ -20,7 +20,7 @@ export function canonical(value: unknown): string {
     return (
       "{" +
       Object.entries(value)
-        .sort(([a], [b]) => a.localeCompare(b))
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([k, v]) => JSON.stringify(k) + ":" + canonical(v))
         .join(",") +
       "}"
@@ -119,11 +119,13 @@ export class ContractStore {
   remove(owner: string, id: string) {
     this.subscription(owner, id);
     this.db.prepare("DELETE FROM contract_subscriptions WHERE id=?").run(id);
+    this.bus().emit("change");
   }
   append(
     connection: string,
     events: { sourceId: string; event: ChangeEvent }[],
     checkpoint: string,
+    channel: "poll" | "push" = "poll",
   ) {
     if (
       typeof checkpoint !== "string" ||
@@ -176,7 +178,7 @@ export class ContractStore {
       }
       this.db
         .prepare(
-          "INSERT INTO contract_checkpoints VALUES(?,?) ON CONFLICT(connection) DO UPDATE SET cursor=excluded.cursor",
+          `INSERT INTO ${channel === "push" ? "contract_push_checkpoints" : "contract_checkpoints"} VALUES(?,?) ON CONFLICT(connection) DO UPDATE SET cursor=excluded.cursor`,
         )
         .run(connection, checkpoint);
       this.db.exec("COMMIT");

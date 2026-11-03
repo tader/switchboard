@@ -184,3 +184,72 @@ test("losing activity aborts in-flight reads and never advances checkpoint", asy
   await runtime.stop();
   f.db.close();
 });
+
+for (const completion of ["resolve", "reject"] as const) {
+  test(`auth pause survives a late collector ${completion}`, async () => {
+    const f = fixture();
+    let finish!: (value?: any) => void;
+    let started!: () => void;
+    const ready = new Promise<void>((r) => (started = r));
+    const runtime = new ContractCollectors(f.store, () => ({
+      check() {},
+      collect() {
+        started();
+        return new Promise((resolve, reject) => {
+          finish = completion === "resolve" ? resolve : reject;
+        });
+      },
+    }));
+    const task = runtime.refresh("c", true);
+    await ready;
+    runtime.pauseAuthentication("c");
+    finish(
+      completion === "resolve"
+        ? { events: [], checkpoint: "stale" }
+        : Error("aborted"),
+    );
+    assert.equal((await task).status, "auth_required");
+    assert.equal(runtime.state("c").status, "auth_required");
+    assert.equal((await runtime.refresh("c", true)).status, "auth_required");
+    assert.equal(
+      f.db.prepare("SELECT * FROM contract_checkpoints").get(),
+      undefined,
+    );
+    await runtime.stop();
+    f.db.close();
+  });
+}
+test("old credentials failure cannot pause freshly changed credentials", async () => {
+  const f = fixture();
+  let reject!: (e: any) => void, started!: () => void;
+  const ready = new Promise<void>((r) => (started = r));
+  const runtime = new ContractCollectors(f.store, () => ({
+    check() {},
+    collect() {
+      started();
+      return new Promise((_resolve, r) => (reject = r));
+    },
+  }));
+  const task = runtime.refresh("c", true);
+  await ready;
+  runtime.credentialsChanged("c");
+  reject(Object.assign(Error("old session failed"), { code: "invalid_grant" }));
+  assert.equal((await task).status, "idle");
+  assert.equal(runtime.state("c").status, "idle");
+  assert.equal(runtime.state("c").error, undefined);
+  await runtime.stop();
+  f.db.close();
+});
+
+test("a pause before dispatch releases the task so reauthentication can resume", async () => {
+  const f = fixture();
+  const task = f.runtime.refresh("c", true);
+  f.runtime.pauseAuthentication("c");
+  assert.equal((await task).status, "auth_required");
+  assert.equal(f.calls(), 0);
+  f.runtime.credentialsChanged("c");
+  assert.equal((await f.runtime.refresh("c", true)).status, "completed");
+  assert.equal(f.calls(), 1);
+  await f.runtime.stop();
+  f.db.close();
+});

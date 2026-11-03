@@ -114,6 +114,63 @@ run(
   Date.now(),
   Date.now(),
 );
+let authAttempts = 0;
+plugins.services.set("expired-auth", {
+  pluginId: "fixture",
+  service: {
+    id: "expired-auth",
+    name: "Expired auth",
+    baseUrl: "https://fixture.invalid",
+    authMethods: [
+      {
+        id: "fixture",
+        name: "Fixture",
+        async connect() {
+          return { credentials: {} };
+        },
+        async authorize() {
+          authAttempts++;
+          throw Object.assign(Error("private provider details"), {
+            reauthenticationRequired: true,
+          });
+        },
+      },
+    ],
+    contracts: {
+      version: 1,
+      available: () => ["messaging.messages.list"],
+      operations: {
+        "messaging.messages.list": {
+          category: "messaging",
+          readOnly: true,
+          inputSchema: {},
+          outputSchema: {},
+          invoke: async () => ({ items: [], coverage: { complete: true } }),
+        },
+      },
+      async collect(_input, ctx) {
+        await ctx.request({
+          method: "GET",
+          url: "https://fixture.invalid/messages",
+        });
+        return { events: [], checkpoint: "unused" };
+      },
+    },
+  },
+});
+run(
+  "INSERT INTO connections(id,user_id,service_id,method_id,name,config_enc,credentials_enc,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+  "expired",
+  user.id,
+  "expired-auth",
+  "fixture",
+  "expired",
+  encrypt({}),
+  encrypt({}),
+  "ok",
+  Date.now(),
+  Date.now(),
+);
 for (const id of ["first", "second"])
   run(
     "INSERT INTO connections(id,user_id,service_id,method_id,name,config_enc,credentials_enc,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -330,7 +387,177 @@ test("common calendar schemas are enforced even when adapter schemas are permiss
     502,
   );
 });
-after(() => {
+test("terminal token renewal failures survive proxy wrapping and stop subsequent refreshes", async () => {
+  const scoped = createToken(user.id, "expired", ["expired"]).secret;
+  const { id } = (await (
+    await call(
+      "/contracts/v1/subscriptions",
+      { connections: ["expired"] },
+      scoped,
+    )
+  ).json()) as any;
+  const refresh = () =>
+    call(
+      "/contracts/v1/subscriptions/" + id + "/refresh",
+      { connectionId: "expired" },
+      scoped,
+    );
+  const first = await refresh();
+  assert.equal(((await first.json()) as any).status, "auth_required");
+  assert.equal(
+    ((await (await refresh()).json()) as any).status,
+    "auth_required",
+  );
+  assert.equal(authAttempts, 1);
+  const status = (await (
+    await call(
+      "/contracts/v1/subscriptions/" + id + "/status",
+      undefined,
+      scoped,
+    )
+  ).json()) as any;
+  assert.equal(status.sources[0].reconciliation.status, "auth_required");
+
+  const { collectors } = await import("../server/contracts/service.ts");
+  assert.equal(collectors().state("expired").error, "authentication_required");
+});
+test("native publication reaches the same resumable SSE API and stops on unsubscribe", async () => {
+  let publish!: (batch: any) => Promise<void>,
+    stopped = false;
+  plugins.services.set("native-fixture", {
+    pluginId: "fixture",
+    service: {
+      id: "native-fixture",
+      name: "Native fixture",
+      authMethods: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          connect: async () => ({ credentials: {} }),
+          authorize: async () => {},
+        },
+      ],
+      contracts: {
+        version: 1,
+        available: () => ["messaging.messages.list"],
+        operations: {
+          "messaging.messages.list": {
+            category: "messaging",
+            readOnly: true,
+            inputSchema: {},
+            outputSchema: {},
+            invoke: async () => ({ items: [], coverage: { complete: true } }),
+          },
+        },
+        async watch(_input, ctx) {
+          publish = ctx.publish;
+          await new Promise<void>((resolve) =>
+            ctx.signal.addEventListener(
+              "abort",
+              () => {
+                stopped = true;
+                resolve();
+              },
+              { once: true },
+            ),
+          );
+        },
+      },
+    },
+  });
+  run(
+    "INSERT INTO connections(id,user_id,service_id,method_id,name,config_enc,credentials_enc,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    "native",
+    user.id,
+    "native-fixture",
+    "fixture",
+    "native",
+    encrypt({}),
+    encrypt({}),
+    "ok",
+    Date.now(),
+    Date.now(),
+  );
+  const scoped = createToken(user.id, "native", ["native"]).secret;
+  const descriptor = (await (
+    await call("/connections/native/contracts/v1", undefined, scoped)
+  ).json()) as any;
+  assert.deepEqual(descriptor.changes, { native: true, reconciliation: false });
+  const { id, cursor } = (await (
+    await call(
+      "/contracts/v1/subscriptions",
+      { connections: ["native"] },
+      scoped,
+    )
+  ).json()) as any;
+  await call(
+    "/contracts/v1/subscriptions/" + id + "/activity",
+    { active: true },
+    scoped,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(typeof publish, "function");
+  await publish({
+    events: [
+      {
+        sourceId: "native-delivery",
+        event: {
+          category: "messaging",
+          type: "created",
+          resourceType: "message",
+          resourceId: "native-message",
+          debugText: "never persist this body",
+        },
+      },
+    ],
+    checkpoint: "native-cursor",
+  });
+  const response = await call(
+    "/contracts/v1/subscriptions/" + id + "/events?cursor=" + cursor,
+    undefined,
+    scoped,
+  );
+  const reader = response.body!.getReader();
+  try {
+    const chunk = await reader.read();
+    const text = new TextDecoder().decode(chunk.value);
+    assert.match(text, /native-message/);
+    assert.ok(!text.includes("never persist"));
+  } finally {
+    await reader.cancel();
+  }
+  const deleted = await contracts.request(
+    "http://localhost/contracts/v1/subscriptions/" + id,
+    { method: "DELETE", headers: { authorization: "Bearer " + scoped } },
+  );
+  assert.equal(deleted.status, 200);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(stopped, true);
+});
+test("contract input body limits and malformed JSON return client errors", async () => {
+  const huge = await call("/connections/first/contracts/v1/call", {
+    operation: "messaging.messages.send",
+    arguments: { text: "a".repeat(1024 * 1024) },
+  });
+  assert.equal(huge.status, 413);
+  const invalid = await contracts.request(
+    "http://localhost/connections/first/contracts/v1/call",
+    {
+      method: "POST",
+      headers: {
+        authorization: "Bearer " + token,
+        "content-type": "application/json",
+      },
+      body: "{broken",
+    },
+  );
+  assert.equal(invalid.status, 400);
+});
+after(async () => {
+  const { pushSources, collectors } = await import(
+    "../server/contracts/service.ts"
+  );
+  await Promise.all([pushSources().stop(), collectors().stop()]);
   db.close();
   fs.rmSync(temp, { recursive: true, force: true });
 });

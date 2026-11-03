@@ -334,7 +334,15 @@ export interface ContractOperation {
   inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>;
   invoke(input: Record<string, unknown>, context: ContractContext): Promise<unknown>;
 }
+export interface ContractChangeBatch { events: {sourceId:string;event:ChangeEvent}[]; checkpoint:string }
+export interface ContractWatchContext extends ContractContext {
+  /** Resolves only after events and the native checkpoint are durably committed. */
+  publish(batch:ContractChangeBatch):Promise<void>;
+}
 export interface ContractDefinition {
+  /** Read-only native receive loop. Run until signal aborts; release listeners/sockets in finally.
+   * Checkpoints are independent of collect(). Acknowledge upstream only after publish resolves. */
+  watch?(input:{checkpoint?:string},context:ContractWatchContext):Promise<void>;
   /** Read-only reconciliation. Checkpoint and events commit together in the core. */
   collect?(input:{checkpoint?:string},context:ContractContext):Promise<{events:{sourceId:string;event:ChangeEvent}[];checkpoint:string}>;
   version: 1;
