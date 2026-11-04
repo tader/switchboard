@@ -52,6 +52,12 @@ plugins.services.set("fixture", {
           inputSchema: { type: "object" },
           outputSchema: { type: "object" },
           invoke: async (input) => {
+            if (input.conversationId === "rate-limited")
+              throw Object.assign(Error("private upstream text"), {
+                code: "rate_limited",
+                retryAfterMs: 120000,
+                status: 429,
+              });
             if (input.conversationId === "denied")
               throw Object.assign(Error("Resource denied"), {
                 code: "permission_denied",
@@ -614,6 +620,17 @@ test("contract input body limits and malformed JSON return client errors", async
     },
   );
   assert.equal(invalid.status, 400);
+});
+test("retry metadata is bounded and preserved without exposing provider text", async () => {
+  const r = await call("/connections/first/contracts/v1/call", {
+    operation: "messaging.messages.list",
+    arguments: { conversationId: "rate-limited" },
+  });
+  assert.equal(r.status, 429);
+  assert.equal(r.headers.get("retry-after"), "120");
+  assert.deepEqual(await r.json(), {
+    error: { code: "rate_limited", retryAfterMs: 120000 },
+  });
 });
 test("a forbidden resource does not pause other reads on the connection", async () => {
   const denied = await call("/connections/first/contracts/v1/call", {

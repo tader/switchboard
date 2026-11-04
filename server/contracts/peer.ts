@@ -176,6 +176,9 @@ export async function handleContractPeer(
     }
   } catch (error) {
     const f = contractFailure(error);
-    throw Object.assign(new HttpError(f.status, f.code), { code: f.code });
+    throw Object.assign(new HttpError(f.status, f.code), {
+      code: f.code,
+      ...(f.retryAfterMs ? { retryAfterMs: f.retryAfterMs } : {}),
+    });
   }
 }

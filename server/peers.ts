@@ -287,6 +287,7 @@ function registerSession(socket: WebSocket, peerId: string, remote?: string, fea
       if (message.type === 'error') {
         const error = new HttpError(Number.isInteger(message.status) && message.status >= 400 && message.status <= 599 ? message.status : 502, String(message.error ?? 'Peer request failed').slice(0, 2000));
         if (typeof message.code === 'string' && /^[a-z][a-z0-9_.]{0,99}$/.test(message.code)) Object.assign(error, { code: message.code });
+        if (typeof message.retryAfterMs === 'number' && Number.isFinite(message.retryAfterMs) && message.retryAfterMs > 0) Object.assign(error, { retryAfterMs: Math.min(86400000, Math.max(1000, Math.ceil(message.retryAfterMs))) });
         pending.reject(error);
       }
       else pending.resolve(message.result);
@@ -308,7 +309,7 @@ function registerSession(socket: WebSocket, peerId: string, remote?: string, fea
       const response = JSON.stringify({ protocol: PROTOCOL, type: 'result', requestId: message.requestId, result });
       if (Buffer.byteLength(response) > MAX_MESSAGE) throw new HttpError(502, 'Peer result exceeded the message limit');
       if (socket.readyState === WebSocket.OPEN) socket.send(response);
-    } catch (error: any) { send({ type: 'error', requestId: message.requestId, status: error?.status ?? 502, error: String(error?.message ?? error).slice(0, 500), code: typeof error?.code === 'string' && /^[a-z][a-z0-9_.]{0,99}$/.test(error.code) ? error.code : undefined }); }
+    } catch (error: any) { send({ type: 'error', requestId: message.requestId, status: error?.status ?? 502, error: String(error?.message ?? error).slice(0, 500), code: typeof error?.code === 'string' && /^[a-z][a-z0-9_.]{0,99}$/.test(error.code) ? error.code : undefined, retryAfterMs: typeof error?.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0 ? Math.min(86400000, Math.max(1000, Math.ceil(error.retryAfterMs))) : undefined }); }
     finally { session.inFlight.delete(message.requestId); }
   });
   socket.on('close', () => { if (sessions.get(peerId) === session) closeSession(peerId, 1000, 'Peer disconnected'); });

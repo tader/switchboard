@@ -32,7 +32,15 @@ export default function () {
       readOnly: true,
       inputSchema: { type: "object" },
       outputSchema: { type: "object" },
-      invoke: async (_input: any, ctx: any) => request(ctx, "messages"),
+      invoke: async (input: any, ctx: any) => {
+        if (input.conversationId === "rate-limited")
+          throw Object.assign(Error("private provider detail"), {
+            code: "rate_limited",
+            status: 429,
+            retryAfterMs: 120000,
+          });
+        return request(ctx, "messages");
+      },
     },
     "messaging.messages.send": {
       category: "messaging",

@@ -302,3 +302,9 @@ omitted precondition explicitly accepts unconditional provider semantics. Ordina
 send/reply/forward instead use the core's durable idempotency key. All mutations
 return metadata-only receipts, with accepted/uncertain attempts never automatically
 resent. Draft and organization mutations use the same durable intent machinery.
+
+Read failures with a provider retry delay return bounded `error.retryAfterMs` and
+an HTTP `Retry-After` header (one second to 24 hours). The negotiated contract peer
+path preserves that metadata across relays. Consumers must honor the delay; it does
+not authorize resending an uncertain mutation. Failure payloads contain sanitized
+codes and timing metadata, never raw provider error bodies.

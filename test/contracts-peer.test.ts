@@ -303,6 +303,14 @@ test("shared contracts and durable changes traverse multiple protocol-3 peers wi
   });
   assert.equal(read.status, 200, JSON.stringify(read.data));
   assert.equal(read.data.items[0].text, "PRIVATE-READ-BODY");
+  const limited = await gateway.request("POST", root + "/call", {
+    operation: "messaging.messages.list",
+    arguments: { conversationId: "rate-limited" },
+  });
+  assert.equal(limited.status, 429, JSON.stringify(limited.data));
+  assert.deepEqual(limited.data, {
+    error: { code: "rate_limited", retryAfterMs: 120000 },
+  });
   const input = {
     operation: "messaging.messages.send",
     arguments: { conversationId: "chat", text: "PRIVATE-SEND-BODY" },

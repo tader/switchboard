@@ -260,11 +260,16 @@ export function contractFailure(error: any) {
     contract_not_supported: 501,
     collector_not_supported: 501,
     peer_offline: 503,
+    source_unavailable: 503,
   };
   const code = error?.code ?? error?.message,
     status = codes[code] ?? (error instanceof HttpError ? error.status : 500);
+  const delay = Number(error?.retryAfterMs);
   return {
     status,
+    ...(Number.isFinite(delay) && delay > 0
+      ? { retryAfterMs: Math.min(86400000, Math.max(1000, Math.ceil(delay))) }
+      : {}),
     code: status >= 500 && !codes[code] ? "contract_failed" : String(code),
   };
 }

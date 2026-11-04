@@ -62,7 +62,17 @@ contracts.use("/connections/:ref/contracts/v1/call", async (c, next) => {
 });
 contracts.onError((error, c) => {
   const failure = contractFailure(error);
-  return c.json({ error: { code: failure.code } }, failure.status as any);
+  if (failure.retryAfterMs)
+    c.header("Retry-After", String(Math.ceil(failure.retryAfterMs / 1000)));
+  return c.json(
+    {
+      error: {
+        code: failure.code,
+        ...(failure.retryAfterMs ? { retryAfterMs: failure.retryAfterMs } : {}),
+      },
+    },
+    failure.status as any,
+  );
 });
 contracts.get("/contracts/v1/connections", async (c) => {
   const category = c.req.query("category");
