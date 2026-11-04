@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/tader/switchboard/compare/v0.8.3...v0.9.0) (2026-11-04)
+
+
+### Features
+
+* stage shared contracts and activity-backed change delivery ([#40](https://github.com/tader/switchboard/issues/40)) ([344b159](https://github.com/tader/switchboard/commit/344b159a4a1771cf3cd83e612b948fa1a2b9ca25))
+
 ## [0.8.3](https://github.com/tader/switchboard/compare/v0.8.2...v0.8.3) (2026-10-30)
 
 
