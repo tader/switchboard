@@ -1,3 +1,4 @@
+import { startContractCollectors } from './contracts/service.ts';
 import { credentialsApi } from './routes/credentials.ts';
 import { attachWebSocketProxy } from './websocket-proxy.ts';
 import { stopWebSockets } from './websocket-transport.ts';
@@ -87,6 +88,7 @@ const setupUrl = ensureAdmin();
 initializePeers();
 await plugins.start();
 const stopPeerAgent = startPeerAgent();
+const stopContracts=config.sharedContracts?startContractCollectors():undefined;
 prune();
 setInterval(prune, 6 * 3600_000).unref();
 
@@ -102,6 +104,7 @@ const stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Se
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
+    await stopContracts?.();
     stopWebSocketSubscriptions();
     stopWebSockets();
     stopProviderMcp();

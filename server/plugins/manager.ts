@@ -1,3 +1,4 @@
+import { validateDefinition } from '../contracts/model.ts';
 import fs from 'node:fs';
 import { obtainCredentials } from '../credential-providers.ts';
 import { satisfies, valid, validRange } from 'semver';
@@ -266,6 +267,7 @@ class PluginManager {
       const services = instance.services ?? [];
       for (const s of services) {
         validateService(s);
+        if(s.contracts)validateDefinition(s.contracts);
         const taken = this.services.get(s.id);
         if (taken && taken.pluginId !== id) throw new Error(`Service id "${s.id}" is already provided by plugin "${taken.pluginId}"`);
       }

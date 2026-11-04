@@ -1,3 +1,4 @@
+import { contracts } from '../contracts/routes.ts';
 import { validateWebSocketValue } from '../websocket-schema.ts';
 import { executeWebSocket } from '../websocket.ts';
 import { websocketAccess } from '../websocket-access.ts';
@@ -21,6 +22,7 @@ import { executeMcp, validateMcpInput, type McpInput, type McpOperation } from '
 
 export const api = new Hono<Env>();
 api.use('*', requireUser);
+if(config.sharedContracts)api.route('/', contracts);
 
 api.get('/services', (c) => {
   const guides = guidesByService();

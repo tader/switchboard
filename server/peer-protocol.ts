@@ -5,7 +5,7 @@ import { HttpError } from './http.ts';
 
 export const PEER_PROTOCOL = 3;
 export const PEER_MAX_MESSAGE = 2 * 1024 * 1024;
-export const PEER_OPERATIONS = new Set(['call', 'mcp', 'openapi', 'websocket', 'credentials']);
+export const PEER_OPERATIONS = new Set(['call', 'mcp', 'openapi', 'websocket', 'credentials', 'contracts']);
 export const MAX_PEER_HOPS = 8;
 export interface PeerRoute { path: string[]; deadline: number }
 export const peerRoute = new AsyncLocalStorage<PeerRoute>();
@@ -26,4 +26,11 @@ export function forwardingRoute(timeoutMs: number): PeerRoute {
   const path = [...(previous?.path ?? []), instanceId()];
   if (path.length > MAX_PEER_HOPS || new Set(path).size !== path.length) throw new HttpError(508, 'Peer route contains a loop or exceeds eight hops');
   return { path, deadline: Math.min(previous?.deadline ?? Infinity, Date.now() + Math.min(Math.max(timeoutMs, 1), 120_000)) };
+}
+
+export const CONTRACT_PEER_FEATURE = 'contracts.v1';
+export function peerFeatures(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 32 || value.some(x => typeof x !== 'string' || !x || x.length > 100)) throw Error('Invalid peer features');
+  return [...new Set(value)] as string[];
 }

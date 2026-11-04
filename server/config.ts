@@ -12,6 +12,8 @@ const port = Number(env.PORT ?? 8770);
 const publicUrl = (env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/+$/, '');
 
 export const config = {
+  /** Staged shared-contract implementation; disabled until adapters pass conformance. */
+  sharedContracts: env.SHARED_CONTRACTS === '1',
   root,
   dataDir,
   port,
