@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/tader/switchboard/compare/v0.9.0...v0.10.0) (2026-11-05)
+
+
+### Features
+
+* **messaging:** support sender display names ([#42](https://github.com/tader/switchboard/issues/42)) ([ee01ae8](https://github.com/tader/switchboard/commit/ee01ae85f0574d582eb5cab57f5f7cda95e2021c))
+
 ## [0.9.0](https://github.com/tader/switchboard/compare/v0.8.3...v0.9.0) (2026-11-04)
 
 
