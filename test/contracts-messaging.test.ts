@@ -48,3 +48,10 @@ test("message history can target a thread and rejects an empty thread filter", (
     false,
   );
 });
+
+test("display names are optional, nullable and bounded without replacing author identity", () => {
+  const schema = messagingOperations["messaging.messages.get"].outputSchema;
+  const item = {id:"m",conversationId:"c",text:"Hello",authorId:"123@lid",createdAt:null,isOwn:false,contentState:"available",contentType:"text"};
+  for (const extra of [{}, {authorDisplayName:null}, {authorDisplayName:"Saved contact"}]) assert.equal(ajv.validate(schema,{...item,...extra}),true);
+  for (const value of ["", "x".repeat(513), 123]) assert.equal(ajv.validate(schema,{...item,authorDisplayName:value}),false);
+});
