@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/tader/switchboard/compare/v0.10.0...v0.10.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* remember plugin update access while retaining review ([#44](https://github.com/tader/switchboard/issues/44)) ([7ad226a](https://github.com/tader/switchboard/commit/7ad226af6da65d139025e195ef4b38c6c4833ff2))
+
 ## [0.10.0](https://github.com/tader/switchboard/compare/v0.9.0...v0.10.0) (2026-11-05)
 
 
