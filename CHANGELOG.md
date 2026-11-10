@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/tader/switchboard/compare/v0.10.1...v0.11.0) (2026-11-10)
+
+
+### Features
+
+* describe reaction users in messaging contracts ([#46](https://github.com/tader/switchboard/issues/46)) ([b4d07f8](https://github.com/tader/switchboard/commit/b4d07f88a6dae7dad016a4ad77eef9bdaaec9961))
+
 ## [0.10.1](https://github.com/tader/switchboard/compare/v0.10.0...v0.10.1) (2026-11-10)
 
 
