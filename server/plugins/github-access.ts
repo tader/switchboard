@@ -140,6 +140,10 @@ export async function resolveCommit(repo: string, ref?: string, ctx: GithubConte
       throw e;
     }
     if (res.ok) return (await res.text()).trim();
+    if (res.status === 422) {
+      await res.body?.cancel();
+      throw badRequest(`GitHub could not resolve or validate ref ${ref ?? 'HEAD'} in ${repo} (HTTP 422). Check the plugin's branch or release under Version & updates.`);
+    }
     const retry = accessFailure(res);
     error = await githubError(res, repo);
     if (!retry) throw error;
@@ -239,6 +243,10 @@ export async function repositoryArchive(input: RepoRef, ctx: GithubContext = {})
       throw e;
     }
     if (!resolved.ok) {
+      if (resolved.status === 422) {
+        await resolved.body?.cancel();
+        throw badRequest(`GitHub could not resolve or validate ref ${input.ref ?? 'HEAD'} in ${input.repo} (HTTP 422). Check the plugin's branch or release under Version & updates.`);
+      }
       const retry = accessFailure(resolved);
       error = await githubError(resolved, input.repo);
       if (retry) continue;
