@@ -69,8 +69,9 @@ before(async () => {
       if (!spec) return new Response('', { status: 404 });
       if (spec.allowed && !spec.allowed.includes(authorization ?? '')) return new Response('', { status: authorization ? 401 : 404 });
       if (m[2] === 'releases') return Response.json(m[3] === 'latest' ? spec.releases.find((r) => spec.latest ? r.tag_name === spec.latest : !r.prerelease && !r.draft) : spec.releases);
-      const sha = spec.refs.get(decodeURIComponent(m[3]));
-      if (!sha) return new Response('', { status: 404 });
+      const ref = decodeURIComponent(m[3]);
+      const sha = spec.refs.get(ref);
+      if (!sha) return new Response('', { status: ref === 'deleted-branch' ? 422 : 404 });
       if (m[2] === 'commits') return new Response(sha);
       if (spec.redirect) return new Response(null, { status: 302, headers: { location: `${spec.redirect}/${m[1]}/${sha}` } });
       return new Response(new Uint8Array(spec.files.get(sha)!));
@@ -634,4 +635,12 @@ test('catalogs retry GitHub access with only the acting administrator’s creden
       assert.equal((await response.json()).plugins[0].id, 'authenticated-listing');
     });
   } finally { config.githubToken = previousToken; catalogResponse = undefined; saveCatalogSources([]); }
+});
+
+
+test('missing GitHub ref identifies the source and how to repair it', async () => {
+  const gh = await import('../server/plugins/github.ts');
+  await fixture('owner/missing-ref', [{ id: 'missing-ref' }]);
+  await assert.rejects(gh.resolveCommit('owner/missing-ref', 'deleted-branch'), /could not resolve or validate ref deleted-branch.*Version & updates/);
+  await assert.rejects(gh.previewInstall({ repo: 'owner/missing-ref', ref: 'deleted-branch', channel: 'branch' }), /could not resolve or validate ref deleted-branch.*Version & updates/);
 });

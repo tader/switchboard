@@ -6,7 +6,7 @@ import { Alert, Badge, Button, Checkbox, Dialog, FormField, Input, Select, Spinn
 
 export type PluginChangeRequest =
   | { kind: 'install'; initial?: CommunityPlugin; listings?: CommunityPlugin[] }
-  | { kind: 'update'; plugins: PluginInfo[]; editRef?: boolean };
+  | { kind: 'update'; plugins: PluginInfo[]; editRef?: boolean; initialError?: string; initialPlan?: PluginPlan };
 
 export function CommunityPlugins({ installed, onInstall }: { installed: PluginInfo[]; onInstall: (listings: CommunityPlugin[]) => void }) {
   const [selected, setSelected] = useState<string[]>([]);
@@ -107,7 +107,7 @@ export function PluginChangeDialog({ request, onClose, onApplied }: { request: P
     const source = request.kind === 'update' && request.plugins.length === 1 ? request.plugins[0].source : undefined;
     setRepo(initial?.repo ?? source?.repo ?? ''); setSubpath(initial?.path ?? source?.path ?? ''); setRef(initial?.ref ?? source?.ref ?? '');
     setChannel(source?.channel ?? (source?.ref || initial?.ref ? 'branch' : 'latest')); setReleases([]); setReleaseError(''); setConnection(request.kind === 'update' ? 'remembered' : 'automatic');
-    setPlan(null); setError(''); setConnectionError(''); setConnections([]);
+    setPlan(request.kind === 'update' ? request.initialPlan ?? null : null); setError(request.kind === 'update' ? request.initialError ?? '' : ''); setConnectionError(''); setConnections([]);
     const controller = new AbortController();
     api<Connection[]>('/connections', { signal: controller.signal }).then((list) => {
       setConnections(list.filter((c) => c.kind === 'http' && (c.peer ? /^(?:peer\/[A-Za-z0-9_-]+\/)+github$/.test(c.serviceId) : c.serviceId === 'github') && c.status !== 'unavailable'));

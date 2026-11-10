@@ -2,6 +2,7 @@ import { ListToolbar, ListFeedback, SortHeader, useList, useViewState } from '..
 import { useEffect, useState } from 'react';
 import { ArrowUpCircle, Download, GitBranch, MoreHorizontal, Puzzle, RefreshCw, ScrollText, Settings2, Trash2 } from 'lucide-react';
 import { api, type Field, type PluginInfo } from '../api';
+import { rememberUpdates, remembersUpdates, planWithRememberedAccess } from '../plugin-update';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
@@ -33,7 +34,8 @@ export function Plugins() {
   const [logs, setLogs] = useState<PluginInfo | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateInfo>>({});
   const [checking, setChecking] = useState(false);
-  const updatingAll = changeRequest?.kind === 'update';
+  const [automaticUpdate, setAutomaticUpdate] = useState(false);
+  const updatingAll = changeRequest?.kind === 'update' || automaticUpdate;
   const [updateErrors, setUpdateErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -77,9 +79,26 @@ export function Plugins() {
     filter: (p, f) => (!f.status || p.status === f.status) && (!f.origin || p.origin === f.origin) && (!f.updates || !!updateFor(p)?.updateAvailable),
   });
   const availableUpdates = (plugins.data ?? []).filter(p => updateFor(p)?.updateAvailable);
-  const updateAll = () => {
-    if (!busy && !checking && availableUpdates.length) setChangeRequest({ kind: 'update', plugins: availableUpdates });
+  const applied = (list: PluginInfo[], remember = false) => {
+    if (remember) rememberUpdates(true);
+    setChangeRequest(null);
+    setUpdates({});
+    plugins.reload();
+    toast(`Applied changes to ${list.map((p) => p.name).join(', ')}`);
   };
+  const startUpdate = async (selected: PluginInfo[]) => {
+    if (busy || checking || updatingAll || !selected.length) return;
+    if (!remembersUpdates()) { setChangeRequest({ kind: 'update', plugins: selected }); return; }
+    setAutomaticUpdate(true);
+    try {
+      const plan = await planWithRememberedAccess(selected, api);
+      setChangeRequest({ kind: 'update', plugins: selected, initialPlan: plan });
+    } catch (e: any) {
+      rememberUpdates(false);
+      setChangeRequest({ kind: 'update', plugins: selected, initialError: e.message });
+    } finally { setAutomaticUpdate(false); }
+  };
+  const updateAll = () => { void startUpdate(availableUpdates); };
 
   const byId = new Map(plugins.data?.map((p) => [p.id, p]));
 
@@ -170,7 +189,7 @@ export function Plugins() {
                           label: upd?.updateAvailable ? 'Update now' : 'Update',
                           icon: <ArrowUpCircle />,
                           hidden: !p.source,
-                          onSelect: () => setChangeRequest({ kind: 'update', plugins: [p] }),
+                          onSelect: () => { void startUpdate([p]); },
                         },
                         { label: 'Version & updates…', icon: <GitBranch />, hidden: !p.source, onSelect: () => setChangeRequest({ kind: 'update', plugins: [p], editRef: true }) },
                         { label: 'Reload', icon: <RefreshCw />, onSelect: () => run(p.id, () => api(`/admin/plugins/${p.id}/reload`, { method: 'POST' }), `${p.name} reloaded`) },
@@ -217,12 +236,7 @@ export function Plugins() {
           {details.error && <Alert>{details.error}</Alert>}
         </div>}
       </Dialog>
-      <PluginChangeDialog request={changeRequest} onClose={() => setChangeRequest(null)} onApplied={(list) => {
-        setChangeRequest(null);
-        setUpdates({});
-        plugins.reload();
-        toast(`Applied changes to ${list.map((p) => p.name).join(', ')}`);
-      }} />
+      <PluginChangeDialog request={changeRequest} onClose={() => setChangeRequest(null)} onApplied={(list) => applied(list, changeRequest?.kind === 'update')} />
       <SettingsDialog plugin={settings} onClose={() => setSettings(null)} onSaved={() => { setSettings(null); plugins.reload(); toast('Settings saved'); }} />
       <LogDialog plugin={logs} onClose={() => setLogs(null)} />
     </>
