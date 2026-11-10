@@ -247,6 +247,14 @@ An adapter that cannot filter by thread must exclude the property in its
 `inputConstraints` and reject it, never silently return the unfiltered history.
 Thread history carries its own query-bound cursor and explicit coverage.
 
+Reaction entries may include `users`, containing bounded provider identities and
+nullable display names, and `usersComplete`, which describes whether that user
+list covers all reactors known by the provider. These fields are optional for
+older adapters. Consumers must not infer full coverage from a missing flag or
+equate an unresolved display name with an absent user. Adapter caches and
+provider restrictions can make the list incomplete; identity is never replaced
+with a guessed name.
+
 ## Email schema snapshot
 
 `server/contracts/email-v1.json` defines fifteen operations for collections,

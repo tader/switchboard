@@ -55,3 +55,13 @@ test("display names are optional, nullable and bounded without replacing author 
   for (const extra of [{}, {authorDisplayName:null}, {authorDisplayName:"Saved contact"}]) assert.equal(ajv.validate(schema,{...item,...extra}),true);
   for (const value of ["", "x".repeat(513), 123]) assert.equal(ajv.validate(schema,{...item,authorDisplayName:value}),false);
 });
+
+test("reaction identities are optional, bounded and retain explicit coverage", () => {
+  const schema = messagingOperations["messaging.messages.get"].outputSchema;
+  const item = {id:"m",conversationId:"c",text:"Hello",authorId:"a",createdAt:null,isOwn:false,contentState:"available",contentType:"text"};
+  const reaction = {emoji:"👍",count:2,me:false};
+  for (const extra of [{}, {users:[{id:"u1",displayName:"Ada"},{id:"u2",displayName:null}],usersComplete:false}])
+    assert.equal(ajv.validate(schema,{...item,reactions:[{...reaction,...extra}]}),true);
+  for (const extra of [{users:[{id:"",displayName:"Ada"}]},{users:[{id:"u",displayName:"x".repeat(513)}]},{usersComplete:null},{users:[{id:"u",displayName:"Ada",email:"private"}]}])
+    assert.equal(ajv.validate(schema,{...item,reactions:[{...reaction,...extra}]}),false);
+});
