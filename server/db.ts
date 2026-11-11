@@ -301,6 +301,14 @@ const migrations: string[] = [
   `CREATE TABLE IF NOT EXISTS contract_subscription_access(id TEXT PRIMARY KEY REFERENCES contract_subscriptions(id) ON DELETE CASCADE,principal TEXT NOT NULL);`,
   CONTRACT_PUSH_SCHEMA,
   CONTRACT_PEER_SCHEMA,
+  `CREATE TABLE browser_profiles (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT, legacy_plugin TEXT, legacy_path TEXT, managed INTEGER NOT NULL DEFAULT 1,
+    browser_path TEXT, browser_family TEXT,
+    created_at INTEGER NOT NULL
+  );
+  ALTER TABLE connections ADD COLUMN browser_profile_id TEXT REFERENCES browser_profiles(id) ON DELETE RESTRICT;
+  CREATE INDEX connections_browser_profile ON connections(browser_profile_id);`,
 ];
 
 export function initDb() {

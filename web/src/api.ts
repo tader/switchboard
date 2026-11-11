@@ -65,6 +65,7 @@ export interface AuthMethod {
   unavailable?: string;
   /** Signs in through a browser redirect, so the redirect URI can be overridden. */
   redirect: boolean;
+  browserProfile?: boolean;
 }
 
 export interface Service {
@@ -88,7 +89,10 @@ export interface Credential {
   fields?: Field[]; updatedAt: number;
 }
 
+export interface BrowserProfile { id: string; name: string | null; connections: {id:string;name:string;serviceId:string}[] }
+
 export interface Connection {
+  browserProfile?: BrowserProfile;
   credentialProvider?: boolean;
   credential?: { id: string; name: string; kind: string; version: number } | null;
   reusable?: boolean;

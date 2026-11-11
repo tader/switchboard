@@ -110,10 +110,12 @@ export function openapiDocument() {
         patch: op('Admin', 'Change a peer without changing local connections', { parameters: [id('Peer id')], requestBody: json({ type: 'object', properties: { name: { type: 'string' }, url: { type: 'string' }, token: { type: 'string', description: 'Omit or leave blank to preserve the token' }, disabled: { type: 'boolean' }, userIds: { type: 'array', items: { type: 'string' } } } }) }),
         delete: op('Admin', 'Remove a peer and its sharing grants', { parameters: [id('Peer id')] }),
       },
+      '/api/browser-profiles': { get: op('Browser profiles', 'List your local authentication profiles and referring connections', { description: 'Full-access owners only. Metadata contains id, optional name and connections (id, name, serviceId). No cookies, storage, paths or secrets. Profiles cannot be shared with other users or peers.' }) },
+      '/api/browser-profiles/{id}': { patch: op('Browser profiles', 'Rename a local authentication profile', { parameters: [id('Owned browser profile ID')], requestBody: json({ type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 100, description: 'Optional display name; empty clears the name.' } } }), description: 'Full-access owners only. Does not change sign-ins or connection identity.' }) },
       '/api/connections': {
         get: op('Connections', 'List local connections and read-only shared handles', { description: 'readOnly=true identifies imported peer connections. Imported handles support execution, OpenAPI discovery and explicit onward sharing. canRemove=true allows removal of a stale handle whose peer no longer shares it.' }),
         post: op('Connections', 'Connect an account', {
-          description: 'Returns status "connected", "redirect" (open url in a browser) or "device" (show the code, then poll).',
+          description: 'Returns status "connected", "redirect" (open url in a browser) or "device" (show pairing/browser instructions, then poll). Browser-profile methods create a new independent profile unless browserProfileId explicitly selects an owned local profile.',
           requestBody: json(
             {
               type: 'object',
@@ -123,6 +125,8 @@ export function openapiDocument() {
                 method: { type: 'string', description: 'Sign-in method id; default: the first available' },
                 config: { type: 'object', description: "Values for the method's fields, by key" },
                 name: { type: 'string', description: 'Name scripts use for the connection; default: from the account' },
+                browserProfileId: { type: 'string', description: 'Explicitly reuse an owned local authentication profile; supported only by methods advertising browserProfile. Omit for a new independent profile.' },
+                browserProfileName: { type: 'string', maxLength: 100, description: 'Optional display name when reusing a profile.' },
                 credentialId: { type: 'string', description: 'Reuse this owned credential; additional OAuth consent is requested if needed.' }, independent: { type: 'boolean', description: 'Obtain a fresh OAuth grant for this connection.' }, redirectUri: { type: 'string', description: "Redirect URI registered at the provider, if it is not Switchboard's (e.g. http://localhost:8080/callback). The result is then manual: complete it with POST /api/connect/{flow}/complete." },
               },
             },
@@ -133,9 +137,9 @@ export function openapiDocument() {
       '/api/connections/{ref}': {
         get: op('Connections', 'Get a connection', { parameters: [ref] }),
         patch: op('Connections', 'Rename a connection', { parameters: [ref], requestBody: json({ type: 'object', properties: { name: { type: 'string', description: 'New name; scripts using the old one stop working' } } }, { name: '' }) }),
-        delete: op('Connections', 'Disconnect or remove a stale peer handle', { parameters: [ref], description: 'Disconnects a local connection, or removes an imported handle no longer shared by its peer. Saved calls are kept. Removing a stale handle does not change the remote connection. Still-shared handles cannot be removed.' }),
+        delete: op('Connections', 'Disconnect or remove a stale peer handle', { parameters: [ref], description: 'Disconnects a local connection, or removes an imported handle no longer shared by its peer. Saved calls are kept. Removing a stale handle does not change the remote connection. Still-shared handles cannot be removed. Disconnecting the last reference to a local browser profile also deletes its disk data and upgrade backup.' }),
       },
-      '/api/connections/{ref}/reconnect': { post: op('Connections', 'Sign in again', { parameters: [ref], description: 'Full-access owners only. Shared reconnection updates the credential for every linked service; independent requires a fresh private OAuth grant.', requestBody: json({ type: 'object', properties: { method: { type: 'string' }, config: { type: 'object' }, credentialId: { type: 'string' }, independent: { type: 'boolean' } } }, {}) }) },
+      '/api/connections/{ref}/reconnect': { post: op('Connections', 'Sign in again', { parameters: [ref], description: 'Full-access owners only. Browser authentication retains its original profile; another profile cannot be selected on reconnect. Shared reconnection updates the credential for every linked service; independent requires a fresh private OAuth grant.', requestBody: json({ type: 'object', properties: { method: { type: 'string' }, config: { type: 'object' }, credentialId: { type: 'string' }, independent: { type: 'boolean' } } }, {}) }) },
       '/api/connections/{ref}/token': {
         get: op('Connections', 'Get a fresh access token for a provider SDK', {
           parameters: [ref, { name: 'force', in: 'query', description: '1 to refresh even if still valid', schema: { type: 'string' } }],
@@ -155,6 +159,7 @@ export function openapiDocument() {
           requestBody: json({ type: 'object', required: ['url'], properties: { url: { type: 'string', description: 'The address after signing in, e.g. http://localhost:8080/callback?code=…&state=…' } } }, { url: '' }),
         }),
       },
+      '/api/connect/{flow}': { delete: op('Connections', 'Cancel sign-in and release pending browser resources', { parameters: [{ name: 'flow', in: 'path', required: true, schema: { type: 'string' } }], description: 'Full-access owner only. A queued browser authentication is cancelled without launching a browser. A new profile with no connections is collected.' }) },
       '/api/connect/{flow}/poll': { post: op('Connections', 'Advance a device sign-in', { parameters: [{ name: 'flow', in: 'path', required: true, schema: { type: 'string' } }] }) },
       '/api/call': { post: op('Calls', 'Make a request through a connection', { description: 'Returns status, headers and body in a JSON envelope.', requestBody: json(call, { connection: '', method: 'GET', url: '/' }) }) },
       '/proxy/{ref}/{path}': {
