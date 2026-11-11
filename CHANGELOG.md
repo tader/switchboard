@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/tader/switchboard/compare/v0.11.0...v0.12.0) (2026-11-11)
+
+
+### Features
+
+* share browser profiles across authentication connections ([4ea7b70](https://github.com/tader/switchboard/commit/4ea7b70bd04dbc4c0783e6af3689c1510a6adbe2))
+* share browser profiles across authentication connections ([#48](https://github.com/tader/switchboard/issues/48)) ([5b19e3e](https://github.com/tader/switchboard/commit/5b19e3e72d210a4f29997556caf9760609e5ea44))
+
+
+### Bug Fixes
+
+* reap authentication browsers after host crashes ([1124d23](https://github.com/tader/switchboard/commit/1124d2325cc7fd98af64a62043d2e06e8d7901a7))
+
 ## [0.11.0](https://github.com/tader/switchboard/compare/v0.10.1...v0.11.0) (2026-11-10)
 
 
