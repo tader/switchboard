@@ -2,7 +2,7 @@
 
 Switchboard signs in to services once (Gmail, Outlook, GitHub, Jira, Home Assistant, any OAuth or API-key API) so scripts and AI agents use them through it with a Switchboard token, never their own credentials. Users, connections, plugins, a proxy, a web console, an activity log and an MCP server. The README is the user documentation; this file is what you need to change the code safely.
 
-Deployment specifics of the maintainer's instance are in `CLAUDE.local.md` (git-ignored). Never put them in tracked files.
+Deployment specifics of the maintainer's instance are in `AGENTS.local.md` (git-ignored). Never put them in tracked files.
 
 ## Commands
 
@@ -43,7 +43,11 @@ Keep these working: `HUB_*` environment variables (read after `SWITCHBOARD_*`), 
 
 ## Changing things
 
-- **Implementation checklist:** `development-plan.md` at the repository root. Keep development handoffs outside the end-user `docs/` directory.
+- **Documentation audience and development records:** `docs/` and every plugin's `docs/` are rendered in the Web App, including admin-only pages, and must contain only user-facing setup, usage, current behavior, limitations and troubleshooting. Keep plans, progress, status reports, review notes, verification logs, checklists and handoffs in `development/<topic>/` at the root of the owning repository; executable tooling belongs in `scripts/` or tests. Existing records may stay at established paths; new work uses this convention. Repository visibility still applies: private integration material must never enter public core development records. Core docs must not name, link to or describe specific plugins, except narrowly scoped guidance about using the GitHub plugin for higher rate limits when managing plugins. Plugin docs may describe their own plugin but must not disclose other private integrations. Agent/contributor policies belong in instruction files, not Web App docs.
+
+- **Plugin boundaries and privacy:** keep core changes, docs, fixtures and public metadata generic. Put adapter-specific implementation, documentation and integration tests/scripts in the owning plugin repository. A private integration's existence, name, repository URL, identifiers, tenant details and local paths are confidential; source access does not authorize disclosure or public cross-links. Before committing or publishing, scan code, comments, docs, tests, scripts, commit messages, PR text, CI logs and artifacts for these disclosures. Use generic synthetic core fixtures and keep integration-specific reports private. Never publish private material temporarily; deletion does not erase Git or PR edit history.
+
+- **Existing implementation checklist:** `development-plan.md` at the repository root. Use `development/<topic>/` for new implementation records; keep all development records outside Web App documentation.
 
 - **Database:** migrations are an append-only list in `server/db.ts`. Never edit an existing one; add a new entry.
 - **Plugins:** see `docs/plugins.md`. They may only `import type` from the hub or other plugins (erased at runtime); runtime access goes through `ctx.require()`. They cannot have their own `node_modules`. Each load imports a fresh copy of the plugin folder from `<data>/runtime/`; dependents reload with their dependency.
@@ -62,7 +66,7 @@ Keep these working: `HUB_*` environment variables (read after `SWITCHBOARD_*`), 
 
 ## Git
 
-Commits are authored with the maintainer's GitHub noreply identity (set in this repository's git config) and end with a `Co-Authored-By` line for Claude. Before each commit, check the staged content for personal data and secrets: the maintainer's domain, names, email addresses and local paths; anything that looks like a token or key. `compose.yaml`, `docker-compose.dev.yml`, `.data/` and `CLAUDE.local.md` are git-ignored; only the `*.example.*` compose files are tracked.
+Commits are authored with the maintainer's GitHub noreply identity (set in this repository's git config). Any contributor attribution must accurately reflect the contribution; do not hard-code a particular agent, model or vendor. Before each commit, check the staged content for personal data and secrets: the maintainer's domain, names, email addresses and local paths; anything that looks like a token or key. `compose.yaml`, `docker-compose.dev.yml`, `.data/` and `AGENTS.local.md` are git-ignored; only the `*.example.*` compose files are tracked.
 
 ## Automatic versions
 
