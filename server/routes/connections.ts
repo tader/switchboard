@@ -1,3 +1,4 @@
+import { listBrowserProfiles, renameBrowserProfile } from '../browser-profiles.ts';
 import { contracts } from '../contracts/routes.ts';
 import { validateWebSocketValue } from '../websocket-schema.ts';
 import { executeWebSocket } from '../websocket.ts';
@@ -46,12 +47,15 @@ api.put('/connections/:ref/shares/:peerId', requireFullAccess, async c => c.json
 api.get('/connections/:ref/shares', requireFullAccess, (c) => c.json(connectionShares(c.get('user').id, c.req.param('ref'))));
 api.put('/connections/:ref/shares', requireFullAccess, async (c) => c.json(setConnectionShares(c.get('user').id, c.req.param('ref'), await c.req.json())));
 
+api.get('/browser-profiles', requireFullAccess, c => { listConnections(c.get('user').id); return c.json(listBrowserProfiles(c.get('user').id)); });
+api.patch('/browser-profiles/:id', requireFullAccess, async c => c.json(renameBrowserProfile(c.get('user').id, c.req.param('id'), (await c.req.json()).name)));
+
 api.get('/connections', (c) => c.json(listConnections(c.get('user').id, c.get('token')?.connectionIds).map(view => c.get('token')?.connectionIds && view.credential ? { ...view, credential: null, reusable: false, canIssueToken: false } : view)));
 
 api.get('/connections/:ref', (c) => {
   const row = getConnectionRow(c.get('user').id, c.req.param('ref'));
   assertConnectionAccess(c, row.id);
-  const view = listConnections(c.get('user').id, [row.id])[0];
+  const view = listConnections(c.get('user').id, c.get('token')?.connectionIds).find(view => view.id === row.id)!;
   return c.json(c.get('token')?.connectionIds && view.credential ? { ...view, credential: null, reusable: false, canIssueToken: false } : view);
 });
 
@@ -179,8 +183,8 @@ api.post('/connect/:flow/complete', requireFullAccess, async (c) => {
   return c.json({ status: 'connected', connection: await completeFromPaste(c.req.param('flow'), url, c.get('user')) });
 });
 api.post('/connect/:flow/poll', requireFullAccess, async (c) => c.json(await pollDevice(c.req.param('flow'), c.get('user'))));
-api.delete('/connect/:flow', requireFullAccess, (c) => {
-  cancelFlow(c.req.param('flow'), c.get('user'));
+api.delete('/connect/:flow', requireFullAccess, async (c) => {
+  await cancelFlow(c.req.param('flow'), c.get('user'));
   return c.json({ ok: true });
 });
 

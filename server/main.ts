@@ -1,3 +1,4 @@
+import { stopBrowserProfiles, sweepBrowserProfiles } from './browser-profiles.ts';
 import { startContractCollectors } from './contracts/service.ts';
 import { credentialsApi } from './routes/credentials.ts';
 import { attachWebSocketProxy } from './websocket-proxy.ts';
@@ -11,7 +12,7 @@ import { Hono } from 'hono';
 import { config } from './config.ts';
 import { initKey } from './crypto.ts';
 import { initDb } from './db.ts';
-import { recoverHistoricalConnectionErrors } from './connections.ts';
+import { recoverHistoricalConnectionErrors, sweepConnectFlows } from './connections.ts';
 import { HttpError } from './http.ts';
 import { plugins } from './plugins/manager.ts';
 import { account } from './routes/account.ts';
@@ -89,6 +90,9 @@ initializePeers();
 await plugins.start();
 const stopPeerAgent = startPeerAgent();
 const stopContracts=config.sharedContracts?startContractCollectors():undefined;
+await sweepConnectFlows();
+await sweepBrowserProfiles();
+setInterval(() => { void sweepConnectFlows().then(() => sweepBrowserProfiles()).catch(() => {}); }, 30_000).unref();
 prune();
 setInterval(prune, 6 * 3600_000).unref();
 
@@ -104,6 +108,7 @@ const stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Se
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
+    await stopBrowserProfiles();
     await stopContracts?.();
     stopWebSocketSubscriptions();
     stopWebSockets();

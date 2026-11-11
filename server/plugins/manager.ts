@@ -1,3 +1,4 @@
+import { browserProfileOwner, pluginBrowserProfiles, registerServiceProfiles, stopBrowserProfiles } from '../browser-profiles.ts';
 import { validateDefinition } from '../contracts/model.ts';
 import fs from 'node:fs';
 import { obtainCredentials } from '../credential-providers.ts';
@@ -199,6 +200,7 @@ class PluginManager {
     for (const s of p.services) {
       if (this.services.get(s.id)?.pluginId === id) this.services.delete(s.id);
     }
+    await stopBrowserProfiles(id);
     try {
       await p.instance.dispose?.();
     } catch (e: any) {
@@ -274,6 +276,8 @@ class PluginManager {
       for (const s of services) {
         s.icon = resolveIcon(s.icon, p.dir);
         this.services.set(s.id, { service: s, pluginId: id });
+        browserProfileOwner(s.id, id);
+        for (const method of s.authMethods) if (method.browserProfile) registerServiceProfiles(s.id, method, id);
       }
       p.instance = instance;
       p.services = services;
@@ -325,7 +329,8 @@ class PluginManager {
       dir: p.dir,
       dataDir,
       peer: hasConfiguredPeers(),
-      capabilities: { deviceQr: true, deviceUpdates: true, deviceBrowser: true },
+      capabilities: { deviceQr: true, deviceUpdates: true, deviceBrowser: true, browserProfiles: true },
+      browserProfiles: pluginBrowserProfiles(p.id),
       mcp: { oauth: mcpOAuth },
       credentials: { obtain: obtainCredentials },
     };

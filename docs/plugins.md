@@ -291,3 +291,111 @@ An optional `ServiceDefinition.contracts` extension provides category operations
 read-only change collection alongside existing APIs. The core surface is disabled
 by default and provisional; see the [design and delivery checklist](design/shared-contracts.md)
 for its HTTP endpoints, activity/authentication rules and remaining adapter/peer work.
+
+## Local authentication browser profiles
+
+Browser profiles are optional and separate from reusable API credentials. Opt in
+with `AuthMethod.browserProfile` only for authentication performed in a browser on
+the Switchboard host. Redirected native OAuth using the user's regular browser
+continues unchanged. Detect `ctx.browserProfiles` before opting in; on an older
+core retain the plugin's independent-browser implementation.
+
+A profile belongs to one Switchboard user on this instance/device. New connections
+receive independent profiles by default, including when the provider returns an
+already-connected account. Only explicit selection during creation reuses a
+profile. Reconnect always retains its original profile. Profile management needs
+full user access; limited tokens cannot list, rename or choose profiles. Browser
+profiles never travel to peers. Existing explicit credential-provider grants still
+transfer only the provider's defined credential bundle.
+
+An opted-in method receives `args.browserProfile` during connect/poll/callback.
+After connection creation, use `ctx.browserProfiles.forConnection(connection)` for
+silent reauthentication. The core checks that this is a local connection belonging
+to the calling plugin. Do not serialize the handle, copy its ID into a credential
+bundle, or expose CDP to a web client.
+
+```ts
+const profile = args.browserProfile;
+const result = await profile.run(
+  { headless: true, signal, timeoutMs: 60_000, browserPath },
+  async (browser, signal) => {
+    const page = await browser.page('about:blank');
+    // Install narrowly scoped capture/guards before navigating. Read only the
+    // authentication result this method needs; observe signal during all waits.
+    return captureAuthentication(page, browser, signal);
+  },
+);
+```
+
+`run()` serializes all plugins and connections using that profile. Its deadline
+includes queue time; cancellation while queued prevents launch. An authentication
+attempt should first run headlessly. If interaction is required, end that run and
+start a visible run with `headless: false`. Return browser-device instructions and
+poll while this work runs, so the user can cancel while waiting for another
+sign-in. A failed attempt must not fall back visibly after its signal is aborted.
+Core enforces a maximum 15-minute operation deadline; choose shorter deadlines
+where practical. The private CDP transport supports `call`, `subscribe`, `page`
+and `exit`; it has no debug TCP listener. A page can optionally target a temporary
+`browserContextId` created through CDP.
+
+The core owns browser processes and closes them after every run, on cancellation,
+when the browser exits, on plugin unload/hot reload, and at shutdown. No idle
+authentication process remains. Do not launch a second process for a core-owned
+profile, close its browser yourself during normal success, or keep page handles
+past the callback. Remove event subscriptions in `finally`. Plugin `cancel(pending)`
+releases connection-specific pending resources after cancellation or rejected
+persistence. Independently bound plugin timers must also clean abandoned attempts
+on old cores. `beforeDelete(connection)` may reject deletion (for example, an active
+workflow); `revoke` is best-effort and must never delete core-owned browser data.
+
+An operations browser must remain connection-specific. Export only the required
+service-origin cookies/storage into it after successful authentication, then close
+the authentication run. Never point it at the shared profile or continuously sync
+an entire profile. Reconnect replaces the operations session and invalidates
+previews tied to the previous browser. Retain read-only request guards, workflow
+permissions and durable uncertain-submission records independently of sign-in.
+
+For upgrades, `browserProfile.legacyPath(connection)` returns the old browser's
+path relative to this plugin's `dataDir`. Validate credential identifiers before
+constructing it. Each existing connection is registered independently; account
+labels are never used to combine profiles. Registration does not touch disk or
+sign-ins. First explicit reuse migrates under the core profile lock, after any
+previous authentication browser has exited. The core copies to a staging directory,
+atomically renames it, then marks it managed. Failures retain the usable original;
+a completed copy can recover after interruption before metadata commit. Original
+upgrade backups remain until the last reference is deleted. Chrome's transient
+Singleton lock files are excluded; other symlinks fail migration safely.
+
+Core stores profile IDs, names, ownership, legacy provenance, the pinned browser
+executable and connection references in backend metadata. Profiles retain their
+original browser so OS cookie decryption remains compatible. A reusing plugin's
+browser preference cannot silently change it. Legacy integrations declare
+`browserPath` and/or `browserFamily` (`chrome` or `edge`) alongside `legacyPath`. The web receives names and referring connections, never
+cookies, disk paths or secrets. Browser disk data contains authentication secrets:
+it is owner-only on disk, uses the browser/OS's native storage protection, and is
+not wrapped by Switchboard's JSON credential encryption. Protect instance backups
+accordingly. Delete the last referring connection to delete its profile and upgrade
+backup; pending attempts temporarily retain a reference and are swept on expiry.
+User removal cleans owned profiles as well. Failed disk cleanup retains metadata
+for retry. A missing or invalid legacy profile does not combine with another one.
+
+SSO reuse does not bypass upstream MFA, conditional access, device requirements,
+revocation or identity-provider policy. Plugins must retain account mismatch guards
+and scoped credential capture. Cached app tokens can suppress a network exchange;
+use a temporary app context with in-memory SSO cookies rather than clearing shared
+storage. The Microsoft adapter does this and merges updated cookies without wiping
+other connections' local storage. The IDM adapter transfers only IDM-origin state
+into its own headless operations browser.
+
+Local verification (no installed plugins or real profiles required):
+
+```sh
+node scripts/check-shared-browser-profiles.ts /path/to/microsoft /path/to/idm
+node scripts/check-browser-profile-upgrade.ts /path/to/microsoft /path/to/idm
+```
+
+The first exercises real private-pipe browsers with synthetic intercepted Microsoft
+and IDM pages, persistence across restarts, cancellation, deadlines and browser exit.
+The upgrade rehearsal archives the previous core HEAD, creates throwaway data in
+both legacy layouts, upgrades it and verifies real synthetic cookies survive. These
+fixtures do not establish whether a particular tenant will permit silent sign-in.

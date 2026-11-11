@@ -97,7 +97,12 @@ export async function deleteUser(id: string) {
   if (!user) throw notFound();
   if (user.role === 'admin' && activeAdminCount(id) === 0) throw badRequest('At least one active administrator is required');
   connectionChanged();
+  const { cancelFlow, deleteConnection } = await import('./connections.ts');
+  const { collectBrowserProfile } = await import('./browser-profiles.ts');
+  for (const flow of all('SELECT id FROM connect_flows WHERE user_id = ?', id)) await cancelFlow(flow.id, user);
+  for (const row of all('SELECT id FROM connections WHERE user_id = ? AND peer_id IS NULL', id)) await deleteConnection(id, row.id);
   run('DELETE FROM connections WHERE user_id = ?', id);
+  for (const row of all('SELECT id FROM browser_profiles WHERE user_id = ?', id)) await collectBrowserProfile(row.id);
   run('DELETE FROM credentials WHERE user_id = ?', id);
   run('DELETE FROM users WHERE id = ?', id);
 }

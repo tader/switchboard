@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { BookOpen, Code2, ExternalLink, FileKey, History, KeyRound, Laptop, LayoutGrid, List, LockKeyhole, MoreHorizontal, Pencil, Plug, Plus, RefreshCw, Search, Server, ShieldCheck, SquareTerminal, Trash2, Unlock } from 'lucide-react';
 import { ConnectionSharing } from '../components/ConnectionSharing';
-import { api, type Connection, type FlowResult, type PendingFlowResult, type Service } from '../api';
+import { api, type BrowserProfile, type Connection, type FlowResult, type PendingFlowResult, type Service } from '../api';
 import { useSession } from '../auth';
 import { FieldsForm, initialValues } from '../components/forms';
 import {
@@ -23,6 +23,7 @@ export function Connections() {
   const [connect, setConnect] = useState<{ service?: Service; connection?: Connection; independent?: boolean } | null>(null);
   const [sharing, setSharing] = useState<Connection | null>(null);
   const [rename, setRename] = useState<Connection | null>(null);
+  const [profileConnection, setProfileConnection] = useState<Connection | null>(null);
   const [scripts, setScripts] = useState<Connection | null>(null);
   const [layout, setLayout] = useViewState('connections-layout', { view: 'normal' });
   const view = layout.view === 'compact' ? 'compact' : 'normal';
@@ -68,7 +69,7 @@ export function Connections() {
   const remove = async (c: Connection) => {
     const ok = await confirm({
       title: `${c.peer ? 'Remove local connection' : 'Disconnect'} ${c.account?.label ?? c.name}?`,
-      message: c.peer ? 'Remove this stale connection from this device. Saved calls are kept. The remote connection is unchanged.' : 'Scripts using this connection will stop working. Saved calls are kept.',
+      message: c.peer ? 'Remove this stale connection from this device. Saved calls are kept. The remote connection is unchanged.' : `Scripts using this connection will stop working. Saved calls are kept.${c.browserProfile ? c.browserProfile.connections.length === 1 ? ' This is the last connection using its browser profile. The profile and its saved sign-ins will be deleted.' : ' Its browser profile and saved sign-ins remain available to the other connections.' : ''}`,
       confirm: c.peer ? 'Remove' : 'Disconnect',
       danger: true,
     });
@@ -87,6 +88,7 @@ export function Connections() {
     { label: 'Activity', icon: <History />, onSelect: () => navigate(`/activity?connection=${c.id}`) },
     { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
     { label: 'Share with peers', icon: <Server />, onSelect: () => setSharing(c) },
+    { label: 'Browser profile', icon: <Laptop />, onSelect: () => setProfileConnection(c), hidden: c.readOnly || !c.browserProfile },
     { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c), hidden: c.readOnly },
     { label: c.credential?.kind === 'static' ? 'Rotate shared credential' : 'Reconnect', icon: <RefreshCw />, onSelect: () => c.credential?.kind === 'static' ? navigate(`/credentials?credential=${c.credential.id}`) : setConnect({ service, connection: c }), hidden: !service || c.readOnly },
     { label: 'Manage credentials', icon: <KeyRound />, onSelect: () => navigate(`/credentials?connection=${c.id}`), hidden: c.readOnly || !c.reusable },
@@ -100,6 +102,7 @@ export function Connections() {
 
   return (
     <>
+      {profileConnection && <BrowserProfileDialog connection={profileConnection} onClose={() => setProfileConnection(null)} onDone={() => { connections.reload(); setProfileConnection(null); }} />}
       {sharing && <ConnectionSharing connection={sharing} onClose={() => setSharing(null)} />}
       <PageHeader
         title="Connections"
@@ -326,6 +329,10 @@ export function ConnectDialog({
     api<{ connections: { name: string }[] }>(`/credentials/${credentialChoice.id}`, { signal: controller.signal }).then(value => setAffected(value.connections.map(connection => connection.name))).catch(() => {});
     return () => controller.abort();
   }, [credentialChoice?.id]);
+  const [browserProfileId, setBrowserProfileId] = useState('');
+  const [browserProfileName, setBrowserProfileName] = useState('');
+  const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
+  useEffect(() => { if (open) { setBrowserProfileId(''); setBrowserProfileName(''); api<BrowserProfile[]>('/browser-profiles').then(setProfiles).catch(() => setProfiles([])); } }, [open]);
   const method = service?.methods.find((m) => m.id === methodId);
 
   const handle = (r: FlowResult, redirectUri?: string) => {
@@ -347,7 +354,7 @@ export function ConnectDialog({
         const source = await api<{ id: string }>('/credentials', { body: { connection: credentialChoice.id, name: `${credentialChoice.name} credentials` } });
         credentialId = source.id;
       }
-      const body = { independent: initial.independent, credentialId, service: service.id, method: method.id, config, name: __name || undefined, redirectUri: method.redirect ? __redirectUri || undefined : undefined };
+      const body = { browserProfileId: method.browserProfile && !reconnecting ? browserProfileId || undefined : undefined, browserProfileName: method.browserProfile && !reconnecting && browserProfileId ? browserProfileName : undefined, independent: initial.independent, credentialId, service: service.id, method: method.id, config, name: __name || undefined, redirectUri: method.redirect ? __redirectUri || undefined : undefined };
       if (credentialChoice) for (const field of method.fields) if (field.type === 'secret' || field.key === 'username') delete body.config[field.key];
       const r = reconnecting
         ? await api<FlowResult>(`/connections/${reconnecting.id}/reconnect`, { body })
@@ -500,6 +507,18 @@ export function ConnectDialog({
               ))}
             </div>
           )}
+          {method?.browserProfile && (reconnecting ? <p className="text-[13px] text-zinc-600 dark:text-zinc-300">Reconnect uses the original browser profile: <b>{reconnecting.browserProfile?.name || reconnecting.browserProfile?.connections.map(c => c.name).join(', ') || 'this connection'}</b>.</p> : <div className="space-y-3">
+            <FormField label="Browser profile" htmlFor="browser-profile" description="Profiles keep saved sign-ins on this device and belong only to you.">
+              <Select id="browser-profile" value={browserProfileId} onChange={e => { setBrowserProfileId(e.target.value); setBrowserProfileName(profiles.find(p => p.id === e.target.value)?.name ?? ''); }}>
+                <option value="">New independent profile</option>
+                {profiles.map(p => <option key={p.id} value={p.id}>{p.name || `Used by ${p.connections.map(c => c.name).join(', ')}`}</option>)}
+              </Select>
+            </FormField>
+            {browserProfileId && <>
+              <p className="break-words text-[13px] text-zinc-600 dark:text-zinc-300">Reuse saved sign-ins from: {profiles.find(p => p.id === browserProfileId)?.connections.map(c => c.name).join(', ')}. A service may still require MFA.</p>
+              <FormField label="Profile name (optional)" htmlFor="browser-profile-name"><Input id="browser-profile-name" value={browserProfileName} maxLength={100} placeholder="Work" onChange={e => setBrowserProfileName(e.target.value)} /></FormField>
+            </>}
+          </div>)}
           {(reconnecting?.credential || initial.credentialId || credentialChoice?.needsConsent) && !initial.independent && <Alert tone="amber">Changes update the shared credential used by: {affected.join(', ') || reconnecting?.credential?.name || credentialChoice?.name || 'the selected credential'}.</Alert>}
           {initial.independent && <Alert tone="amber">A fresh authorization makes this connection independent. The shared credential remains available to the other connections.</Alert>}
           {method?.reusable && !reconnecting?.credential && !initial.credentialId && <CredentialPicker connection={reconnecting?.id} service={service.id} method={method.id} config={values} value={credentialChoice} onChange={setCredentialChoice} />}
@@ -737,4 +756,21 @@ function ScriptsDialog({ connection: c, onClose }: { connection: Connection | nu
       </div>
     </Dialog>
   );
+}
+
+function BrowserProfileDialog({ connection, onClose, onDone }: { connection: Connection; onClose: () => void; onDone: () => void }) {
+  const [profile, setProfile] = useState(connection.browserProfile!);
+  const [name, setName] = useState(profile.name ?? '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<BrowserProfile[]>('/browser-profiles').then(list => { const current = list.find(p => p.id === profile.id); if (current) setProfile(current); }).catch(e => setError(e.message)); }, []);
+  return <Dialog open onClose={onClose} title="Browser profile" size="sm">
+    <form className="space-y-4" onSubmit={async e => { e.preventDefault(); setBusy(true); try { await api(`/browser-profiles/${profile.id}`, { method: 'PATCH', body: { name } }); onDone(); } catch (e: any) { setError(e.message); } finally { setBusy(false); } }}>
+      <FormField label="Profile name" htmlFor="profile-name" description="Optional. A name helps you recognize saved sign-ins."><Input id="profile-name" autoFocus value={name} maxLength={100} placeholder="Work" onChange={e => setName(e.target.value)} /></FormField>
+      <div><p className="mb-2 text-[13px] font-medium">Used by</p><ul className="space-y-1 text-[13px] text-zinc-600 dark:text-zinc-300">{profile.connections.map(c => <li className="break-words" key={c.id}>{c.name}</li>)}</ul></div>
+      <p className="text-[13px] text-zinc-600 dark:text-zinc-300">Saved sign-ins stay on this device. Disconnecting the last connection deletes this profile.</p>
+      {error && <Alert>{error}</Alert>}
+      <div className="flex justify-end gap-2"><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" loading={busy}>Save</Button></div>
+    </form>
+  </Dialog>;
 }

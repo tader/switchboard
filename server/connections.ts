@@ -1,3 +1,4 @@
+import { browserProfileView, browserFlowDeadline, registerBrowserProfile, reserveBrowserProfile, flowBrowserProfile, commitBrowserProfile, releaseBrowserFlow, collectBrowserProfile } from './browser-profiles.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { credentialCall, credentialMethod } from './credential-providers.ts';
 import { assertBinding, assertCompatible, binding, covers, exportCredential, importCredential, getCredential, notifyCredential, privateConfig, replaceCredential, sourceConnection } from './credentials.ts';
@@ -12,6 +13,7 @@ import type { User } from './users.ts';
 import { getPeer, parseRemoteServiceId, peerConnection, syncPeerConnections } from './peers.ts';
 
 export interface ConnectionView {
+  browserProfile?: ReturnType<typeof browserProfileView>;
   kind: 'http' | 'mcp';
   icon?: string;
   readOnly: boolean;
@@ -53,7 +55,7 @@ function rowToConnection(r: any): Connection {
   const method = source ? plugins.service(r.service_id)?.authMethods.find(method => method.id === r.method_id) : undefined;
   const credentials = decrypt(source ? source.credentials_enc : r.credentials_enc);
   return {
-    id: r.id, kind: r.kind ?? 'http', name: r.name, serviceId: r.service_id, methodId: r.method_id,
+    browserProfileId: r.browser_profile_id ?? undefined, id: r.id, kind: r.kind ?? 'http', name: r.name, serviceId: r.service_id, methodId: r.method_id,
     config: { ...inheritedConfig, ...localConfig },
     credentials: source && method ? importCredential(method, credentials) : credentials,
     account: r.account_label ? { id: r.account_id ?? undefined, label: r.account_label, avatarUrl: r.account_avatar ?? undefined } : undefined,
@@ -96,6 +98,7 @@ export function toView(r: any): ConnectionView {
   } catch {}
   const unavailable = !service ? 'The plugin providing this service is not active' : !method ? 'This sign-in method is no longer offered' : null;
   return {
+    browserProfile: r.browser_profile_id ? browserProfileView(r.user_id, r.browser_profile_id) : undefined,
     credential: r.credential_id ? (() => { const source = getCredential(r.user_id, r.credential_id); return { id: source.id, name: source.name, kind: source.kind, version: source.version }; })() : null,
     reusable: !!method?.reusable && (method.reusable.kind !== 'oauth' || (service?.kind !== 'mcp' && !service?.websocket)),
     credentialProvider: !!method?.credentialProvider,
@@ -128,7 +131,7 @@ export function listConnections(userId: string, only?: string[] | null): Connect
   syncPeerConnections(userId);
   return all('SELECT * FROM connections WHERE user_id = ? ORDER BY service_id, name COLLATE NOCASE', userId)
     .filter((r) => !only || only.includes(r.id))
-    .map(toView);
+    .map(row => { const view = toView(row); if (only) delete view.browserProfile; return view; });
 }
 
 /** Looks a connection up by id or name. */
@@ -223,10 +226,12 @@ export async function deleteConnection(userId: string, ref: string) {
     run('UPDATE saved_calls SET connection_id = NULL WHERE connection_id = ?', row.id);
     return;
   }
+  for (const flow of all('SELECT id FROM connect_flows WHERE user_id = ? AND connection_id = ?', userId, row.id)) await cancelFlow(flow.id, { id: userId } as User);
   connectionChanged(row.id);
   const conn = rowToConnection(row);
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
+  await method?.beforeDelete?.(conn);
   try {
     if (!row.credential_id) await method?.revoke?.(conn);
   } catch (e: any) {
@@ -235,6 +240,7 @@ export async function deleteConnection(userId: string, ref: string) {
   run('DELETE FROM connections WHERE id = ?', row.id);
   errorRevisions.delete(row.id);
   run('UPDATE saved_calls SET connection_id = NULL WHERE connection_id = ?', row.id);
+  if (row.browser_profile_id) await collectBrowserProfile(row.browser_profile_id);
 }
 
 export function saveCredentials(id: string, credentials: unknown) {
@@ -300,7 +306,7 @@ export interface ServiceView {
   icon?: string;
   docsUrl?: string;
   pluginId: string;
-  methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string; redirect: boolean; reusable?: boolean }[];
+  methods: { id: string; name: string; description?: string; fields: Field[]; unavailable?: string; redirect: boolean; browserProfile?: boolean; reusable?: boolean }[];
   peer?: { id: string; name: string; online: boolean };
 }
 
@@ -314,7 +320,7 @@ export function listServices(userId?: string): ServiceView[] {
       icon: s.icon,
       docsUrl: s.docsUrl,
       pluginId,
-      methods: s.authMethods.filter((m) => !m.hidden).map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback, reusable: !!m.reusable && (m.reusable.kind !== 'oauth' || (s.kind !== 'mcp' && !s.websocket)) })),
+      methods: s.authMethods.filter((m) => !m.hidden).map((m) => ({ id: m.id, name: m.name, description: m.description, fields: m.fields ?? [], unavailable: m.unavailable, redirect: !!m.callback, browserProfile: !!m.browserProfile, reusable: !!m.reusable && (m.reusable.kind !== 'oauth' || (s.kind !== 'mcp' && !s.websocket)) })),
     }))
   return local.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -350,7 +356,7 @@ function validateConfig(method: AuthMethod, input: Record<string, any>, previous
 
 export async function startConnect(
   user: User,
-  input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string; redirectUri?: string; credentialId?: string; independent?: boolean },
+  input: { service: string; method?: string; config?: Record<string, any>; name?: string; connection?: string; redirectUri?: string; credentialId?: string; independent?: boolean; browserProfileId?: string; browserProfileName?: string },
 ): Promise<FlowResult> {
   const existingRow = input.connection ? getConnectionRow(user.id, input.connection) : undefined;
   if (existingRow) connectionChanged(existingRow.id);
@@ -367,6 +373,8 @@ export async function startConnect(
   const method = methodId ? findMethod(service, methodId) : undefined;
   if (!method) throw badRequest(`Unknown sign-in method "${methodId}"`);
   if (method.unavailable) throw badRequest(method.unavailable);
+  if (input.browserProfileId && !method.browserProfile) throw badRequest('This sign-in method does not support browser profiles');
+  if (existingRow && method.browserProfile) { registerBrowserProfile(existingRow, method, plugins.services.get(service.id)!.pluginId); existing!.browserProfileId = existingRow.browser_profile_id; }
   const sameMethod = existing && existing.methodId === method.id;
   const requestedCredential = input.independent ? undefined : input.credentialId ?? existingRow?.credential_id;
   if (existingRow?.credential_id && input.credentialId && input.credentialId !== existingRow.credential_id) throw badRequest('Make this connection independent before changing its credential');
@@ -392,10 +400,14 @@ export async function startConnect(
   const redirectUri = checkRedirectUri(input.redirectUri, method);
 
   const flowId = randomToken(24);
-  const args: ConnectArgs = { config: cfg, callbackUrl: redirectUri ?? callbackUrl, state: flowId, connection: existing };
+  const browserProfile = method.browserProfile ? await reserveBrowserProfile(user.id, plugins.services.get(service.id)!.pluginId, flowId, existingRow?.browser_profile_id, input.browserProfileId, input.browserProfileName) : undefined;
+  const args: ConnectArgs = { browserProfile, config: cfg, callbackUrl: redirectUri ?? callbackUrl, state: flowId, connection: existing };
   const reuseOnly = cfg.__credentialRequest?.reuseOnly;
-  const step = reuseOnly ? { credentials: importCredential(method, decrypt(source!.credentials_enc)), account: await method.reusable!.validate!({ ...existing, id: existing?.id ?? '', name: existing?.name ?? '', serviceId, methodId: method.id, config: cfg, credentials: importCredential(method, decrypt(source!.credentials_enc)) } as Connection) } : await callPlugin(() => credentialCall(user.id, method, cfg, () => method.connect(args)));
-  return handleStep(user, step, { flowId, service, method, cfg, name: input.name?.trim(), connectionId: existing?.id, redirectUri });
+  let step: ConnectStep | undefined;
+  try {
+    step = reuseOnly ? { credentials: importCredential(method, decrypt(source!.credentials_enc)), account: await method.reusable!.validate!({ ...existing, id: existing?.id ?? '', name: existing?.name ?? '', serviceId, methodId: method.id, config: cfg, credentials: importCredential(method, decrypt(source!.credentials_enc)) } as Connection) } : await callPlugin(() => credentialCall(user.id, method, cfg, () => method.connect(args)));
+    return handleStep(user, step, { flowId, service, method, cfg, name: input.name?.trim(), connectionId: existing?.id, redirectUri });
+  } catch (error) { await releaseBrowserFlow(flowId); if (step && 'pending' in step) await method.cancel?.(step.pending); throw error; }
 }
 
 /**
@@ -458,11 +470,13 @@ function handleStep(user: User, step: ConnectStep, f: FlowInfo): FlowResult {
     saveFlow(user, f, 'device', step.pending, expiresIn);
     return { status: 'device', flowId: f.flowId, device };
   }
-  return { status: 'connected', connection: storeConnection(user, f, step) };
+  const connection = storeConnection(user, f, step);
+  void releaseBrowserFlow(f.flowId);
+  return { status: 'connected', connection };
 }
 
 function saveFlow(user: User, f: FlowInfo, kind: string, pending: unknown, ttlSecs: number) {
-  run('DELETE FROM connect_flows WHERE expires_at < ?', now());
+  browserFlowDeadline(f.flowId, now() + ttlSecs * 1000);
   run(
     `INSERT INTO connect_flows (id, user_id, service_id, method_id, connection_id, name, config_enc, pending_enc, kind, expires_at, created_at, redirect_uri)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -491,14 +505,17 @@ export async function completeRedirect(flowId: string, params: Record<string, st
   const { r, service, method, cfg, pending } = loadFlow(flowId, 'redirect');
   if (r.user_id !== user.id) throw badRequest('This sign-in was started by another user');
   run('DELETE FROM connect_flows WHERE id = ?', flowId);
-  // MCP validates the issuer even on denied-consent callbacks.
-  if (params.error && service.kind !== 'mcp') throw badRequest(params.error_description || params.error);
-  if (!method.callback) throw badRequest('This method does not support redirects');
-  const connection = existingConn(user.id, r.connection_id);
-  // The token request must name the same redirect URI as the authorization request.
-  const redirect = r.redirect_uri ?? callbackUrl;
-  const result = await callPlugin(() => credentialCall(user.id, method, cfg, () => method.callback!({ config: cfg, callbackUrl: redirect, state: flowId, pending, params, connection })));
-  return storeConnection(user, { flowId, service, method, cfg, name: r.name ?? undefined, connectionId: r.connection_id ?? undefined, redirectUri: r.redirect_uri ?? undefined }, result);
+  try {
+    // MCP validates the issuer even on denied-consent callbacks.
+    if (params.error && service.kind !== 'mcp') throw badRequest(params.error_description || params.error);
+    if (!method.callback) throw badRequest('This method does not support redirects');
+    const connection = existingConn(user.id, r.connection_id);
+    // The token request must name the same redirect URI as the authorization request.
+    const redirect = r.redirect_uri ?? callbackUrl;
+    const result = await callPlugin(() => credentialCall(user.id, method, cfg, () => method.callback!({ config: cfg, callbackUrl: redirect, state: flowId, pending, params, connection, browserProfile: flowBrowserProfile(flowId) })));
+    return storeConnection(user, { flowId, service, method, cfg, name: r.name ?? undefined, connectionId: r.connection_id ?? undefined, redirectUri: r.redirect_uri ?? undefined }, result);
+  } catch (error) { await method.cancel?.(pending); throw error; }
+  finally { await releaseBrowserFlow(flowId); }
 }
 
 /**
@@ -535,28 +552,46 @@ export async function pollDevice(flowId: string, user: User): Promise<FlowResult
   const connection = existingConn(user.id, r.connection_id);
   let result;
   try {
-    result = await callPlugin(() => credentialCall(user.id, method, cfg, () => method.poll!({ config: cfg, callbackUrl, state: flowId, pending, connection })));
+    result = await callPlugin(() => credentialCall(user.id, method, cfg, () => method.poll!({ config: cfg, callbackUrl, state: flowId, pending, connection, browserProfile: flowBrowserProfile(flowId) })));
   } catch (e) {
     run('DELETE FROM connect_flows WHERE id = ?', flowId);
+    await releaseBrowserFlow(flowId);
+    await method.cancel?.(pending);
     throw e;
   }
   // A user may cancel, or the original deadline may pass, during plugin I/O.
   // Never complete or update an attempt that no longer exists.
-  loadFlow(flowId, 'device');
+  try { loadFlow(flowId, 'device'); } catch (error) { await releaseBrowserFlow(flowId); throw error; }
   if ('wait' in result) {
     let device;
     try { device = result.device === undefined ? undefined : validateDevice(result.device); }
-    catch (error) { run('DELETE FROM connect_flows WHERE id = ?', flowId); throw error; }
+    catch (error) { run('DELETE FROM connect_flows WHERE id = ?', flowId); await releaseBrowserFlow(flowId); throw error; }
     if (result.pending !== undefined) run('UPDATE connect_flows SET pending_enc = ? WHERE id = ?', encrypt(result.pending), flowId);
     return { status: 'pending', interval: result.interval, ...(device ? { device } : {}) };
   }
   run('DELETE FROM connect_flows WHERE id = ?', flowId);
-  const view = storeConnection(user, { flowId, service, method, cfg, name: r.name ?? undefined, connectionId: r.connection_id ?? undefined }, result);
-  return { status: 'connected', connection: view };
+  try {
+    const view = storeConnection(user, { flowId, service, method, cfg, name: r.name ?? undefined, connectionId: r.connection_id ?? undefined }, result);
+    return { status: 'connected', connection: view };
+  } catch (error) { await method.cancel?.(pending); throw error; }
+  finally { await releaseBrowserFlow(flowId); }
 }
 
-export function cancelFlow(flowId: string, user: User) {
+export async function cancelFlow(flowId: string, user: User) {
+  const row = one('SELECT * FROM connect_flows WHERE id = ? AND user_id = ?', flowId, user.id);
+  if (!row) return;
+  const method = plugins.service(row.service_id)?.authMethods.find(m => m.id === row.method_id);
   run('DELETE FROM connect_flows WHERE id = ? AND user_id = ?', flowId, user.id);
+  const releasing = releaseBrowserFlow(flowId);
+  try { await method?.cancel?.(decrypt(row.pending_enc)); } finally { await releasing; }
+}
+
+/** Release pending plugin resources before removing expired sign-in attempts. */
+export async function sweepConnectFlows() {
+  for (const row of all('SELECT id,user_id FROM connect_flows WHERE expires_at < ?', now())) {
+    try { await cancelFlow(row.id, { id: row.user_id } as User); }
+    catch { console.warn('Could not release expired sign-in resources'); }
+  }
 }
 
 function storeConnection(user: User, f: FlowInfo, result: Connected): ConnectionView {
@@ -572,14 +607,17 @@ function storeConnectionUnchecked(user: User, f: FlowInfo, result: Connected): C
   const account = result.account;
   let id = f.connectionId;
   // Signing in again to an account that is already connected the same way updates that connection,
-  // unless the user named the new one: then they want a second connection (e.g. other scopes).
-  if (!id && account?.id && !f.name) {
+  // unless the user named the new one or explicitly started a browser-profile flow.
+  // A new browser sign-in must never rebind an existing connection to another profile.
+  if (!id && account?.id && !f.name && !f.method.browserProfile) {
     id = one(
       'SELECT id FROM connections WHERE user_id = ? AND service_id = ? AND method_id = ? AND account_id = ?',
       user.id, f.service.id, f.method.id, account.id,
     )?.id;
   }
-  const previousCredentials = id ? rowToConnection(one('SELECT * FROM connections WHERE id = ?', id)).credentials : undefined;
+  const original = id ? one('SELECT * FROM connections WHERE id = ? AND user_id = ?', id, user.id) : undefined;
+  if (id && !original) throw badRequest('The connection was deleted during sign-in');
+  const previousCredentials = original ? rowToConnection(original).credentials : undefined;
   let sharedSource: any;
   let providerReuseOnly = false;
   if (request?.id) {
@@ -638,6 +676,7 @@ function storeConnectionUnchecked(user: User, f: FlowInfo, result: Connected): C
     if (!request?.reuseOnly && !providerReuseOnly) replaceCredential(sharedSource, exportCredential(f.method, result.credentials), sharedSource.kind === 'oauth' ? cfg : undefined, sharedSource.kind === 'oauth' ? account : undefined, true);
     run('UPDATE connections SET credential_id = ?, credentials_enc = NULL, credential_binding_enc = ?, config_enc = ? WHERE id = ?', sharedSource.id, encrypt(binding({ ...rowToConnection(one('SELECT * FROM connections WHERE id = ?', id)), config: cfg }, f.method)), encrypt(privateConfig(cfg, JSON.parse(sharedSource.config_keys))), id);
   } else if (request?.independent) run('UPDATE connections SET credential_id = NULL, credential_binding_enc = NULL WHERE id = ?', id);
+  if (f.method.browserProfile) commitBrowserProfile(f.flowId, id);
   const saved = one('SELECT * FROM connections WHERE id = ?', id);
   if (!isDeepStrictEqual(previousCredentials, rowToConnection(saved).credentials)) credentialsChanged(id);
   return toView(saved);
