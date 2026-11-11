@@ -2,7 +2,7 @@
 
 Switchboard signs in to services once (Gmail, Outlook, GitHub, Jira, Home Assistant, any OAuth or API-key API) so scripts and AI agents use them through it with a Switchboard token, never their own credentials. Users, connections, plugins, a proxy, a web console, an activity log and an MCP server. The README is the user documentation; this file is what you need to change the code safely.
 
-Deployment specifics of the maintainer's instance are in `CLAUDE.local.md` (git-ignored). Never put them in tracked files.
+Deployment specifics of the maintainer's instance are in `AGENTS.local.md` (git-ignored). Never put them in tracked files.
 
 ## Commands
 
@@ -66,7 +66,7 @@ Keep these working: `HUB_*` environment variables (read after `SWITCHBOARD_*`), 
 
 ## Git
 
-Commits are authored with the maintainer's GitHub noreply identity (set in this repository's git config) and end with a `Co-Authored-By` line for Claude. Before each commit, check the staged content for personal data and secrets: the maintainer's domain, names, email addresses and local paths; anything that looks like a token or key. `compose.yaml`, `docker-compose.dev.yml`, `.data/` and `CLAUDE.local.md` are git-ignored; only the `*.example.*` compose files are tracked.
+Commits are authored with the maintainer's GitHub noreply identity (set in this repository's git config). Any contributor attribution must accurately reflect the contribution; do not hard-code a particular agent, model or vendor. Before each commit, check the staged content for personal data and secrets: the maintainer's domain, names, email addresses and local paths; anything that looks like a token or key. `compose.yaml`, `docker-compose.dev.yml`, `.data/` and `AGENTS.local.md` are git-ignored; only the `*.example.*` compose files are tracked.
 
 ## Automatic versions
 
