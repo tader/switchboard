@@ -383,19 +383,13 @@ SSO reuse does not bypass upstream MFA, conditional access, device requirements,
 revocation or identity-provider policy. Plugins must retain account mismatch guards
 and scoped credential capture. Cached app tokens can suppress a network exchange;
 use a temporary app context with in-memory SSO cookies rather than clearing shared
-storage. The Microsoft adapter does this and merges updated cookies without wiping
-other connections' local storage. The IDM adapter transfers only IDM-origin state
-into its own headless operations browser.
+storage. Merge refreshed authentication cookies back without wiping other
+connections' storage. A service that needs a separate operations browser should
+transfer only its own origin-scoped session state into that browser.
 
-Local verification (no installed plugins or real profiles required):
-
-```sh
-node scripts/check-shared-browser-profiles.ts /path/to/microsoft /path/to/idm
-node scripts/check-browser-profile-upgrade.ts /path/to/microsoft /path/to/idm
-```
-
-The first exercises real private-pipe browsers with synthetic intercepted Microsoft
-and IDM pages, persistence across restarts, cancellation, deadlines and browser exit.
-The upgrade rehearsal archives the previous core HEAD, creates throwaway data in
-both legacy layouts, upgrades it and verifies real synthetic cookies survive. These
-fixtures do not establish whether a particular tenant will permit silent sign-in.
+Core regression tests use synthetic profiles and processes to cover ownership,
+explicit reuse, legacy migration and recovery, cancellation, deadlines, browser
+shutdown and host-crash cleanup. Run `npm test` and `npm run typecheck`.
+Integration-specific browser tests belong with their respective adapters. Synthetic
+tests do not establish whether a particular identity provider will permit silent
+sign-in.
