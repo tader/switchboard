@@ -42,7 +42,7 @@ export interface ConnectionView {
   credential?: { id: string; name: string; kind: string; version: number } | null;
   reusable?: boolean;
   credentialProvider?: boolean;
-  peer: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
+  peer: { id: string; name: string; connectionName?: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9._@+-]{0,99}$/;
@@ -88,7 +88,7 @@ export function toView(r: any): ConnectionView {
       status: unavailable ? 'unavailable' : 'ok', statusMessage: !remote ? 'This connection is no longer shared with you' : !peer?.online ? `${peer.name} is offline` : remote.status !== 'ok' ? 'The connection is unavailable on its peer' : null,
       baseUrl: null, hasOpenapi: !!remote?.hasOpenapi, hasWebSocket: !!remote?.hasWebSocket, canIssueToken: false, redirectUri: null,
       createdAt: r.created_at, updatedAt: r.updated_at, lastUsedAt: r.last_used_at,
-      peer: { id: r.peer_id, name: peer?.name ?? r.peer_id, online: !!peer?.online, lastSeenAt: peer?.lastSeenAt ?? null } };
+      peer: { id: r.peer_id, name: peer?.name ?? r.peer_id, ...(remote ? { connectionName: remote.name } : {}), online: !!peer?.online, lastSeenAt: peer?.lastSeenAt ?? null } };
   }
   const service = plugins.service(conn.serviceId);
   const method = service && findMethod(service, conn.methodId);
@@ -206,8 +206,7 @@ export function loadConnection(userId: string, ref: string, management = false) 
 
 export function renameConnection(userId: string, ref: string, name: string) {
   const row = getConnectionRow(userId, ref);
-  if (row.peer_id) throw new HttpError(403, 'Shared peer connections are managed on their peer');
-  name = name.trim();
+  name = typeof name === 'string' ? name.trim() : '';
   if (!NAME.test(name)) throw badRequest('Names may contain letters, digits, ".", "_", "@", "+" and "-"');
   if (one('SELECT 1 FROM connections WHERE user_id = ? AND name = ? AND id != ?', userId, name, row.id)) throw badRequest('You already have a connection with that name');
   run('UPDATE connections SET name = ?, updated_at = ? WHERE id = ?', name, now(), row.id);

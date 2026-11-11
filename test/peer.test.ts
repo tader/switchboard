@@ -150,9 +150,16 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.equal(connected.data.connection.readOnly, true);
   assert.deepEqual(connected.data.connection.config, {});
   assert.equal(connected.data.connection.account, null);
-  for (const [method, suffix, body] of [['PATCH', '', { name: 'injected' }], ['POST', '/reconnect', {}], ['DELETE', '', undefined]] as const) {
+  for (const [method, suffix, body] of [['POST', '/reconnect', {}], ['DELETE', '', undefined]] as const) {
     assert.equal((await request(method, `/api/connections/${connected.data.connection.id}${suffix}`, body)).status, 403);
   }
+  const httpId = connected.data.connection.id;
+  assert.equal((await request('PATCH', `/api/connections/${httpId}`, { name: 'local-http' })).status, 200);
+  assert.equal((await request('GET', `/api/connections/${httpId}`)).data.peer.connectionName, 'shared-api');
+  assert.equal((await request('POST', '/api/call', { connection: 'local-http', url: '/renamed' })).status, 200);
+  assert.equal((await request('POST', '/api/call', { connection: 'shared-api', url: '/' })).status, 404);
+  assert.equal((await peerRequest('GET', `/api/connections/${local.data.connection.id}`)).data.name, 'shared-api');
+  assert.equal((await request('PATCH', `/api/connections/${httpId}`, { name: 'shared-api' })).status, 200);
   const called = await request('POST', '/api/call', { connection: connected.data.connection.id, method: 'POST', url: '/local', body: 'hello' });
   assert.equal(called.status, 200, JSON.stringify(called.data));
   const result = JSON.parse(called.data.body);
@@ -162,7 +169,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
 
   const peerAudit = await peerRequest('GET', '/api/audit');
   assert.equal(peerAudit.status, 200);
-  assert.equal(peerAudit.data.total, 1, JSON.stringify(peerAudit.data));
+  assert.equal(peerAudit.data.total, 2, JSON.stringify(peerAudit.data));
   assert.equal(peerAudit.data.items[0].connection.name, connected.data.connection.name);
   assert.equal(peerAudit.data.items[0].client.name, 'Peer: Web console');
   assert.equal(peerAudit.data.items[0].source, 'console');
@@ -171,7 +178,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.equal(peerAudit.data.items[0].peer.userId, me.id);
   assert.ok(peerAudit.data.items[0].responseSize > 0);
   const peerFacets = await peerRequest('GET', '/api/audit/facets');
-  assert.equal(peerFacets.data.connections[0].count, 1);
+  assert.equal(peerFacets.data.connections[0].count, 2);
   assert.equal(peerFacets.data.clients[0].name, 'Peer: Web console');
 
   const mcpToken = (await request('POST', '/api/tokens', { name: 'Peer MCP test' })).data.secret;
@@ -220,8 +227,13 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   const savedResult = await request('POST', `/api/calls/${savedRemote.data.id}/run`, {});
   assert.equal(savedResult.data.contents[0].text, 'Peer note');
   assert.equal(fs.readFileSync(path.join(centralDir, 'switchboard.db')).includes(Buffer.from('peer-mcp-secret')), false);
-  const pendingMcp = request('POST', `/api/connections/${remoteMcpId}/mcp/tools/call`, { name: 'wait' });
+  let pendingMcpSettled = false;
+  const pendingMcp = request('POST', `/api/connections/${remoteMcpId}/mcp/tools/call`, { name: 'wait' }).then(result => { pendingMcpSettled = true; return result; });
   await waitFor(() => waitingMcp);
+  assert.equal((await request('PATCH', `/api/connections/${remoteMcpId}`, { name: 'busy-local' })).status, 200);
+  assert.equal((await request('POST', `/api/connections/${remoteMcpId}/mcp/tools/call`, { name: 'echo', arguments: {} })).status, 200);
+  assert.equal(pendingMcpSettled, false, 'name-only edits do not cancel active peer calls');
+  await request('PATCH', `/api/connections/${remoteMcpId}`, { name: 'shared-mcp' });
   assert.equal((await peerRequest('PUT', `/api/connections/${localMcp.data.connection.id}/shares`, { peerIds: [] })).status, 200);
   assert.equal((await pendingMcp).status, 499, 'share revocation cancels an in-flight peer MCP request');
 
@@ -244,6 +256,8 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.equal(shellCall.data.body, 'peer command output\n');
   assert.equal((await peerRequest('DELETE', `/api/connections/${localShell.data.connection.id}`)).status, 200);
   await waitFor(async () => (await request('GET', `/api/connections/${shell.data.connection.id}`)).data.canRemove === true);
+  assert.equal((await request('GET', `/api/connections/${shell.data.connection.id}`)).data.peer.connectionName, undefined);
+  assert.equal((await request('PATCH', `/api/connections/${shell.data.connection.id}`, { name: 'stale-local' })).status, 200, 'owner can rename a stale handle');
   const staleSaved = await request('POST', '/api/calls', { name: 'stale-peer-call', connectionId: shell.data.connection.id, method: 'GET', url: '/' });
   assert.equal(staleSaved.status, 201);
   assert.equal((await request('DELETE', `/api/connections/${shell.data.connection.id}`)).status, 200, 'a deleted remote connection can be removed locally');
@@ -270,7 +284,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   assert.equal(JSON.parse(both[1].data.body).auth, 'Bearer server-only-secret');
   assert.equal((await request('GET', '/api/admin/peers')).data.length, 1);
   assert.equal((await peerRequest('GET', '/api/admin/peers')).data.length, 1);
-  for (const [method, suffix] of [['PATCH', ''], ['POST', '/reconnect'], ['DELETE', '']] as const) assert.equal((await peerRequest(method, `/api/connections/${reverseHandle.id}${suffix}`, {})).status, 403);
+  for (const [method, suffix] of [['POST', '/reconnect'], ['DELETE', '']] as const) assert.equal((await peerRequest(method, `/api/connections/${reverseHandle.id}${suffix}`, {})).status, 403);
   assert.equal((await peerRequest('PUT', `/api/connections/${reverseHandle.id}/shares/${peerId}`, { shared: true })).status, 400, 'cannot share back to origin');
   const matrix = (await request('GET', '/api/connection-shares')).data;
   assert.ok(matrix.shares.some((g: any) => g.connection_id === reverseLocal.data.connection.id && g.peer_id === incomingPeerId));
@@ -280,12 +294,17 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   const ownerCookie = peerCookie;
   assert.equal((await peerRequest('POST', '/api/auth/invite', { token: addedUser.invite.url.split('#')[1], password: 'reader password' })).status, 200);
   const readerCookie = peerCookie;
+  assert.equal((await peerRequest('PATCH', `/api/connections/${reverseHandle.id}`, { name: 'not-mine' })).status, 404, 'cannot rename another user’s handle');
   assert.ok(!(await peerRequest('GET', '/api/connections')).data.some((c: any) => c.name === 'from-server'));
   peerCookie = ownerCookie;
   assert.equal((await peerRequest('PATCH', `/api/admin/peers/${peerId}`, { userIds: [localOwner.id, addedUser.user.id] })).status, 200);
   peerCookie = readerCookie;
   const readerHandle = (await peerRequest('GET', '/api/connections')).data.find((c: any) => c.name === 'from-server');
   assert.ok(readerHandle);
+  assert.equal((await peerRequest('PATCH', `/api/connections/${readerHandle.id}`, { name: 'reader-local' })).status, 200);
+  peerCookie = ownerCookie;
+  assert.equal((await peerRequest('GET', `/api/connections/${reverseHandle.id}`)).data.name, 'from-server');
+  peerCookie = readerCookie;
   assert.equal((await peerRequest('POST', '/api/call', { connection: readerHandle.id, url: '/' })).status, 200);
   assert.equal((await peerRequest('PUT', `/api/connections/${local.data.connection.id}/shares/${peerId}`, { shared: true })).status, 404, 'another local user cannot change owner grants');
   peerCookie = ownerCookie;
@@ -363,5 +382,70 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   await waitFor(async () => (await secondRequest('GET', '/api/connections')).data.find((c: any) => c.id === chainHandle.id)?.status === 'unavailable');
   assert.equal((await secondRequest('POST', '/api/call', { connection: chainHandle.id, method: 'GET', url: '/local' })).status, 403);
   assert.equal((await secondRequest('POST', '/api/call', { connection: 'second-only', method: 'GET', url: '/local' })).status, 200);
+
+  // Manual local naming survives catalog refresh, transport reconnect and process restart.
+  const handleId = remoteMcpId;
+  const originId = localMcp.data.connection.id;
+  const readHandle = async () => (await request('GET', `/api/connections/${handleId}`)).data;
+  await peerRequest('PATCH', `/api/connections/${originId}`, { name: 'remote-renamed' });
+  await peerRequest('PUT', `/api/connections/${originId}/shares`, { peerIds: [peerId] });
+  await waitFor(async () => (await readHandle()).peer.connectionName === 'remote-renamed', 35_000);
+  assert.equal((await readHandle()).name, 'shared-mcp', 'remote rename never overwrites the local name');
+  const savedBefore = (await request('GET', `/api/calls/${savedRemote.data.id}`)).data;
+  for (const name of ['', 'has spaces', '/bad', '-bad', 'x'.repeat(101), 42, null, 'shared-api']) {
+    assert.equal((await request('PATCH', `/api/connections/${handleId}`, { name })).status, 400, `invalid or colliding name: ${name}`);
+  }
+  assert.equal((await request('PATCH', `/api/connections/${handleId}`, { name: 'my-mcp' })).status, 200);
+  assert.equal((await readHandle()).readOnly, true);
+  assert.equal((await readHandle()).peer.connectionName, 'remote-renamed');
+  assert.equal((await peerRequest('GET', `/api/connections/${originId}`)).data.name, 'remote-renamed');
+  assert.equal((await request('POST', '/api/call', { connection: 'shared-mcp', url: '/' })).status, 404);
+  assert.equal((await request('POST', '/api/connections/my-mcp/mcp/tools/call', { name: 'echo', arguments: { renamed: true } })).data.structuredContent.renamed, true);
+  const mcpListed = await mcp('list_connections', {});
+  assert.equal(mcpListed.result.structuredContent.items.find((c: any) => c.id === handleId).name, 'my-mcp');
+  assert.equal((await mcp('call_mcp_tool', { connection: 'my-mcp', name: 'echo', arguments: { alias: true } })).result.structuredContent.alias, true);
+  assert.deepEqual((await request('GET', `/api/calls/${savedRemote.data.id}`)).data, savedBefore);
+  assert.equal((await request('POST', `/api/calls/${savedRemote.data.id}/run`, {})).data.contents[0].text, 'Peer note');
+  for (const connectionIds of [[handleId], [connected.data.connection.id]]) {
+    const scoped = (await request('POST', '/api/tokens', { name: 'scoped rename', connectionIds })).data.secret;
+    const denied = await fetch(`${centralUrl}/api/connections/${handleId}`, { method: 'PATCH', headers: { authorization: `Bearer ${scoped}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'forbidden' }) });
+    assert.equal(denied.status, 403, 'scoped tokens cannot rename even their allowed handle');
+  }
+  await request('PATCH', `/api/admin/peers/${incomingPeerId}`, { disabled: true });
+  await waitFor(async () => !(await readHandle()).peer.online);
+  assert.equal((await readHandle()).peer.connectionName, undefined, 'disabled peers expose no accessible catalog name');
+  assert.equal((await request('PATCH', `/api/connections/${handleId}`, { name: 'offline-local' })).status, 200);
+  await request('PATCH', `/api/admin/peers/${incomingPeerId}`, { disabled: false });
+  await waitFor(async () => (await readHandle()).peer.online, 35_000);
+  assert.equal((await readHandle()).name, 'offline-local');
+  // Stop only the synthetic peer process: its cached catalog remains available offline.
+  await new Promise<void>(resolve => { peer.child.once('exit', () => resolve()); peer.child.kill(); });
+  await waitFor(async () => !(await readHandle()).peer.online);
+  assert.equal((await readHandle()).peer.connectionName, 'remote-renamed');
+  assert.equal((await request('PATCH', `/api/connections/${handleId}`, { name: 'persisted-local' })).status, 200);
+  await new Promise<void>(resolve => { central.child.once('exit', () => resolve()); central.child.kill(); });
+  const restarted = launch(centralPort, centralDir);
+  await waitFor(() => restarted.output().includes('Switchboard listening'));
+  assert.equal((await readHandle()).name, 'persisted-local');
+  assert.equal((await readHandle()).peer.connectionName, 'remote-renamed');
+  const restartedPeer = launch(peerPort, peerDir);
+  await waitFor(() => restartedPeer.output().includes('Switchboard listening'));
+  await waitFor(async () => (await readHandle()).peer.online, 35_000);
+  assert.equal((await readHandle()).name, 'persisted-local');
+  assert.equal((await request('POST', `/api/calls/${savedRemote.data.id}/run`, {})).data.contents[0].text, 'Peer note');
+  await peerRequest('DELETE', `/api/connections/${originId}`);
+  await waitFor(async () => (await readHandle()).canRemove);
+  assert.equal((await readHandle()).peer.connectionName, undefined);
+  const recreated = await peerRequest('POST', '/api/connections', { service: 'mcp', method: 'token', name: 'persisted-local', config: { endpoint: `${peerUrl}/mcp`, token: 'peer-mcp-secret' } });
+  assert.notEqual(recreated.data.connection.id, originId);
+  await peerRequest('PUT', `/api/connections/${recreated.data.connection.id}/shares`, { peerIds: [peerId] });
+  await waitFor(async () => (await request('GET', '/api/connections')).data.some((c: any) => c.name === 'persisted-local-2'));
+  const replacement = (await request('GET', '/api/connections')).data.find((c: any) => c.name === 'persisted-local-2');
+  assert.notEqual(replacement.id, handleId);
+  assert.equal((await request('GET', `/api/calls/${savedRemote.data.id}`)).data.connectionId, handleId);
+  assert.equal((await request('POST', `/api/calls/${savedRemote.data.id}/run`, {})).status, 403, 'saved calls never rebind to a recreated origin');
+  assert.equal((await request('PATCH', `/api/connections/${replacement.id}`, { name: 'persisted-local' })).status, 400);
+  await request('PATCH', `/api/connections/${handleId}`, { name: 'retired-local' });
+  assert.equal((await request('PATCH', `/api/connections/${replacement.id}`, { name: 'persisted-local' })).status, 200);
 
 });
