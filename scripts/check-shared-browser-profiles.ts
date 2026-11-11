@@ -129,8 +129,8 @@ try {
   const unaffected=otherProfile.run({headless:true},async browser=>{await browser.call('Browser.getVersion');otherReady();await held;await browser.call('Browser.getVersion');});
   await otherStarted;await core.stopBrowserProfiles('fixture');await assert.rejects(unloading);releaseOther();await unaffected;
   await core.releaseBrowserFlow('other-flow');
-  // A hard-killed host cannot run JS exit handlers. Verify Chrome exits on pipe
-  // EOF, then rehearse restart orphan collection against that throwaway database.
+  // A hard-killed host cannot run JS exit handlers. The independent browser owner
+  // observes IPC disconnect and reaps Chrome before restart orphan collection.
   const crashData=path.join(dir,'crash-restart');await fs.mkdir(crashData);
   const moduleURL=(file:string)=>pathToFileURL(path.resolve(import.meta.dirname,'../server',file)).href;
   const workerSource=`const {initDb}=await import(${JSON.stringify(moduleURL('db.ts'))});const {initKey}=await import(${JSON.stringify(moduleURL('crypto.ts'))});const {createUser}=await import(${JSON.stringify(moduleURL('users.ts'))});const core=await import(${JSON.stringify(moduleURL('browser-profiles.ts'))});initKey();initDb();const user=createUser('crash-fixture','user');const profile=await core.reserveBrowserProfile(user.id,'fixture','crash-flow');await profile.run({headless:true},async browser=>{const {processInfo}=await browser.call('SystemInfo.getProcessInfo');console.log(processInfo.find(p=>p.type==='browser').id);await new Promise(()=>{});});`;
@@ -142,7 +142,7 @@ try {
   });
   worker.kill('SIGKILL');let exited=false;
   for(let i=0;i<50;i++){try{process.kill(browserPid,0);}catch{exited=true;break;}await new Promise(r=>setTimeout(r,100));}
-  if(!exited)process.kill(browserPid,'SIGKILL');assert.equal(exited,true,'private pipe EOF must stop the orphan browser');
+  if(!exited)process.kill(browserPid,'SIGKILL');assert.equal(exited,true,'browser owner must stop the orphan browser after host death');
   const recovery=`const {initDb,all}=await import(${JSON.stringify(moduleURL('db.ts'))});const {initKey}=await import(${JSON.stringify(moduleURL('crypto.ts'))});const core=await import(${JSON.stringify(moduleURL('browser-profiles.ts'))});initKey();initDb();await core.sweepBrowserProfiles();if(all('SELECT * FROM browser_profiles').length)throw Error('Orphan metadata remains');`;
   execFileSync(process.execPath,['--input-type=module','-e',recovery],{env:{...process.env,SWITCHBOARD_DATA_DIR:crashData}});
   assert.deepEqual(await fs.readdir(path.join(crashData,'browser-profiles')),[]);

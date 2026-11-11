@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 class AdapterError extends Error { code: string; status: number; constructor(code: string, message: string, status: number) { super(message); this.code = code; this.status = status; } }
 const children = new Set<import('node:child_process').ChildProcess>();
-process.once('exit', () => { for (const child of children) child.kill('SIGKILL'); });
+process.once('exit', () => { for (const child of children) child.kill('SIGTERM'); });
 
 export async function findBrowser(configured?: string, family?: string) {
   const candidates = configured ? [configured] : [
@@ -28,11 +29,14 @@ export class CDP {
     this.nextId = 0;
     this.buffer = Buffer.alloc(0);
     this.closed = false;
-    this.child = spawnProcess(executable, [
+    const args = [
       `--user-data-dir=${profile}`, '--remote-debugging-pipe', '--no-first-run',
       '--no-default-browser-check', '--disable-background-timer-throttling', '--disable-background-networking', '--disable-component-update',
       ...(headless ? ['--headless=new'] : []), ...extraArgs, 'about:blank',
-    ], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
+    ];
+    this.child = spawnProcess === spawn
+      ? spawn(process.execPath, [fileURLToPath(new URL('./authentication-browser-host.js', import.meta.url)), executable, ...args], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe', 'ipc'] })
+      : spawnProcess(executable, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
     children.add(this.child);
     this.child.once('exit', () => children.delete(this.child));
     this.child.once('error', () => children.delete(this.child));
