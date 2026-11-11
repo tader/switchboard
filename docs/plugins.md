@@ -80,6 +80,14 @@ export default function setup(ctx: PluginContext) {
 
 All types are in [`server/plugins/api.ts`](../server/plugins/api.ts).
 
+## Repository boundaries and privacy
+
+Keep core capabilities and their public documentation provider-independent. Adapter-specific behavior, setup guidance, integration scripts and tests belong in the owning plugin repository. Core tests should use synthetic, generically named fixtures and exercise the plugin contract.
+
+Treat a private integration's existence as confidential. Do not disclose its name, repository URL, identifiers, tenant details or local paths in public source, comments, examples, tests, scripts, commit messages, PR titles/descriptions/comments, CI output or artifacts. Access to source code and permission to implement an integration do not authorize publishing it or cross-linking its repository.
+
+Before publishing, inspect the full diff and public metadata, including fixture data, logs, screenshots and links. Keep integration-specific validation and reports with their owning repository or in private local storage; summarize public validation using generic scenarios. Never stage private material in a public repository temporarily: subsequent deletion does not erase Git or PR edit history.
+
 ## Services and auth methods
 
 A service has one or more `authMethods`; the user picks one when connecting. A method:

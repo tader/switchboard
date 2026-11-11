@@ -43,6 +43,8 @@ Keep these working: `HUB_*` environment variables (read after `SWITCHBOARD_*`), 
 
 ## Changing things
 
+- **Plugin boundaries and privacy:** keep core changes, docs, fixtures and public metadata generic. Put adapter-specific implementation, documentation and integration tests/scripts in the owning plugin repository. A private integration's existence, name, repository URL, identifiers, tenant details and local paths are confidential; source access does not authorize disclosure or public cross-links. Before committing or publishing, scan code, comments, docs, tests, scripts, commit messages, PR text, CI logs and artifacts for these disclosures. Use generic synthetic core fixtures and keep integration-specific reports private. Never publish private material temporarily; deletion does not erase Git or PR edit history.
+
 - **Implementation checklist:** `development-plan.md` at the repository root. Keep development handoffs outside the end-user `docs/` directory.
 
 - **Database:** migrations are an append-only list in `server/db.ts`. Never edit an existing one; add a new entry.
