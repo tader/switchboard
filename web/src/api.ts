@@ -118,7 +118,7 @@ export interface Connection {
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
-  peer: { id: string; name: string; online: boolean; lastSeenAt: number | null } | null;
+  peer: { id: string; name: string; connectionName?: string; online: boolean; lastSeenAt: number | null } | null;
 }
 
 export type DeviceAuthorization = {
