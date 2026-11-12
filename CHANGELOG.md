@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.0](https://github.com/tader/switchboard/compare/v0.12.0...v0.13.0) (2026-11-12)
+
+
+### Features
+
+* add managed server updates with staged upgrades and recovery ([f4e5126](https://github.com/tader/switchboard/commit/f4e51267b364c141d599fec3b812b7c3612aca59))
+* add managed server upgrades and version checks ([98b60c1](https://github.com/tader/switchboard/commit/98b60c184aefe5f39ef5162e399b6adce09dafc5))
+* allow local names for incoming peer connections ([5fb2f3c](https://github.com/tader/switchboard/commit/5fb2f3cf49f96253408c979f3334049925142c7a))
+* allow local names for incoming peer connections ([8211373](https://github.com/tader/switchboard/commit/8211373bd89ecabf74f5ecc456cce08b21ce7fc5))
+
+
+### Bug Fixes
+
+* wait for socket readiness before announcing startup ([0a7da2b](https://github.com/tader/switchboard/commit/0a7da2bbf49ead7e7c07e972f60022d7adf2f07b))
+* wait for the listening socket before announcing readiness ([3013faf](https://github.com/tader/switchboard/commit/3013faf1121fb43356cf67135f7e801e19424bf6))
+
 ## [0.12.0](https://github.com/tader/switchboard/compare/v0.11.0...v0.12.0) (2026-11-11)
 
 
