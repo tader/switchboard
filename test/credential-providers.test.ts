@@ -25,7 +25,11 @@ async function launch(name: string, port: number) {
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env,
     SWITCHBOARD_PORT: String(port), SWITCHBOARD_HOST: '127.0.0.1', SWITCHBOARD_PUBLIC_URL: `http://127.0.0.1:${port}`, SWITCHBOARD_DATA_DIR: dir, SWITCHBOARD_WATCH_PLUGINS: 'false' }, stdio: ['ignore', 'pipe', 'pipe'] });
   processes.push(child); child.stdout?.on('data', chunk => { output += chunk; }); child.stderr?.on('data', chunk => { output += chunk; });
-  await waitFor(() => output.includes('Switchboard listening'));
+  await waitFor(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Credential peer ${name} exited before readiness: ${output}`);
+    if (!output.includes('Switchboard listening')) return false;
+    try { return (await fetch(`http://127.0.0.1:${port}/readyz`, { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; }
+  });
   let cookie = '';
   const url = `http://127.0.0.1:${port}`;
   const request = async (method: string, pathname: string, body?: unknown, secret?: string) => {
@@ -42,8 +46,8 @@ async function launch(name: string, port: number) {
 test('credential transfers require an explicit grant; imported credentials work offline and stop after delivered unsharing',async()=>{
  await new Promise<void>(resolve=>upstream.listen(0,'127.0.0.1',resolve));
  const endpoint=`http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
- const port=49000+Math.floor(Math.random()*400);
- const laptop=await launch('laptop',port);let server=await launch('server',port+500);
+ const freePort=async()=>{const probe=http.createServer();await new Promise<void>(r=>probe.listen(0,'127.0.0.1',r));const port=(probe.address() as AddressInfo).port;await new Promise<void>(r=>probe.close(()=>r()));return port;};
+ const laptop=await launch('laptop',await freePort());const serverPort=await freePort();let server=await launch('server',serverPort);
  const accepted=await server.request('POST','/api/admin/peers',{name:'Laptop',ownerUserId:server.user.id});assert.equal(accepted.status,201);
  const linked=await laptop.request('POST','/api/admin/peers',{direction:'outgoing',name:'Server',url:server.url,token:accepted.data.token,ownerUserId:laptop.user.id});assert.equal(linked.status,201);
  await waitFor(async()=>(await server.request('GET','/api/admin/peers')).data.some((p:any)=>p.online));
@@ -87,7 +91,7 @@ test('credential transfers require an explicit grant; imported credentials work 
  await laptop.request('PATCH',`/api/admin/peers/${peer}`,{disabled:true});
  await waitFor(async()=>!(await server.request('GET','/api/admin/peers')).data.some((p:any)=>p.online));
  assert.equal((await call()).status,200,'cached credentials survive a disconnected laptop');
- const stopped=new Promise(resolve=>server.child.once('exit',resolve));server.child.kill();await stopped;server=await launch('server',port+500);
+ const stopped=new Promise(resolve=>server.child.once('exit',resolve));server.child.kill();await stopped;server=await launch('server',serverPort);
  assert.equal((await call()).status,200,'encrypted imported credentials survive restart while the laptop is offline');
  await laptop.request('PATCH',`/api/admin/peers/${peer}`,{disabled:false});
  await waitFor(async()=>(await server.request('GET','/api/admin/peers')).data.some((p:any)=>p.online));
