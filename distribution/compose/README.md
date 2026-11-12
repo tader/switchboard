@@ -16,13 +16,13 @@ chmod 600 .env
 
 The release bundle may already include a version-pinned `.env`; keep that file rather than copying over it. Edit `.env` to choose a port, public URL or project name before starting. Defaults expose port 8770 on host loopback only. Open the one-time setup link printed in application logs and create the first administrator password in the browser. Never share this link or the logs containing it.
 
-Open **Admin → Updates → Create enrollment code**, then run the supplied command with that code:
+Open **Admin → Server updates → Create enrollment code**, then run the supplied command with that code:
 
 ```sh
 ./switchboard enroll ONE_TIME_CODE
 ```
 
-Expected result: `Updater enrolled.` Within a few seconds **Admin → Updates** shows the updater connected. The code expires after ten minutes and works once. It grants only updater access. Avoid retaining it in shell history. There are no settings JSON files to edit and no volume identifiers to discover.
+Expected result: `Updater enrolled.` Within a few seconds **Admin → Server updates** shows the updater connected. The code expires after ten minutes and works once. It grants only updater access. Avoid retaining it in shell history. There are no settings JSON files to edit and no volume identifiers to discover.
 
 The trusted updater reaches the application's private Compose service address directly, including during gated startup. This container-only setting does not relax the HTTPS/loopback rule for ordinary host controllers.
 
@@ -38,7 +38,7 @@ The trusted updater reaches the application's private Compose service address di
 
 Always use this wrapper. It includes the persistent active-image override for every stack operation. Both a restart and a full down/up retain the selected release and resume normal operation. `down` retains data and updater volumes; `down -v` deletes them and must never be used to preserve an installation.
 
-Choose **Check now**, then **Upgrade** in **Admin → Updates**. Preparation pulls an immutable image while the application keeps serving. The updater rehearses migrations, drains/stops only the application service, snapshots its entire data volume, and starts the candidate gated. Before opening it, failures restore the previous image and snapshot. The updater never runs a full-stack down during cutover and leaves unrelated services alone.
+Choose **Check for updates**, then **Upgrade to …** in **Admin → Server updates**. Preparation pulls an immutable image while the application keeps serving. The updater rehearses migrations, drains/stops only the application service, snapshots its entire data volume, and starts the candidate gated. Before opening it, failures restore the previous image and snapshot. The updater never runs a full-stack down during cutover and leaves unrelated services alone.
 
 ## Optional source build
 
@@ -67,6 +67,6 @@ To restore a known backup explicitly:
 ./switchboard status
 ```
 
-This stops the stack, preserves current data in updater state, restores the entire matching snapshot and previous image, archives the active recovery journal, and restarts. A job ID recorded under updater `history/` can also select its automatic snapshot. Restoring after the application opened can discard later writes; external actions cannot be undone. Re-enroll from **Admin → Updates** if the restored data predates the current pairing. Never combine a database from one backup with another encryption key.
+This stops the stack, preserves current data in updater state, restores the entire matching snapshot and previous image, archives the active recovery journal, and restarts. A job ID recorded under updater `history/` can also select its automatic snapshot. Restoring after the application opened can discard later writes; external actions cannot be undone. Re-enroll from **Admin → Server updates** if the restored data predates the current pairing. Never combine a database from one backup with another encryption key.
 
 If an operation fails, keep both volumes and inspect updater logs and its owner-only journal. Do not delete or recreate the volumes to clear a recovery state. Stop the stack while diagnosing uncertain process or storage state.
