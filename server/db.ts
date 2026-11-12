@@ -309,6 +309,7 @@ const migrations: string[] = [
   );
   ALTER TABLE connections ADD COLUMN browser_profile_id TEXT REFERENCES browser_profiles(id) ON DELETE RESTRICT;
   CREATE INDEX connections_browser_profile ON connections(browser_profile_id);`,
+  `CREATE TABLE connection_attention (connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE, updated_at INTEGER NOT NULL);`,
 ];
 
 export function initDb() {

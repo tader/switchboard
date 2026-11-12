@@ -10,3 +10,5 @@ docker-compose.dev.yml
 *.log
 AGENTS.local.md
 CLAUDE.local.md
+
+!distribution/compose/compose.yaml

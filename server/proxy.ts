@@ -1,3 +1,4 @@
+import { authenticationFailed, authenticationRecovered } from './attention.ts';
 import { terminalAuthenticationError } from './auth-errors.ts';
 import { one } from './db.ts';
 import { HttpError, badRequest } from './http.ts';
@@ -240,8 +241,10 @@ async function executeLoaded(loaded: ReturnType<typeof loadConnection>, user: Us
       const fresh = loadConnection(user.id, conn.id).conn;
       try {
         const result = await auth.authorize(req, fresh, { force, signal });
+        authenticationRecovered(conn.id);
         if (result && result.credentials !== undefined) saveCredentials(conn.id, result.credentials);
       } catch (e: any) {
+        authenticationFailed(conn.id, e);
         const terminal = terminalAuthenticationError(e);
         if (terminal) Object.assign(e, { code: 'authentication_required' });
         if (e instanceof HttpError && ([403, 409].includes(e.status) || auth.credentialConsumer && [503, 504].includes(e.status))) throw e;

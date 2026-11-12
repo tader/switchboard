@@ -1,3 +1,4 @@
+import { authenticationFailed, authenticationRecovered } from './attention.ts';
 import { browserProfileView, browserFlowDeadline, registerBrowserProfile, reserveBrowserProfile, flowBrowserProfile, commitBrowserProfile, releaseBrowserFlow, collectBrowserProfile } from './browser-profiles.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { credentialCall, credentialMethod } from './credential-providers.ts';
@@ -142,6 +143,17 @@ export function getConnectionRow(userId: string, ref: string): any {
   return r;
 }
 
+function attentionMethod(method: AuthMethod, id: string): AuthMethod {
+  const wrapped = { ...method };
+  for (const key of ['authorize', 'token', 'authenticateWebSocket'] as const) {
+    const fn = method[key]; if (!fn) continue;
+    (wrapped as any)[key] = async (...args: any[]) => {
+      try { const result = await (fn as any).apply(method, args); authenticationRecovered(id); return result; }
+      catch (error) { authenticationFailed(id, error); throw error; }
+    };
+  }
+  return wrapped;
+}
 export function loadConnection(userId: string, ref: string, management = false) {
   const row = getConnectionRow(userId, ref);
   if (row.peer_id) throw new HttpError(500, 'Peer connections must be executed through the peer transport');
@@ -168,6 +180,7 @@ export function loadConnection(userId: string, ref: string, management = false) 
         if (result.credentials !== undefined) persist(result.credentials);
         return { ...result, credentials: undefined };
       } catch (error: any) {
+        authenticationFailed(row.id, error);
         if (error.code === 'invalid_grant' && run("UPDATE credentials SET status = 'error', status_message = 'OAuth authorization expired or revoked' WHERE id = ? AND version = ?", row.credential_id, current.sourceRow.version).changes) notifyCredential(row.credential_id, true, false);
         if (error instanceof HttpError) throw error;
         throw new HttpError(502, error.code === 'invalid_grant' ? 'The shared OAuth authorization expired or was revoked; reconnect it' : 'Could not refresh the shared OAuth authorization');
@@ -181,7 +194,7 @@ export function loadConnection(userId: string, ref: string, management = false) 
       await auth.reusable!.applyToken!(req, { ...target, credentials }, issued);
       if (!auth.reusable?.allowRequest?.(req, { ...target, credentials })) throw new HttpError(403, 'The provider changed the request outside this connection boundary');
     } };
-    return { row, conn, service, method: shared };
+    return { row, conn, service, method: attentionMethod(shared, row.id) };
   }
   if (!row.credential_id && method.reusable?.kind === 'oauth') {
     const auth = method;
@@ -199,9 +212,9 @@ export function loadConnection(userId: string, ref: string, management = false) 
       if (updated?.credentials !== undefined) saveCredentials(row.id, updated.credentials);
       enforce(req, target, updated?.credentials ?? target.credentials);
     } };
-    return { row, conn, service, method: guarded };
+    return { row, conn, service, method: attentionMethod(guarded, row.id) };
   }
-  return { row, conn, service, method };
+  return { row, conn, service, method: attentionMethod(method, row.id) };
 }
 
 export function renameConnection(userId: string, ref: string, name: string) {
@@ -243,6 +256,7 @@ export async function deleteConnection(userId: string, ref: string) {
 }
 
 export function saveCredentials(id: string, credentials: unknown) {
+  authenticationRecovered(id);
   const linked = one('SELECT credential_id, user_id, credentials_enc FROM connections WHERE id = ?', id);
   if (linked?.credential_id) { replaceCredential(getCredential(linked.user_id, linked.credential_id), exportCredential(loadConnection(linked.user_id, id, true).method, credentials)); return; }
   run(`UPDATE connections SET credentials_enc = ?, updated_at = ? WHERE id = ?`, encrypt(credentials), now(), id);
@@ -616,6 +630,7 @@ function storeConnectionUnchecked(user: User, f: FlowInfo, result: Connected): C
   }
   const original = id ? one('SELECT * FROM connections WHERE id = ? AND user_id = ?', id, user.id) : undefined;
   if (id && !original) throw badRequest('The connection was deleted during sign-in');
+  if (original) authenticationRecovered(original.id);
   const previousCredentials = original ? rowToConnection(original).credentials : undefined;
   let sharedSource: any;
   let providerReuseOnly = false;

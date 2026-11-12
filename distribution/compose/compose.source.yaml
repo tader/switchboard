@@ -1,0 +1,8 @@
+services:
+  switchboard:
+    build:
+      context: ${SWITCHBOARD_SOURCE_DIR:-../..}
+      args:
+        SWITCHBOARD_REVISION: ${SWITCHBOARD_REVISION:?Set the source commit revision}
+    image: switchboard-source:${SWITCHBOARD_REVISION}
+    pull_policy: never
