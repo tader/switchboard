@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Disposable real-Docker rehearsal of both distributed Compose variants."""
-import json, os, pathlib, shutil, socket, subprocess, tempfile, time, urllib.request
+import argparse, json, os, pathlib, shutil, socket, subprocess, tempfile, time, urllib.request
+parser = argparse.ArgumentParser()
+parser.add_argument("--variant", choices=["image", "source"], help="Run one isolated variant; default runs both")
+variant = parser.parse_args().variant
 root = pathlib.Path(__file__).resolve().parent.parent
 scratch = pathlib.Path(os.environ.get('SWITCHBOARD_REHEARSAL_DIR', str(pathlib.Path.home()/'.cache')))
 scratch.mkdir(parents=True, exist_ok=True)
@@ -19,7 +22,7 @@ def wait(url):
         try: request(url+'/readyz'); return
         except Exception: time.sleep(.3)
     raise RuntimeError('Readiness timeout')
-for source in [False,True]:
+for source in ([variant == "source"] if variant else [False,True]):
     name='source' if source else 'image'; bundle=base/name; shutil.copytree(root/'distribution/compose',bundle)
     env['SWITCHBOARD_BUNDLE_DIR']=str(bundle)
     with socket.socket() as sock: sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
