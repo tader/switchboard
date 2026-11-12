@@ -24,5 +24,6 @@
     "@types/semver": "^7.8.0",
     "@types/ws": "^8.18.2",
     "typescript": "^5.9.0"
-  }
+  },
+  "managedUpgradeProtocol": 1
 }
