@@ -126,13 +126,17 @@ lifecycle.open = async () => {
     stopWebSocketProxy = attachWebSocketProxy(server as import('node:http').Server);
     stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Server);
     if (setupUrl) console.log(`\nNo administrator can sign in yet. Set a password for "${config.adminUsername}" (valid 24 hours):\n${setupUrl}\n`);
+    await listening;
     lifecycle.state = 'open';
     console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);
   })();
   return opening;
 };
 
+let markListening!: () => void;
+const listening = new Promise<void>(resolve => { markListening = resolve; });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () => {
+  markListening();
   if (lifecycle.state === 'staged') console.log('Switchboard staged; awaiting updater activation');
 });
 // Track HTTP lifetimes; long-lived streams are closed after the finite-request drain.
