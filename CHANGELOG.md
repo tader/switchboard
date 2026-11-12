@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0](https://github.com/tader/switchboard/compare/v0.13.0...v0.14.0) (2026-11-12)
+
+
+### Features
+
+* add managed Compose stacks and prepared desktop runtimes ([3473574](https://github.com/tader/switchboard/commit/3473574db518ff2230d61ffc23eb9553a84d57e0))
+* complete managed Compose setup and prepared desktop runtimes ([35bd234](https://github.com/tader/switchboard/commit/35bd234e0631cccf3b22c741013dee7c0c8e8825))
+
 ## [0.13.0](https://github.com/tader/switchboard/compare/v0.12.0...v0.13.0) (2026-11-12)
 
 
