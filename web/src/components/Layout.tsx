@@ -76,7 +76,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <NavItem to="/admin/plugins" icon={<Puzzle />}>
             Plugins
           </NavItem>
-          <NavItem to="/admin/updates" icon={<RefreshCw />}>Updates</NavItem>
+          <NavItem to="/admin/updates" icon={<RefreshCw />}>Server updates</NavItem>
           <NavItem to="/admin/users" icon={<Users />}>
             Users
           </NavItem>
@@ -92,7 +92,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <Menu
           block
           align="start"
-          footer={user.role === 'admin' ? <NavLink className="underline" to="/admin/updates">Version {import.meta.env.VITE_APP_VERSION} · Updates</NavLink> : <>Version {import.meta.env.VITE_APP_VERSION}</>}
+          footer={user.role === 'admin' ? <NavLink className="underline" to="/admin/updates">Version {import.meta.env.VITE_APP_VERSION} · Server updates</NavLink> : <>Version {import.meta.env.VITE_APP_VERSION}</>}
           trigger={(p) => (
             <button {...p} className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-zinc-200/50 dark:hover:bg-zinc-800/50">
               <Avatar label={user.username} />

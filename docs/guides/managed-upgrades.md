@@ -5,181 +5,175 @@ order: 20
 ---
 # Server updates
 
-Open **Admin → Updates** to see the running server version, source revision, installation mode, last successful check and available release. The version in the account menu links here. Checks use the public upstream release service and are cached for one day; **Check now** refreshes them. A failed check preserves its last successful timestamp and disables upgrade selection until availability can be verified.
+Update Switchboard from **Admin → Server updates**. Installed plugins have their own [plugin updates](/admin/plugins).
 
-Stable releases are the default. **Validated main** explicitly opts into development commits whose complete upstream CI workflow has passed. A target must be a newer compatible descendant of the exact running revision. Local changes, unknown revisions, newer custom builds and releases without the managed startup protocol cannot be upgraded automatically. Published releases whose required artifacts are unavailable are not ready. Source installations require source; image installations also require an immutable published image digest.
+**Check for updates** works without an updater. To install a release from the page, connect an updater using the steps for your installation below.
 
-## Choose how to run
+## Choose your setup
 
-Version checks work with existing checkout, Compose and custom starts. Managed upgrades are optional. Keep using your existing start command if you prefer manual updates.
+- **Docker Compose:** [Start the stack and enroll the updater](#docker-compose).
+- **Local Mac:** [Use Switchboard for macOS](#macos-app), if you have an app build.
+- **Git checkout:** [Install a host launcher](#git-checkout) with Node, Git and npm.
+- **Existing custom stack or host service:** Follow [Advanced updater setup](/docs/guides/updater-host-setup).
 
-To adopt host-managed upgrades, use a compatible release with the Updates page and gated startup support. The complete Compose bundle below does not need host build tools. For a host-managed checkout, install Node 24.10 or newer, Git and npm on the host. Compose mode also requires Docker Engine 25 or newer and Docker Compose v2 with `config --format json`, `--no-deps`, and `--pull never` support. The application container must have no Docker socket or Docker control access. The updater runs on the host as the owner of the instance and connects **outbound** to the application's authenticated updater API. It opens no network listener.
+Keep an independent backup of your server data before changing how an existing installation starts. Retain its database, encryption key, installed extensions, extension state and browser profiles together.
 
-Use a dedicated updater credential, created through one-time enrollment. A general administrator API token cannot authenticate the updater. Only full-access administrators can check, enroll or request upgrades; scoped tokens, MCP credentials and peer credentials cannot manage upgrades.
+## Docker Compose
 
-Create a settings file outside your application and persistent data directories. Restrict it to its owner (`chmod 600`). Use absolute paths. Preserve any encryption key supplied through the environment in this settings file's `env` or in the host service's stable environment. Never put credentials in your source checkout, public issue reports or command output.
+These steps use the complete example stack, which includes both Switchboard and its updater. For an existing custom stack, use [host-managed Compose instructions](/docs/guides/updater-host-setup#existing-host-managed-compose-installations) to retain your existing data mounts and configuration.
 
-```json
-{
-  "instance": "primary",
-  "mode": "checkout",
-  "dataDir": "/srv/switchboard-data",
-  "stateDir": "/srv/switchboard-updater",
-  "appUrl": "http://127.0.0.1:8770",
-  "initialRelease": "/srv/switchboard",
-  "env": {
-    "SWITCHBOARD_HOST": "127.0.0.1",
-    "SWITCHBOARD_PORT": "8770",
-    "SWITCHBOARD_PUBLIC_URL": "https://switchboard.example.com"
-  }
-}
-```
+### 1. Get the complete bundle
 
-`dataDir` is the full persistent state: database, encryption key, installed extensions, extension state and browser profiles. Persistent state must fit within this directory; external symbolic links are refused. The updater state directory holds the launcher, immutable releases, recovery journal and owner-only full backups. It must be separate from both data and code. Allow disk space for preparation, a full backup, and failed-candidate diagnostics. Keep independent off-host backups as well.
+Download a `switchboard-compose-…tar.gz` example bundle from the matching [Switchboard release](https://github.com/tader/switchboard/releases). Extract it into a folder Docker can access. The [example folder](https://github.com/tader/switchboard/tree/main/distribution/compose) contains the same files.
 
-`appUrl` must reach the instance directly during gated startup, including while `/readyz` reports 503. A proxy that hides unhealthy containers is unsuitable. Use a host loopback port mapping for Compose, or a private direct HTTPS endpoint. Loopback HTTP is accepted; remote HTTP is refused.
+Keep `compose.yaml`, `switchboard` and `.env.example` together. Keep the version-pinned `.env` if the release bundle includes one. Before the first start, edit `.env` if you want a different port, public URL or project name. Defaults expose Switchboard on `http://127.0.0.1:8770`.
 
-From the compatible source checkout, install the external launcher:
+### 2. Start the stack
+
+Run these commands from that folder:
 
 ```sh
-node updater/main.ts setup /srv/switchboard-updater-settings.json
+chmod +x switchboard
+./switchboard up
+./switchboard status
 ```
 
-In **Admin → Updates**, choose **Create enrollment code**, then enroll the installed launcher. Codes expire in ten minutes and work once. The command stores the dedicated credential in the owner-only settings file. Avoid retaining the code in shell history.
+The wrapper supplies the folder and project settings automatically. Host Node, Git and npm are not needed for this image-based setup. Only the trusted updater container receives access to Docker.
+
+### 3. Finish the first administrator setup
+
+If this is a new installation, find the one-time setup link:
 
 ```sh
-node /srv/switchboard-updater/launcher/main.ts enroll /srv/switchboard-updater-settings.json ONE_TIME_CODE
+./switchboard logs switchboard
 ```
 
-For a checkout, stop your existing application and disable its previous automatic restart service before launching the managed process. This is an explicit adoption step; the launcher will not stop an unmanaged server. Your original checkout and local changes are preserved. Future targets are fetched into separate release directories, installed and built before cutover.
+Open that link in your browser and choose an administrator password. Keep the link private. If you already have an administrator account, sign in with it.
+
+### 4. Connect the updater
+
+In **Admin → Server updates**, choose **Create enrollment code**. Then run:
 
 ```sh
-node /srv/switchboard-updater/launcher/main.ts launch /srv/switchboard-updater-settings.json
+./switchboard enroll 'YOUR_CODE'
 ```
 
-The launcher owns application starts and stops after adoption. The instance also takes an OS-released database lock to prevent concurrent servers from using its data. Do not run the old start command against that data while managed operation is enabled.
+Replace `YOUR_CODE` with the code from the page. It expires after ten minutes and works once. An ordinary administrator API token cannot be used here.
 
-## Complete Compose stack
+The updater reaches Switchboard automatically at `http://switchboard:8770` inside the stack; you do not need to enter an address or expose another port.
 
-The release's versioned Compose example bundle includes an application container, a separate updater container, named data/state volumes, matching settings and a management wrapper. Only the trusted updater has Docker access; host Node, Git and npm are not required for the image variant.
+### 5. Verify the connection
 
-Extract the bundle into a Docker-shared folder, retain its version-pinned `.env`, then run `./switchboard up`. Use `./switchboard logs switchboard` to obtain the first administrator setup link and complete setup in the browser. In **Admin → Updates**, create an enrollment code and run `./switchboard enroll ONE_TIME_CODE`. The page shows the updater connected within a few seconds. Codes expire in ten minutes and work once.
+The command prints `Updater enrolled.` Within a few seconds the page shows **Server updater · Connected**. You can now [install a server update](#install-an-update).
 
-Use `./switchboard restart`, `./switchboard down` and `./switchboard up` for stack management. The wrapper includes the saved image pin automatically, so even a full stack restart retains the selected release and does not restart gated. `down` preserves volumes; `down -v` deletes them. Use `./switchboard backup` for a complete snapshot and `./switchboard restore BACKUP_ID` for an explicit restore that preserves current data first. Keep independent off-host copies; backups contain secrets. Follow the bundle's README for exact setup, source-build, backup and recovery commands.
-
-The container controller uses an explicit private service address. Ordinary host controllers still require HTTPS or loopback HTTP. Existing host-managed Compose installations can continue using the configuration below.
-
-## Existing host-managed Compose installations
-
-Use `"mode": "compose"` and a fixed Compose project/service. `env` is for checkout starts; Compose retains its existing service environment and `.env` resolution. Add:
-
-```json
-{
-  "files": ["/srv/switchboard/compose.yaml"],
-  "project": "switchboard",
-  "service": "switchboard",
-  "directory": "/srv/switchboard",
-  "sourceBuild": false
-}
-```
-
-Place that object under the `compose` key in settings. For a bind mount, `dataDir` must exactly match the host directory mounted writable at `/data`. For a named volume, set `dataDir` to `/data` and add `"dataVolume": "switchboard_data"` inside `compose`, using the exact Docker volume name (including any project prefix). The controller verifies this against the resolved Compose configuration. Compose backups use the immutable previous image as an isolated helper without networking or application environment variables.
-
-Use a host directory shared with Docker for `stateDir`; helper containers must be able to mount its backup and rehearsal directories.
-
-Only one replica of the configured service is supported. Additional writable mounts, Docker socket access, and privileged application containers are refused. Move all persistent state into the configured data mount before adoption. Read-only configuration mounts, networks, labels, volumes and unrelated services are retained. Keep those files and secrets stable outside the release tree.
-
-Set `sourceBuild` to `true` to build pinned source locally instead of pulling a prebuilt image. A source-built Compose upgrade does not depend on a published remote image. Preparation builds or pulls while the old service continues serving. Cutover uses an immutable image override saved in the updater state directory; it never runs `compose down`, rebuilds during outage, or recreates other services.
-
-Start the enrolled controller with:
+For everyday stack management, keep using the wrapper:
 
 ```sh
-node /srv/switchboard-updater/launcher/main.ts run /srv/switchboard-updater-settings.json
+./switchboard status
+./switchboard restart
+./switchboard down
+./switchboard up
 ```
 
-For future manual Compose commands, include the generated override after your original files, or Compose may switch back to the original image:
+It retains the release selected by the updater. `down` keeps your data volumes. **Do not use `down -v` to preserve an installation:** that removes the volumes.
+
+The bundle's [README](https://github.com/tader/switchboard/blob/main/distribution/compose/README.md) also covers source builds and backups.
+
+## macOS app
+
+[Switchboard for macOS](https://github.com/tader/switchboard-macos) manages a local server from the menu bar, including initial setup, start/stop, login startup and server upgrades. It downloads its own prepared runtime, so the app does not need a separate Node, Git or npm installation.
+
+> [!NOTE]
+> There is not yet a published app download. Current development builds are unsigned. Check the [app repository](https://github.com/tader/switchboard-macos) for release availability.
+
+If you have a compatible app build:
+
+1. Open **Switchboard** and review its settings. The default data folder is `~/.switchboard`; the default address is `127.0.0.1:8770`.
+2. Choose **Set Up Switchboard**. The app downloads the runtime and opens administrator setup in your default browser.
+3. Create your administrator password in the browser. The app pairs the updater automatically; no enrollment code needs to be copied.
+4. Use **Updates** in the app, or open **Admin → Server updates** in the browser. The updater shows **Connected** while the app is serving the instance.
+5. Optionally enable **Open app at login** and **Start server when the app opens** in the app's Settings.
+
+To adopt existing compatible data, stop the previous server and disable its old automatic launcher before selecting that data folder in the app. Closing Settings keeps the server running; **Quit** stops the app's server and updater.
+
+## Git checkout
+
+Use this route when you run Switchboard from source and want a host launcher to manage starts, backups and upgrades. You need Node 24.10 or newer, Git and npm. For manual updates, keep your normal start command and use this page for version checks only.
+
+1. Start with a compatible source checkout and finish its administrator setup.
+2. Create an owner-only settings file outside the checkout and data folder. Use the [settings example](/docs/guides/updater-host-setup#host-launcher-requirements); set your current data directory, a separate updater directory and an address that reaches the server directly.
+3. From your source checkout, install the launcher. Replace the example path with your settings file's absolute path:
+
+   ```sh
+   node updater/main.ts setup /srv/switchboard-updater-settings.json
+   ```
+
+4. In **Admin → Server updates**, create an enrollment code and run the launcher command. Replace the example paths and code:
+
+   ```sh
+   node /srv/switchboard-updater/launcher/main.ts enroll /srv/switchboard-updater-settings.json YOUR_CODE
+   ```
+
+5. Stop the old server and disable its previous restart service. Start the managed launcher:
+
+   ```sh
+   node /srv/switchboard-updater/launcher/main.ts launch /srv/switchboard-updater-settings.json
+   ```
+
+6. Verify **Connected** in the browser. To keep the launcher running after terminal closure or a restart, follow [Keep the launcher running](/docs/guides/updater-host-setup#keep-the-launcher-running).
+
+The original checkout and local changes are preserved. Future releases are prepared in separate folders. Once the launcher owns this installation, use it for starts and stops; avoid running a second server against the same data.
+
+## Install an update
+
+1. Keep an independent backup of the complete data folder and updater state.
+2. Open **Admin → Server updates** and choose **Check for updates**.
+3. Leave **Stable releases** selected for normal use. Review the available version and release notes.
+4. With the updater **Connected**, choose **Upgrade to …** and confirm **Prepare upgrade**.
+5. Follow the status: **Prepare → Back up → Restart**. The page reconnects automatically after the restart. The updater continues if you close the page.
+
+Preparation downloads or builds while the current server keeps running. During cutover, service requests pause and long-lived streams disconnect. A full backup and restart cause an interruption; its duration depends on your data size and storage. **Cancel preparation** is available until cutover begins. Requests to services are never automatically replayed.
+
+**Validated main** is an optional development channel for checkout and Compose installations. It follows newer compatible development commits after upstream CI has passed. The macOS app uses prepared stable releases.
+
+Custom builds, local source changes, unknown revisions and releases whose artifacts are still publishing can prevent managed upgrades. A failed check preserves the last successful check time; it does not mean the server is up to date.
+
+## Backups
+
+For the example Compose stack:
 
 ```sh
-docker compose --project-directory /srv/switchboard -p switchboard -f /srv/switchboard/compose.yaml -f /srv/switchboard-updater/active-compose.json ps
+./switchboard backup
 ```
 
-## Keep the launcher running
+The command briefly stops the application to make a complete snapshot and prints a backup ID. Store an independent off-host copy of both data and updater state. Backups contain credentials; keep them private. Allow space for a full backup and failed-release data.
 
-On Linux, a user systemd service can supervise the launcher. Replace the executable and settings paths with your absolute paths; use `run` instead of `launch` for Compose. Enable user lingering if the service must run after logout. `KillMode=process` lets the application survive a controller restart; the data lock and recovery journal prevent concurrent starts.
-
-```ini
-[Unit]
-Description=Switchboard managed launcher
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/node /srv/switchboard-updater/launcher/main.ts launch /srv/switchboard-updater-settings.json
-Restart=on-failure
-RestartSec=5
-KillMode=process
-UMask=0077
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-
-[Install]
-WantedBy=default.target
-```
-
-Save as `~/.config/systemd/user/switchboard-updater.service`, then run `systemctl --user daemon-reload` and `systemctl --user enable --now switchboard-updater`.
-
-On macOS, a LaunchAgent runs while its owner is logged in. Save an owner-readable plist in `~/Library/LaunchAgents/`, with absolute paths and the Node executable returned by `command -v node`. Do not use shell substitutions inside the plist. Use `run` for Compose.
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>local.switchboard.updater</string>
-  <key>ProgramArguments</key><array>
-    <string>/opt/homebrew/bin/node</string>
-    <string>/srv/switchboard-updater/launcher/main.ts</string>
-    <string>launch</string>
-    <string>/srv/switchboard-updater-settings.json</string>
-  </array>
-  <key>EnvironmentVariables</key><dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>5</integer>
-  <key>Umask</key><integer>63</integer>
-</dict></plist>
-```
-
-Adjust the service PATH so Git, npm and Docker (Compose mode) are available. `setup` installs the launcher files; registering either host service is a separate manual step.
-
-Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.switchboard.updater.plist`. LaunchAgent jobs are per-user; unattended operation after logout needs an appropriately configured system service.
-
-## What happens during an upgrade
-
-1. The controller journals the selected exact commit or digest outside code and backups, prepares the release, and rehearses database migrations on a disposable online database copy. The rehearsal never loads extensions, decrypts credentials or contacts providers.
-2. Cancellation is accepted until cutover. Preparation may finish before cancellation takes effect; no deployment follows a cancelled job.
-3. Cutover blocks new service requests, pauses core collectors and peer activity, and waits up to 30 seconds for finite requests while their extension resources remain loaded. It then disconnects long-lived streams and sockets, disposes extensions and releases browser profiles. The old process stops entirely before a full persistent-data snapshot is taken. Arbitrary extension-owned producers have no separate pause contract and may continue until disposal; extensions must stop their own workers and release resources when disposed.
-4. Backup time is part of the outage. Its duration depends on your data size and storage; there is no fixed downtime promise.
-5. The candidate runs migrations and exposes authenticated staged readiness while normal requests and extensions remain gated. `/healthz` reports process liveness; `/readyz` only succeeds after normal operation opens.
-6. After staged readiness, the controller durably records the irreversible opening boundary, then permits extension initialization, background work and normal requests. The Updates page reconnects and shows the result and measured durations. Requests to providers are never automatically replayed.
-
-The 30-second limit applies to finite-request draining, not arbitrary extension cleanup. The updater bounds its drain API wait to 60 seconds and then attempts to stop the old service. Checkout mode waits up to 45 seconds after SIGTERM and refuses backup or candidate start if the process is still alive. Compose uses a 45-second stop timeout (Docker may forcibly stop the container after it expires) and verifies that the service is stopped. A cleanup error leaves the checkout process gated with its data lease held; a stalled cleanup or uncertain stop requires owner recovery. No snapshot is accepted while the old service is still running. Detached workers outside the application’s managed lifecycle remain the responsibility of their trusted extension.
+For a host launcher or the macOS app, backups and recovery records are in the configured updater folder. Keep the encryption key, database and extension data from the same snapshot together.
 
 ## Recovery
 
-Completed job records remain under `history/`; `last-success.json` identifies the last successful upgrade and its backup. The owner-only `journal.json` identifies the previous and candidate releases, job phase, backup and whether normal operation may have opened. Retain the previous release/image and last successful backup. No automatic cleanup deletes these recovery assets.
+### Update preparation failed
 
-If startup fails **before** the opening boundary, the controller stops the candidate, preserves failed data, restores the matching full snapshot and previous release/image, checks staged readiness and opens the old release. Old binaries refuse a database schema newer than they support.
+The old server remains in place. Check local updater logs, free space and release availability before trying again.
 
-A controller restart resumes recovery from the journal and does not replay a deployment. Interrupted preparation is marked failed and can be requested again as a new job. If the journal says `opening` or `recovery-required`, automatic restoration is disabled: the application or an extension may already have written data or performed external actions. A failed rollback also requires owner recovery. The UI deliberately shows only scrubbed diagnostics; inspect local settings, disk space and the journal as the instance owner. Subprocess output is withheld because it may contain secrets.
+### Previous release restored
 
-For explicit recovery:
+Startup failed before the new server opened. The updater restored the previous release and matching data. Inspect the updater journal before another upgrade.
 
-1. Stop the controller's host service and all application processes/containers for this instance. Prevent automatic restarts. Confirm they have released the data directory.
-2. Save a separate owner-only copy of the current data and journal before changing anything. Decide whether preserving current writes or restoring the snapshot is appropriate. Restoration after opening can discard writes. External side effects cannot be undone.
-3. Select a release/image matching the chosen database schema. Restore the **entire** matching snapshot, including `secret.key`, extension state and browser profiles, if restoring. Never combine a database from one backup with a key from another.
-4. For checkout mode, update the owner-only `current.json` release pointer. For Compose, keep the matching generated image override. Remove a stale `.server-lock` metadata file only after confirming no server remains; the separate SQLite lease prevents concurrent use.
-5. Verify readiness with the selected release. After recording your recovery decision separately, archive the old journal and remove its active copy before starting a fresh controller. Enroll again if the restored data predates enrollment. Check the Updates page before requesting another upgrade.
+### Recovery required
 
-You can disconnect the updater credential from the Updates page while no upgrade is active. This does not stop the application. Disable the host service as well to stop polling.
+Stop and preserve the current data and updater state. Follow the manual recovery steps before starting another upgrade.
 
-Reference: [Docker Compose service recreation](https://docs.docker.com/reference/cli/docker/compose/up/), [Docker startup health probes](https://docs.docker.com/reference/dockerfile/#healthcheck), [Node SQLite backup](https://nodejs.org/api/sqlite.html#sqlitebackupsource-destination-options), [systemd services](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html), [systemd process lifetime settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html), and [Apple launchd jobs](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html).
+For an explicit restore of a known backup from the example Compose stack:
+
+```sh
+./switchboard restore BACKUP_ID
+./switchboard status
+```
+
+This preserves current data separately and restores the full backup with its matching previous release. Re-enroll if the restored data predates the current pairing.
+
+> [!WARNING]
+> Restoring after the new server has accepted work can discard later writes. External actions cannot be undone by restoring local files. Never combine a database from one backup with another encryption key.
+
+For host services, custom Compose installations or an interrupted upgrade, follow [Manual recovery](/docs/guides/updater-host-setup#recovery). Retain the journal and failed data until you have made a recovery decision.
