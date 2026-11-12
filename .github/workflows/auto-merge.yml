@@ -29,8 +29,8 @@ jobs:
           candidates=$(mktemp)
           trap 'rm -f "$candidates"' EXIT
           gh pr list --repo "$GH_REPO" --base main --state open --limit 1000 \
-            --json number,isDraft,reviewDecision,mergeStateStatus,headRefOid \
-            --jq '.[] | select(.isDraft == false and .reviewDecision != "CHANGES_REQUESTED" and .mergeStateStatus == "CLEAN") | [.number, .headRefOid] | @tsv' > "$candidates"
+            --json number,isDraft,isCrossRepository,reviewDecision,mergeStateStatus,headRefOid \
+            --jq '.[] | select(.isDraft == false and .isCrossRepository == false and .reviewDecision != "CHANGES_REQUESTED" and .mergeStateStatus == "CLEAN") | [.number, .headRefOid] | @tsv' > "$candidates"
           while IFS=$'\t' read -r number sha; do
             # Recheck GitHub protection at merge time and reject a changed head.
             # No admin bypass; main requires all CI jobs and resolved conversations.

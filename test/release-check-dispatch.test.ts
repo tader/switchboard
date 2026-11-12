@@ -47,5 +47,30 @@ test('release workflow explicitly schedules required CI including image validati
   assert.ok(check.on.workflow_dispatch.inputs.expected_sha);
   assert.ok(check.jobs.check.steps.some((s: any) => s.run?.includes('git rev-parse HEAD') && s.env?.EXPECTED_SHA === '${{ inputs.expected_sha }}'));
   assert.equal(check.jobs.image.needs, 'check');
-  assert.equal(check.jobs.image.with.publish, "${{ github.event_name == 'push' }}");
+  assert.deepEqual(check.on.push.branches, ['main']);
+  assert.equal(check.on.workflow_dispatch.inputs.publish_edge.type, 'boolean');
+  assert.equal(check.on.workflow_dispatch.inputs.publish_edge.default, false);
+  const expression = check.jobs.image.with.publish.match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
+  assert.ok(expression);
+  // This workflow expression uses only the shared boolean/comparison subset.
+  const publishes = new Function('github', 'inputs', `return (${expression});`);
+  for (const [event_name, ref, publish_edge, expected] of [
+    ['push', 'refs/heads/main', false, true],
+    ['pull_request', 'refs/pull/42/merge', true, false],
+    ['workflow_dispatch', 'refs/heads/main', false, false],
+    ['workflow_dispatch', 'refs/heads/release-please--branches--main', true, false],
+    ['workflow_dispatch', 'refs/heads/main', true, true],
+    ['workflow_run', 'refs/heads/main', true, false],
+  ] as const) {
+    assert.equal(publishes({ event_name, ref }, { publish_edge }), expected, `${event_name}: ${ref}, publish_edge=${publish_edge}`);
+  }
+});
+
+test('validated image callers build the same revision as the required unit checks', () => {
+  const check = YAML.parse(readFileSync('.github/workflows/check.yml', 'utf8'));
+  const checkout = check.jobs.check.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'));
+  const tested = checkout.with?.ref ?? '${{ github.sha }}';
+  assert.equal(check.jobs.image.with.validated, true);
+  assert.equal(check.jobs.image.with.ref, tested);
+  assert.equal(check.jobs.runtime.with.ref, tested);
 });

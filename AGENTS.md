@@ -74,14 +74,14 @@ Commits are authored with the maintainer's GitHub noreply identity (set in this 
 and resolved conversations, including for administrators. Zero approving reviews
 are required so a sole maintainer can merge PRs created under their own account.
 
-`.github/workflows/auto-merge.yml` squash-merges non-draft PRs after
+`.github/workflows/auto-merge.yml` squash-merges same-repository, non-draft PRs after
 GitHub reports them fully mergeable. It runs after CI and every five minutes
 (to catch ready and bot-created PRs), checks the expected head commit,
 and never bypasses protection or executes PR code. After a bot merge it
 explicitly dispatches main checks and Release Please because `GITHUB_TOKEN`
 merges do not trigger push workflows. A failed dispatch is reported as a failed
 workflow; rerun the named main workflow manually if needed. Draft PRs and PRs
-with requested changes stay paused.
+with requested changes stay paused. Fork PRs require a manual merge decision.
 
 ## Automatic versions
 
