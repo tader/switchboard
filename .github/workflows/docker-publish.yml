@@ -222,18 +222,10 @@ jobs:
       - name: Assemble tested multi-platform application and updater manifests
         if: inputs.publish != false
         env:
+          GH_TOKEN: ${{ github.token }}
           APP_TAGS: ${{ steps.meta.outputs.tags }}
           DIGESTS: ${{ runner.temp }}/digests
           REPOSITORY: ${{ github.repository }}
           EXPECTED_SHA: ${{ needs.source.outputs.sha }}
           STABLE: ${{ inputs.stable }}
-        run: |
-          # Parallel older builds may finish later; keep edge on current main.
-          if [ "$STABLE" != true ]; then
-            current=$(gh api "repos/$REPOSITORY/commits/main" --jq .sha)
-            if [ "$current" != "$EXPECTED_SHA" ]; then
-              APP_TAGS="ghcr.io/${REPOSITORY,,}:sha-$EXPECTED_SHA"
-              export APP_TAGS
-            fi
-          fi
-          bash .github/scripts/publish-image-manifests.sh
+        run: bash .github/scripts/publish-image-manifests.sh

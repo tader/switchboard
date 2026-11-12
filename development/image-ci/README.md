@@ -27,3 +27,8 @@ completed in 98 seconds locally; this is not a hosted-run speed measurement.
 Manifest tests reject incomplete/malformed artifacts and foreign tags before any
 registry operation. Workflow validation uses actionlint. Hosted CI must verify
 native AMD64/ARM64 execution; actual release publishing happens after approval.
+
+PR unit checks, image builds and runtime packaging use the same `github.sha`
+(including the tested merge commit for PR events). Non-stable publication passes
+its GitHub token explicitly; authenticated current-main and stale-tag behavior
+are exercised by the manifest tests.
