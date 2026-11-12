@@ -154,7 +154,7 @@ For a host launcher or the macOS app, backups and recovery records are in the co
 
 ### Update preparation failed
 
-The old server remains in place. Check local updater logs, free space and release availability before trying again.
+The old server remains in place. Check local updater logs, free space and release availability before trying again. If an upgrade stays on **Waiting for updater**, follow the [updater connection and mount checks](/docs/guides/updater-host-setup#waiting-for-updater).
 
 ### Previous release restored
 

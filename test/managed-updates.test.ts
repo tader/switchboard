@@ -95,6 +95,14 @@ test('prepare and rehearse precede outage; cancellation never stops or deploys',
   assert.deepEqual(c.events, ['report:preparing', 'prepare', 'rehearse', 'poll', 'report:cancelled']);
   assert.equal(c.journal!.phase, 'cancelled');
 });
+test('cancellation accepted while claiming preparation skips all preparation work', async () => {
+  const c = new FakeController(settings('preparation-claim-cancel'));
+  const api = c.api.bind(c);
+  c.api = async (endpoint, body) => { const result = await api(endpoint, body); return endpoint === 'report' && body.state === 'preparing' ? { cancel: true } : result; };
+  await c.execute(job());
+  assert.deepEqual(c.events, ['report:preparing', 'report:cancelled']);
+  assert.equal(c.journal!.phase, 'cancelled');
+});
 test('startup failure restores full owner-only snapshot before rollback opening', async () => {
   const c = new FakeController(settings('rollback')); c.failReady = true;
   fs.mkdirSync(path.join(c.s.dataDir, 'browser-profiles')); fs.writeFileSync(path.join(c.s.dataDir, 'browser-profiles', 'synthetic'), 'profile bytes');
@@ -170,8 +178,25 @@ test('admin-only jobs and one-time narrow enrollment reject scoped, MCP, peer an
   assert.equal((await req('/admin/jobs/cancel', full)).status, 200);
   const queued = (await (await req('/updater/poll', token, {})).json() as any).job;
   assert.equal((await (await req('/updater/report', token, { id: queued.id, state: 'draining' })).json() as any).cancel, true);
-  assert.equal((await (await req('/updater/poll', token, {})).json() as any).job.state, 'queued');
+  assert.equal((await (await req('/updater/poll', token, {})).json() as any).job.state, 'cancelled');
   await req('/updater/report', token, { id: queued.id, state: 'cancelled' });
+  assert.equal((await (await req('/updater/report', token, { id: queued.id, state: 'preparing' })).json() as any).cancel, true);
+  assert.equal((await (await req('/updater/poll', token, {})).json() as any).job.state, 'cancelled');
+  await req('/updater/report', token, { id: queued.id, state: 'failed', reason: 'preflight' });
+  assert.equal((await (await req('/updater/poll', token, {})).json() as any).job.state, 'cancelled');
+  assert.equal((await req('/admin/jobs', full)).status, 202);
+  const next = (await (await req('/updater/poll', token, {})).json() as any).job;
+  await req('/updater/report', token, { id: next.id, state: 'preparing' });
+  await req('/admin/jobs/cancel', full);
+  assert.equal((await (await req('/updater/poll', token, {})).json() as any).job.state, 'preparing');
+  assert.equal((await (await req('/updater/report', token, { id: next.id, state: 'draining' })).json() as any).cancel, true);
+  await req('/updater/report', token, { id: next.id, state: 'cancelled' });
+  assert.equal((await req('/admin/jobs', full)).status, 202);
+  const failed = (await (await req('/updater/poll', token, {})).json() as any).job;
+  await req('/updater/report', token, { id: failed.id, state: 'failed', reason: 'preflight', error: 'synthetic-secret' });
+  const failure = (await (await req('/updater/poll', token, {})).json() as any).job;
+  assert.match(failure.error, /validate the installation/); assert.ok(!failure.error.includes('synthetic-secret'));
+
   const frozen = runningBuild();
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: '9.0.0' }));
   assert.equal(runningBuild().version, frozen.version); assert.equal(runningBuild().custom, true);

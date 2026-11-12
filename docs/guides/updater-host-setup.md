@@ -152,6 +152,16 @@ Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.swit
 
 The 30-second limit applies to finite-request draining, not arbitrary extension cleanup. The updater bounds its drain API wait to 60 seconds and then attempts to stop the old service. Checkout mode waits up to 45 seconds after SIGTERM and refuses backup or candidate start if the process is still alive. Compose uses a 45-second stop timeout (Docker may forcibly stop the container after it expires) and verifies that the service is stopped. A cleanup error leaves the checkout process gated with its data lease held; a stalled cleanup or uncertain stop requires owner recovery. No snapshot is accepted while the old service is still running. Detached workers outside the application’s managed lifecycle remain the responsibility of their trusted extension.
 
+## Waiting for updater
+
+1. Cancel the queued upgrade. A queued cancellation takes effect immediately, even if the updater is unavailable. During preparation, **Cancellation requested** remains visible until the updater confirms it; the server will not be restarted for that upgrade.
+2. In the Compose directory, run `docker compose ps updater` and `docker compose logs --tail 80 updater`. Empty logs alone do not prove that the configuration is valid. An enrolled updater can still be unable to read its Compose files or access the configured data mount.
+3. Check that the updater can read every configured Compose file, the bundle’s `.env` file and any referenced files. Mount the actual bundle directory, including `compose.yaml`, at the same absolute path inside the updater. A mistyped bind source can create an empty directory instead.
+4. Match the storage settings to the application’s `/data` mount. The supplied examples use named volumes. A custom bind-mount installation must use the exact host data path and expose its updater state directory at the same absolute host path: Docker helper containers resolve bind sources on the Docker host. Do not configure named-volume settings for bind-mounted data.
+5. After correcting settings or mounts, recreate only the updater with `docker compose up -d --no-deps updater`. Refresh **Server updates**, check that it is connected, then request a new upgrade. A cancelled or failed upgrade is not resumed automatically.
+
+If validation fails before preparation, the page reports that the installation could not be validated and the server was left running. The updater records the local diagnostic in `last-preflight-error.json` in its owner-only state directory. Check that file locally; Compose files, settings and diagnostics may contain private information. Polling errors are logged without subprocess output.
+
 ## Recovery
 
 Completed job records remain under `history/`; `last-success.json` identifies the last successful upgrade and its backup. The owner-only `journal.json` identifies the previous and candidate releases, job phase, backup and whether normal operation may have opened. Retain the previous release/image and last successful backup. No automatic cleanup deletes these recovery assets.

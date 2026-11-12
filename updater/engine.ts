@@ -106,9 +106,27 @@ export class Controller {
     return r.json();
   }
   async report(state: string) { if (!this.journal) return; this.journal.phase = state; this.save(); return this.api('report', { id: this.journal.job.id, state, durations: this.journal.durations }); }
+  async tick() {
+    const poll = await this.api('poll', {});
+    if (poll.protocol !== 1) throw Error('Incompatible application');
+    const job: Job | undefined = poll.job;
+    if (!job || job.state === 'cancelled') return;
+    const terminal = ['succeeded', 'rolled-back', 'failed', 'cancelled', 'recovery-required'];
+    if (this.journal?.job.id === job.id && terminal.includes(this.journal.phase)) {
+      if (job.state !== this.journal.phase) await this.report(this.journal.phase);
+      return;
+    }
+    if (terminal.includes(job.state)) return;
+    // A queued cancellation needs no deployment access, including on older servers.
+    if (job.state === 'queued' && job.cancel) { await this.api('report', { id: job.id, state: 'cancelled' }); return; }
+    const failure = readJson<{ jobId: string }>(path.join(this.s.stateDir, 'last-preflight-error.json'));
+    if (failure?.jobId === job.id) { await this.api('report', { id: job.id, state: 'failed', reason: 'preflight' }); return; }
+    if (job.id !== this.journal?.job.id) await this.execute(job);
+  }
   composeArgs(override?: string) { const c = this.s.compose!; return ['compose', '--project-directory', c.directory, '-p', c.project, ...c.files.flatMap(f => ['-f', f]), ...((override ?? (fs.existsSync(path.join(this.s.stateDir, 'active-compose.json')) ? path.join(this.s.stateDir, 'active-compose.json') : undefined)) ? ['-f', override ?? path.join(this.s.stateDir, 'active-compose.json')] : [])]; }
   async compose(args: string[], override?: string) { return command('docker', [...this.composeArgs(override), ...args], this.s.compose!.directory); }
   async composeInfo() {
+    if (this.s.compose!.files.some(file => !fs.existsSync(file))) throw Error('Compose configuration is unavailable inside the updater; mount the complete bundle at its configured absolute path');
     const info = JSON.parse(await this.compose(['config', '--format', 'json']));
     const service = info.services?.[this.s.compose!.service];
     if (!service || (service.deploy?.replicas && service.deploy.replicas !== 1) || service.scale > 1) throw Error('Managed Compose requires one service replica');
@@ -331,11 +349,21 @@ export class Controller {
     assertTarget(job.target);
     if (this.journal?.phase === 'recovery-required') throw Error('Owner recovery is required');
     if (this.journal && !['succeeded', 'rolled-back', 'failed', 'cancelled', 'recovery-required'].includes(this.journal.phase)) throw Error('Recover the pending journal first');
-    const previous = await this.identifyCurrent(); await this.verifyInstance(previous);
+    let previous: string;
+    try { previous = await this.identifyCurrent(); await this.verifyInstance(previous); }
+    catch (error) {
+      // No application change has happened. Persist the failure before reporting so
+      // an API outage cannot cause repeated preflight attempts for the same job.
+      atomic(path.join(this.s.stateDir, 'last-preflight-error.json'), { jobId: job.id, at: Date.now(), reason: error instanceof Error ? error.message.slice(0, 500) : 'Preflight failed' });
+      console.error('Updater preflight failed; the server was left running. Inspect last-preflight-error.json in the owner-only updater state directory.');
+      await this.api('report', { id: job.id, state: 'failed', reason: 'preflight' });
+      return;
+    }
     this.journal = { job, previous, phase: 'preparing', startedAt: Date.now(), durations: {} }; this.save();
     let cutover = false;
     try {
-      await this.report('preparing');
+      const preparation = await this.report('preparing');
+      if (preparation?.cancel) { await this.report('cancelled'); return; }
       const start = Date.now(); this.journal.target = await this.prepare(job.target); this.save();
       await this.rehearse(this.journal.target); this.journal.durations.preparation = Date.now() - start;
       const poll = await this.api('poll', {}); if (poll.build?.revision !== job.target.baseRevision || poll.build.custom) throw Error('Running build changed during preparation'); if (poll.job?.id !== job.id) throw Error('Job changed');

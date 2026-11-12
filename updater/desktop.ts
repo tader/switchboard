@@ -54,8 +54,7 @@ const timer = setInterval(async () => {
   if (quitting || stopping || !controller?.s.token || busy) return;
   busy = true;
   try {
-    const poll = await controller.api('poll', {});
-    if (poll.job && !['succeeded', 'rolled-back', 'failed', 'cancelled', 'recovery-required'].includes(poll.job.state) && poll.job.id !== controller.journal?.job.id) await controller.execute(poll.job);
+    await controller.tick();
   } catch {
     if (!controller.childAlive() && controller.journal?.phase !== 'recovery-required') {
       if (attempts++ >= 3) { emit({ event: 'server-failed', message: 'The server stopped repeatedly. Inspect logs before starting it again.' }); quitting = true; return; }
