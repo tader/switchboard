@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/tader/switchboard/compare/v0.14.1...v0.14.2) (2026-11-12)
+
+
+### Bug Fixes
+
+* report updater preflight failures and cancel queued jobs ([#61](https://github.com/tader/switchboard/issues/61)) ([87a475c](https://github.com/tader/switchboard/commit/87a475c1288ba6198c4194c55f65e7b92010f1c7))
+
 ## [0.14.1](https://github.com/tader/switchboard/compare/v0.14.0...v0.14.1) (2026-11-12)
 
 
