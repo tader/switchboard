@@ -1,4 +1,4 @@
-name: Merge approved pull requests
+name: Merge checked pull requests
 on:
   workflow_run:
     workflows: [Check and publish edge]
@@ -11,7 +11,7 @@ permissions:
   pull-requests: write
   actions: write
 concurrency:
-  group: merge-approved-pull-requests
+  group: merge-checked-pull-requests
   cancel-in-progress: false
 jobs:
   merge:
@@ -22,7 +22,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       # Run trusted workflow code only; never check out a pull request.
-      - name: Merge an approved, fully checked pull request
+      - name: Merge a fully checked pull request
         shell: bash
         run: |
           set -euo pipefail
@@ -30,10 +30,10 @@ jobs:
           trap 'rm -f "$candidates"' EXIT
           gh pr list --repo "$GH_REPO" --base main --state open --limit 1000 \
             --json number,isDraft,reviewDecision,mergeStateStatus,headRefOid \
-            --jq '.[] | select(.isDraft == false and .reviewDecision == "APPROVED" and .mergeStateStatus == "CLEAN") | [.number, .headRefOid] | @tsv' > "$candidates"
+            --jq '.[] | select(.isDraft == false and .reviewDecision != "CHANGES_REQUESTED" and .mergeStateStatus == "CLEAN") | [.number, .headRefOid] | @tsv' > "$candidates"
           while IFS=$'\t' read -r number sha; do
             # Recheck GitHub protection at merge time and reject a changed head.
-            # No admin bypass; main requires current approval and all CI jobs.
+            # No admin bypass; main requires all CI jobs and resolved conversations.
             gh pr merge "$number" --repo "$GH_REPO" --squash --match-head-commit "$sha"
             # GITHUB_TOKEN merges do not trigger push workflows. Explicitly
             # continue main validation and the existing release pipeline.

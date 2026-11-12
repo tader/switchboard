@@ -70,24 +70,25 @@ Commits are authored with the maintainer's GitHub noreply identity (set in this 
 
 ## Automatic merges
 
-`main` requires one approving review, dismissal of approvals after new changes,
-all four CI jobs, an up-to-date branch and resolved conversations. These rules
-also apply to administrators. GitHub does not allow authors to approve their
-own PRs; a different reviewer must approve them.
+`main` requires pull requests, all four required CI checks, an up-to-date branch
+and resolved conversations, including for administrators. Zero approving reviews
+are required so a sole maintainer can merge PRs created under their own account.
 
-`.github/workflows/auto-merge.yml` squash-merges approved, non-draft PRs after
+`.github/workflows/auto-merge.yml` squash-merges non-draft PRs after
 GitHub reports them fully mergeable. It runs after CI and every five minutes
-(to catch later approvals and bot-created PRs), checks the expected head commit,
+(to catch ready and bot-created PRs), checks the expected head commit,
 and never bypasses protection or executes PR code. After a bot merge it
 explicitly dispatches main checks and Release Please because `GITHUB_TOKEN`
 merges do not trigger push workflows. A failed dispatch is reported as a failed
-workflow; rerun the named main workflow manually if needed. Draft PRs stay paused.
+workflow; rerun the named main workflow manually if needed. Draft PRs and PRs
+with requested changes stay paused.
 
 ## Automatic versions
 
 `.github/workflows/release-please.yml` maintains version/changelog PRs and creates
-releases after those PRs merge. Release PRs need the same approval and required
-CI checks as other PRs. The release workflow explicitly dispatches CI on bot PR
+releases after those PRs merge. Release PRs need the same required CI checks and
+resolved conversations as other PRs; no approving review is required. The release
+workflow explicitly dispatches CI on bot PR
 heads and publishes matching application/updater images and prepared runtimes.
 Wait for publication to finish before deploying a released version.
 
