@@ -703,8 +703,10 @@ test('peers expose read-only shared connections, never connection-management ser
   assert.ok(!(await req('GET', '/api/connections')).data.some((c: any) => c.peer?.id === peer.id)); cookie = adminCookie;
   for (const [method, p, body] of [
     ['POST', '/api/connections', { service: `peer/${peer.id}/family-tree` }],
-    ['POST', `/api/connections/${connection.id}/reconnect`, {}], ['PATCH', `/api/connections/${connection.id}`, { name: 'injected' }], ['DELETE', `/api/connections/${connection.id}`, undefined],
+    ['POST', `/api/connections/${connection.id}/reconnect`, {}], ['DELETE', `/api/connections/${connection.id}`, undefined],
   ] as const) assert.equal((await req(method, p, body)).status, 403);
+  const renamed = await req('PATCH', `/api/connections/${connection.id}`, { name: 'local-family' });
+  assert.equal(renamed.status, 200); assert.equal(renamed.data.readOnly, true); assert.equal(renamed.data.peer.connectionName, 'family-tree');
   const published = await next(); assert.equal(published.type, 'catalog'); assert.deepEqual(published.catalog.connections, []);
   for (const [operation, remoteConnection] of [['call', connId], ['connection.create', connId], ['token', connId]]) {
     ws.send(JSON.stringify({ protocol: 3, type: 'request', requestId: `denied-${operation}`, route: ['private-machine'], deadline: Date.now() + 5000, userId: admin.id, operation, payload: { connection: remoteConnection } }));

@@ -23,6 +23,14 @@ Rows are your connections; columns are all configured peers, including incoming 
 
 Only local owners can change their connections and sharing grants. A peer can invoke explicitly shared HTTP or MCP connections and inspect their OpenAPI descriptions. It cannot create, rename, reconnect or delete a connection on another instance, or retrieve raw provider credentials through ordinary sharing.
 
+## Local names for received connections
+
+In **Connections**, open a received connection’s actions and choose **Rename locally**. This changes only your local handle, including while the peer is offline or the handle is no longer shared. Other users’ names and the original connection on the peer stay unchanged. Names follow the usual connection name rules and must be unique among your connections.
+
+New received connections get an available local name when first imported. Later peer name changes never replace your local name automatically. When the names differ, Connections and the peer’s received list show the name on the peer; offline, this is labeled as the last known name. A handle no longer present in the accessible catalog has no peer name to display.
+
+Update scripts that refer to the old local name after renaming. Connection IDs, saved calls, sharing grants and routing stay unchanged. Reconnection and restarts retain your chosen name. If an original connection is deleted and recreated, it gets a separate handle and ID, even if its name is reused. Existing saved calls remain attached to the old handle; choose the new connection explicitly to use it. To reclaim a name such as `work` when the replacement is named `work-2`, first rename or remove the stale handle, then rename the replacement. Saved calls never move to the replacement automatically.
+
 ## Authentication sources
 
 Some plugins provide authentication that another local connection can consume. On the source connection, first share it with the destination peer, then enable **Share authentication → Allow authentication on [peer]**. This additional grant allows that peer's backend to receive and store refresh-capable credentials. Ordinary sharing alone never enables credential transfer.
@@ -49,11 +57,11 @@ Rotate credentials on the accepting instance, then update the token on the conne
 
 ## Upgrading
 
-Both instances require peer protocol 3. Update older Shell command installations: the current plugin works on any instance without requiring peers. Previous satellite protocol versions are rejected with an upgrade response. Existing devices, outgoing links, access lists, imported handles and sharing grants migrate to peers. Existing IDs, saved calls and encrypted credentials are retained. No new grants are created by migration. Review new receiving-side user permissions before sharing in the reverse direction.
+Both instances require peer protocol 3. Previous satellite protocol versions are rejected with an upgrade response. Existing devices, outgoing links, access lists, imported handles and sharing grants migrate to peers. Existing IDs, saved calls and encrypted credentials are retained. No new grants are created by migration. Review new receiving-side user permissions before sharing in the reverse direction.
 
 `SWITCHBOARD_PEER_URL` and `SWITCHBOARD_PEER_TOKEN` bootstrap one outgoing peer once; later changes belong in the UI. Historical satellite environment variables are accepted only as upgrade aliases. Legacy shadow-owned connections are assigned to the oldest active local administrator and remain unshared until explicitly selected.
 
-The `switchboard-plugin-switchboard` integration is retired in favor of Peers. Its records are preserved but unavailable; create a peer and select sharing grants locally on each instance.
+Records from the retired connection-based peer integration are preserved but unavailable; create a peer and select sharing grants locally on each instance.
 
 ## WebSocket operations
 

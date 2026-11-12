@@ -1,6 +1,6 @@
 # Switchboard
 
-> Switchboard was written entirely by Claude (Anthropic's Claude Opus 5.5, working in Claude Code), from the first line of code to these docs, at the request of [@tader](https://github.com/tader), who set the direction, tested it, and reported what to fix.
+> Switchboard is developed with AI coding agents, with [@tader](https://github.com/tader) setting the direction, testing behavior, and guiding fixes.
 
 One place that signs in to services (Gmail, Outlook, Google Calendar, GitHub, any OAuth or API-key API) so scripts and agents don't each need their own OAuth client. Scripts call services through Switchboard with a Switchboard token; Switchboard adds credentials and refreshes tokens.
 

@@ -1,3 +1,4 @@
+import { PeerConnectionName } from '../components/PeerConnectionName';
 import QRCode from 'qrcode';
 import { ListToolbar, SortHeader, useList, useViewState } from '../components/ListControls';
 import { CredentialPicker, type CredentialCandidate } from '../components/CredentialPicker';
@@ -49,7 +50,7 @@ export function Connections() {
   }, [highlight, connections.data, toast]);
 
   const list = useList('connections', connections.data ?? [], {
-    search: c => [c.name, c.serviceName, c.account?.label, c.peer?.name],
+    search: c => [c.name, c.peer?.connectionName ?? '', c.serviceName, c.account?.label, c.peer?.name],
     sorts: { service: c => `${c.serviceName} ${c.name}`, name: c => c.name, status: c => c.status, used: c => c.lastUsedAt },
     filters: { status: '', service: '', location: '' },
     filter: (c, f) => (!f.status || c.status === f.status) && (!f.service || c.serviceId === f.service) && (!f.location || (f.location === 'local' ? !c.peer : c.peer?.id === f.location)),
@@ -89,7 +90,7 @@ export function Connections() {
     { label: 'Use from scripts', icon: <Code2 />, onSelect: () => setScripts(c) },
     { label: 'Share with peers', icon: <Server />, onSelect: () => setSharing(c) },
     { label: 'Browser profile', icon: <Laptop />, onSelect: () => setProfileConnection(c), hidden: c.readOnly || !c.browserProfile },
-    { label: 'Rename', icon: <Pencil />, onSelect: () => setRename(c), hidden: c.readOnly },
+    { label: c.peer ? 'Rename locally' : 'Rename', icon: <Pencil />, onSelect: () => setRename(c), hidden: c.readOnly && !c.peer },
     { label: c.credential?.kind === 'static' ? 'Rotate shared credential' : 'Reconnect', icon: <RefreshCw />, onSelect: () => c.credential?.kind === 'static' ? navigate(`/credentials?credential=${c.credential.id}`) : setConnect({ service, connection: c }), hidden: !service || c.readOnly },
     { label: 'Manage credentials', icon: <KeyRound />, onSelect: () => navigate(`/credentials?connection=${c.id}`), hidden: c.readOnly || !c.reusable },
     { label: 'Make independent', icon: <KeyRound />, onSelect: async () => { if (c.credential?.kind === 'oauth') setConnect({ service, connection: c, independent: true }); else { try { await api(`/connections/${c.id}/credential/independent`, { body: {} }); connections.reload(); } catch (e: any) { toast(e.message, 'error'); } } }, hidden: !c.credential || c.readOnly },
@@ -163,6 +164,7 @@ export function Connections() {
                     <Link to={`/console?connection=${c.id}`} className="truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400" title={c.name}>{c.name}</Link>
                     <AuthIndicator connection={c} service={service} />
                   </div>
+                  <PeerConnectionName connection={c} />
                   {c.account?.label && c.account.label !== c.name && <div className="mt-0.5 truncate text-xs text-zinc-500" title={c.account.label}>{c.account.label}</div>}
                   {c.peer && <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 lg:hidden" title={`Peer: ${location}`}><Laptop className="size-3 shrink-0" aria-hidden="true" /><span className="truncate">{location}</span></div>}
                   {c.status !== 'ok' && c.statusMessage && <div className="mt-0.5 truncate text-xs text-rose-600 dark:text-rose-400" title={c.statusMessage}>{c.statusMessage}</div>}
@@ -191,6 +193,7 @@ export function Connections() {
                     <Link to={`/console?connection=${c.id}`} className="truncate font-medium hover:text-indigo-600 dark:hover:text-indigo-400">{c.account?.label ?? c.name}</Link>
                     {c.account?.label && c.account.label !== c.name && <code className="max-w-full truncate rounded bg-zinc-100 px-1.5 py-px font-mono text-[11.5px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{c.name}</code>}
                   </div>
+                  <PeerConnectionName connection={c} />
                   <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                     <span className="inline-flex min-w-0 max-w-[45%] items-center gap-1 shrink-0" title={c.peer ? `Peer: ${c.peer.name}${c.peer.online ? '' : ' (offline)'}` : 'Local'}>
                       {c.peer ? <Laptop className="size-3 shrink-0" aria-hidden="true" /> : <Server className="size-3 shrink-0" aria-hidden="true" />}
@@ -698,9 +701,10 @@ function RenameDialog({ connection, onClose, onDone }: { connection: Connection 
     }
   };
   return (
-    <Dialog open={!!connection} onClose={onClose} title="Rename connection" size="sm">
+    <Dialog open={!!connection} onClose={onClose} title={connection?.peer ? 'Rename locally' : 'Rename connection'} size="sm">
       <form onSubmit={submit} className="space-y-4">
-        <FormField label="Name" htmlFor="conn-name" description="Scripts that use the old name will stop working.">
+        {connection?.peer && <div className="text-sm text-zinc-600 dark:text-zinc-400"><p>This changes your local name only. The connection on the peer and other users’ names stay the same.</p><PeerConnectionName connection={connection} always /></div>}
+        <FormField label="Name" htmlFor="conn-name" description="Update scripts that use the old name. Connection IDs and saved calls stay unchanged.">
           <Input id="conn-name" value={name} onChange={(e) => setName(e.target.value)} className="font-mono" autoFocus spellCheck={false} />
         </FormField>
         {error && <Alert>{error}</Alert>}
