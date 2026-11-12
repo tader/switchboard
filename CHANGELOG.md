@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/tader/switchboard/compare/v0.14.0...v0.14.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* clarify server updates and simplify updater setup ([#59](https://github.com/tader/switchboard/issues/59)) ([1351f36](https://github.com/tader/switchboard/commit/1351f366ef194408158db011cb773283b115ceab))
+
 ## [0.14.0](https://github.com/tader/switchboard/compare/v0.13.0...v0.14.0) (2026-11-12)
 
 
