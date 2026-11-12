@@ -118,9 +118,13 @@ jobs:
           image_pid=$!
           python3 scripts/rehearse-compose-manager.py --variant source > "$RUNNER_TEMP/compose-source.log" 2>&1 &
           source_pid=$!
+          docker tag switchboard:smoke switchboard:polling-test
+          docker tag switchboard-updater:desktop-test switchboard-updater:polling-test
+          python3 scripts/rehearse-updater-polling.py > "$RUNNER_TEMP/updater-polling.log" 2>&1 &
+          polling_pid=$!
           result=0
-          for child in "$image_pid" "$source_pid"; do wait "$child" || result=1; done
-          cat "$RUNNER_TEMP/compose-image.log" "$RUNNER_TEMP/compose-source.log"
+          for child in "$image_pid" "$source_pid" "$polling_pid"; do wait "$child" || result=1; done
+          cat "$RUNNER_TEMP/compose-image.log" "$RUNNER_TEMP/compose-source.log" "$RUNNER_TEMP/updater-polling.log"
           exit "$result"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: inputs.publish != false

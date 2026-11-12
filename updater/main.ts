@@ -26,13 +26,15 @@ try {
       if (controller.journal?.phase === 'recovery-required') throw Error('Explicit owner recovery is required; automatic restart is disabled');
       try { const poll = await controller.verifyInstance(); if (poll.lifecycle === 'staged') await controller.api('open', {}); } catch { if (controller.childAlive()) throw Error('Managed child is still running but unreachable. Refusing concurrent launch.'); await controller.stop(); await controller.start(controller.current()); await controller.ready(); await controller.api('open', {}); }
     }
+    let disconnected = false;
     while (true) {
       try {
-        const poll = await controller.api('poll', {});
-        if (poll.protocol !== 1) throw Error('Incompatible application');
-        if (controller.journal?.job.id === poll.job?.id && ['succeeded', 'rolled-back', 'failed', 'cancelled', 'recovery-required'].includes(controller.journal!.phase) && poll.job?.state !== controller.journal!.phase) await controller.report(controller.journal!.phase);
-        if (poll.job && !['succeeded', 'rolled-back', 'failed', 'cancelled', 'recovery-required'].includes(poll.job.state) && poll.job.id !== controller.journal?.job.id) await controller.execute(poll.job);
+        await controller.tick();
+        if (disconnected) console.log('Updater polling resumed.');
+        disconnected = false;
       } catch {
+        if (!disconnected) console.error('Updater could not complete a polling cycle; check application connectivity and the owner-only updater state directory. Retrying in five seconds.');
+        disconnected = true;
         // A normal child crash can restart the selected release; interrupted deployments use recover().
         if (action === 'launch' && settings.mode === 'checkout' && !controller.childAlive() && controller.journal?.phase !== 'recovery-required') {
           try { await controller.stop(); await controller.start(controller.current()); await controller.ready(); await controller.api('open', {}); } catch { /* Retry without touching data or replaying a job. */ }

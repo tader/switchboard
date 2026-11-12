@@ -59,7 +59,7 @@ updates.post('/jobs', c => {
   if (!s.target || !s.checkedAt || Date.now() - s.checkedAt > 86400_000 || !eligible(build, s.target)) throw new HttpError(409, 'No verified upgrade is available for this build');
   s.job = { id: randomBytes(16).toString('hex'), target: s.target, state: 'queued', createdAt: Date.now() }; write(s); return c.json(s.job, 202);
 });
-updates.post('/jobs/cancel', c => { const s = read(); if (!s.job || !['queued', 'preparing'].includes(s.job.state)) throw new HttpError(409, 'Cutover has started; cancellation is unavailable'); s.job.cancel = true; write(s); return c.json({ ok: true }); });
+updates.post('/jobs/cancel', c => { const s = read(); if (!s.job || !['queued', 'preparing'].includes(s.job.state)) throw new HttpError(409, 'Cutover has started; cancellation is unavailable'); s.job.cancel = true; if (s.job.state === 'queued') s.job.state = 'cancelled'; write(s); return c.json({ ok: true }); });
 
 // Dedicated credentials are never accepted by normal application authentication.
 export const updaterApi = new Hono();
@@ -80,10 +80,10 @@ updaterApi.post('/report', async c => {
   if (!s.job || s.job.id !== b.id) throw new HttpError(409, 'Unknown job');
   const states = ['preparing', 'draining', 'snapshot', 'starting', 'opening', 'succeeded', 'rolled-back', 'failed', 'recovery-required', 'cancelled'];
   if (!states.includes(b.state)) throw new HttpError(400, 'Invalid state');
-  if (b.state === 'draining' && s.job.cancel) return c.json({ ok: true, cancel: true });
+  if (['preparing', 'draining'].includes(b.state) && s.job.cancel || s.job.state === 'cancelled' && b.state === 'failed') return c.json({ ok: true, cancel: true });
   s.job.state = b.state;
   // Never accept tool output, paths, commands or diagnostics from the controller into public UI.
-  s.job.error = ['failed', 'recovery-required', 'rolled-back'].includes(b.state) ? 'Upgrade did not complete. Inspect the owner-only updater journal and follow the recovery guide.' : undefined;
+  s.job.error = ['failed', 'recovery-required', 'rolled-back'].includes(b.state) ? b.state === 'failed' && b.reason === 'preflight' ? 'The updater could not validate the installation before starting. The server was left running. Check the updater logs and deployment configuration.' : 'Upgrade did not complete. Inspect the owner-only updater journal and follow the recovery guide.' : undefined;
   if (b.durations && typeof b.durations === 'object') s.job.durations = Object.fromEntries(Object.entries(b.durations).filter(([k, v]) => /^[a-z]+$/.test(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0)) as Record<string, number>;
   write(s); return c.json({ ok: true, cancel: s.job.cancel });
 });
@@ -100,7 +100,7 @@ export async function localUpdateControl(action: string) {
     s.tokenHash = hash(token); s.paired = { instance: 'local-manager', mode: runningBuild().mode, protocol, seen: Date.now() }; write(s); return { token };
   }
   if (action === 'check') { await check(true); return { ok: true }; }
-  if (action === 'cancel') { const s = read(); if (!s.job || !['queued', 'preparing'].includes(s.job.state)) throw Error('Cutover already started'); s.job.cancel = true; write(s); return { ok: true }; }
+  if (action === 'cancel') { const s = read(); if (!s.job || !['queued', 'preparing'].includes(s.job.state)) throw Error('Cutover already started'); s.job.cancel = true; if (s.job.state === 'queued') s.job.state = 'cancelled'; write(s); return { ok: true }; }
   if (action === 'update') {
     const s = read(), build = runningBuild();
     if (!s.paired || Date.now() - s.paired.seen > 30_000 || s.job && !terminal(s.job.state) || s.job?.state === 'recovery-required' || !s.target || !s.checkedAt || Date.now() - s.checkedAt > 86400_000 || !eligible(build, s.target)) throw Error('No verified upgrade available');
