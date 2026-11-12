@@ -66,7 +66,7 @@ export const updaterApi = new Hono();
 updaterApi.post('/enroll', async c => {
   const { code, instance, mode, sourceBuild, protocol: version } = await c.req.json(); const s = read();
   if (typeof code !== 'string' || !s.enrollment || s.enrollment.expires < Date.now() || hash(code) !== s.enrollment.hash) throw new HttpError(401, 'Invalid or expired enrollment');
-  if (version !== protocol || typeof instance !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(instance) || !['checkout', 'compose'].includes(mode)) throw new HttpError(400, 'Incompatible updater');
+  if (version !== protocol || typeof instance !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(instance) || !['checkout', 'compose', 'runtime'].includes(mode)) throw new HttpError(400, 'Incompatible updater');
   const token = `swbu_${randomBytes(32).toString('base64url')}`; delete s.enrollment; s.tokenHash = hash(token); s.paired = { instance, mode, protocol, sourceBuild: sourceBuild === true, seen: Date.now() }; write(s); return c.json({ token });
 });
 updaterApi.use('*', async (c, next) => {
@@ -90,3 +90,21 @@ updaterApi.post('/report', async c => {
 updaterApi.post('/drain', async c => { await lifecycle.drain(); return c.json({ ok: true }); });
 updaterApi.post('/open', async c => { await lifecycle.open(); return c.json({ ok: true }); });
 updaterApi.get('/ready', c => c.json({ ready: ['staged', 'open'].includes(lifecycle.state), state: lifecycle.state, build: runningBuild() }));
+
+/** Private parent-child IPC only; these credentials never authorize general APIs. */
+export async function localUpdateControl(action: string) {
+  if (action === 'status') { const s = read(); return { paired: !!s.paired, job: s.job, target: s.target, eligible: !!s.target && eligible(runningBuild(), s.target), build: runningBuild() }; }
+  if (action === 'pair') {
+    const s = read();
+    const token = `swbu_${randomBytes(32).toString('base64url')}`;
+    s.tokenHash = hash(token); s.paired = { instance: 'local-manager', mode: runningBuild().mode, protocol, seen: Date.now() }; write(s); return { token };
+  }
+  if (action === 'check') { await check(true); return { ok: true }; }
+  if (action === 'cancel') { const s = read(); if (!s.job || !['queued', 'preparing'].includes(s.job.state)) throw Error('Cutover already started'); s.job.cancel = true; write(s); return { ok: true }; }
+  if (action === 'update') {
+    const s = read(), build = runningBuild();
+    if (!s.paired || Date.now() - s.paired.seen > 30_000 || s.job && !terminal(s.job.state) || s.job?.state === 'recovery-required' || !s.target || !s.checkedAt || Date.now() - s.checkedAt > 86400_000 || !eligible(build, s.target)) throw Error('No verified upgrade available');
+    s.job = { id: randomBytes(16).toString('hex'), target: s.target, state: 'queued', createdAt: Date.now() }; write(s); return { ok: true };
+  }
+  throw Error('Unsupported local manager action');
+}

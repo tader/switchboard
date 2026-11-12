@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+export SWITCHBOARD_BUNDLE_DIR="$(pwd -P)"
+if [ ! -f .env ]; then cp .env.example .env; chmod 600 .env; fi
+# Compose parses .env itself; do not execute user settings as shell code.
+base() { docker compose --project-directory "$SWITCHBOARD_BUNDLE_DIR" -f compose.yaml "$@"; }
+image=${SWITCHBOARD_WRAPPER_IMAGE:-$(base config --images updater)}
+project=$(base config --format json | docker run --rm -i --entrypoint node "$image" -e 'let s="";for await(const c of process.stdin)s+=c;console.log(JSON.parse(s).name)')
+state="${project}-updater-state"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+read_active() {
+  : > "$tmp/active.json"
+  if docker volume inspect "$state" >/dev/null 2>&1; then
+    docker run --rm --network none --entrypoint node -v "$state:/state:ro" "$image" -e 'const f=require("fs");if(f.existsSync("/state/active-compose.json"))process.stdout.write(f.readFileSync("/state/active-compose.json"))' > "$tmp/active.json"
+  fi
+}
+read_active
+set -- "$@"
+action=${1:-status}
+[ "$#" -eq 0 ] || shift
+stack() {
+  if [ -s "$tmp/active.json" ]; then base -f "$tmp/active.json" "$@"; else base "$@"; fi
+}
+source=$(base config --format json | docker run --rm -i --entrypoint node "$image" -e 'let s="";for await(const c of process.stdin)s+=c;console.log(JSON.parse(s).services.updater.environment.SWITCHBOARD_SOURCE_BUILD)')
+case "$action" in
+  up) if [ "$source" = true ] && [ ! -s "$tmp/active.json" ]; then base -f compose.source.yaml build switchboard; base -f compose.source.yaml up -d; else stack up -d; fi ;;
+  down) stack down "$@" ;;
+  restart) stack stop; stack up -d ;;
+  stop) stack stop ;;
+  status) stack ps ;;
+  logs) stack logs "$@" ;;
+  enroll) [ "$#" -eq 1 ] || { echo 'Usage: ./switchboard enroll ONE_TIME_CODE' >&2; exit 1; }; stack exec -T updater node updater/main.ts enroll /state/settings.json "$1" ;;
+  restore) [ "$#" -eq 1 ] || { echo "Usage: ./switchboard restore BACKUP_ID" >&2; exit 1; }; stack stop; stack run --rm --no-deps updater node updater/compose.ts restore "$1"; read_active; stack up -d ;;
+  backup) stack stop updater; stack run --rm --no-deps updater node updater/compose.ts backup; stack up -d updater ;;
+  *) echo 'Usage: ./switchboard up|down|restart|stop|status|logs|enroll CODE|backup|restore BACKUP_ID' >&2; exit 1 ;;
+esac

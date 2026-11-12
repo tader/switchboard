@@ -1,0 +1,28 @@
+services:
+  switchboard:
+    image: ${SWITCHBOARD_IMAGE:-ghcr.io/tader/switchboard:latest}
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${SWITCHBOARD_PORT:-8770}:8770'
+    environment:
+      SWITCHBOARD_PUBLIC_URL: ${SWITCHBOARD_PUBLIC_URL:-http://127.0.0.1:8770}
+      SWITCHBOARD_INSTALL_MODE: compose
+    volumes:
+      - app-data:/data
+  updater:
+    image: ${SWITCHBOARD_UPDATER_IMAGE:-ghcr.io/tader/switchboard-updater:latest}
+    restart: unless-stopped
+    environment:
+      SWITCHBOARD_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-switchboard}
+      SWITCHBOARD_BUNDLE_DIR: ${SWITCHBOARD_BUNDLE_DIR:?Use ./switchboard to manage this stack}
+      SWITCHBOARD_SOURCE_BUILD: ${SWITCHBOARD_SOURCE_BUILD:-false}
+    volumes:
+      - updater-state:/state
+      - /var/run/docker.sock:/var/run/docker.sock
+      - '${SWITCHBOARD_BUNDLE_DIR}:${SWITCHBOARD_BUNDLE_DIR}:ro'
+    command: ['node', 'updater/compose.ts']
+volumes:
+  app-data:
+    name: ${COMPOSE_PROJECT_NAME:-switchboard}-app-data
+  updater-state:
+    name: ${COMPOSE_PROJECT_NAME:-switchboard}-updater-state

@@ -1,3 +1,4 @@
+import { startLocalManager } from './local-manager.ts';
 import { ensureUpdateIdentity, lifecycle, updates, updaterApi, startUpdateChecks } from './updates/control.ts';
 import { runningBuild } from './updates/releases.ts';
 import { lockInstance } from './updates/instance-lock.ts';
@@ -32,12 +33,14 @@ import { attachPeerWebSockets, startPeerAgent } from './peers.ts';
 import { initializePeers } from './peer-settings.ts';
 import { stopProviderMcp } from './provider-mcp.ts';
 
+if (process.send) process.once('disconnect', () => process.kill(process.pid, 'SIGTERM'));
 fs.mkdirSync(config.dataDir, { recursive: true });
 const unlockInstance = lockInstance(config.dataDir);
 ensureUpdateIdentity();
 runningBuild();
 initKey();
 initDb();
+startLocalManager();
 
 const app = new Hono<Env>();
 
@@ -114,6 +117,7 @@ lifecycle.open = async () => {
   opening = (async () => {
     recoverHistoricalConnectionErrors();
     const setupUrl = ensureAdmin();
+    startLocalManager(setupUrl);
     initializePeers();
     await plugins.start();
     stopPeerAgent = startPeerAgent();
@@ -125,7 +129,7 @@ lifecycle.open = async () => {
     stopUpdateChecks = startUpdateChecks();
     stopWebSocketProxy = attachWebSocketProxy(server as import('node:http').Server);
     stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Server);
-    if (setupUrl) console.log(`\nNo administrator can sign in yet. Set a password for "${config.adminUsername}" (valid 24 hours):\n${setupUrl}\n`);
+    if (setupUrl && !process.send) console.log(`\nNo administrator can sign in yet. Set a password for "${config.adminUsername}" (valid 24 hours):\n${setupUrl}\n`);
     await listening;
     lifecycle.state = 'open';
     console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);

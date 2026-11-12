@@ -1,0 +1,42 @@
+name: Prepared runtimes
+on:
+  workflow_call:
+    inputs:
+      ref: {type: string, required: true}
+      publish: {type: boolean, default: false}
+  workflow_dispatch:
+    inputs:
+      ref: {description: Release tag or revision, required: true}
+      publish: {description: Attach to the existing stable release, type: boolean, default: false}
+permissions:
+  contents: write
+jobs:
+  runtime:
+    strategy:
+      matrix:
+        include:
+          - {runner: macos-15, arch: arm64}
+          - {runner: macos-15-intel, arch: x64}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: '${{ inputs.ref }}'}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with: {node-version: '24'}
+      - run: npm ci && npm ci --prefix web && npm run build --prefix web
+      - run: bash scripts/download-runtime-node.sh '${{ matrix.arch }}' "$RUNNER_TEMP/node"
+      - name: Package and verify independent runtime
+        run: python3 scripts/package-runtime.py --node "$RUNNER_TEMP/node/node-v24.22.3-darwin-${{ matrix.arch }}/bin/node" --arch '${{ matrix.arch }}' --revision "$(git rev-parse HEAD)" --output artifacts
+      - name: Package versioned Compose examples
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          cp distribution/compose/.env.example distribution/compose/.env
+          sed -i '' "s/:latest/:$version/g" distribution/compose/.env
+          tar -czf "artifacts/switchboard-compose-$version-${{ matrix.arch }}.tar.gz" -C distribution compose
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: {name: 'runtime-${{ matrix.arch }}', path: artifacts/}
+      - if: inputs.publish
+        env: {GH_TOKEN: '${{ github.token }}', REF: '${{ inputs.ref }}'}
+        run: |
+          test "$REF" = "v$(node -p 'require("./package.json").version')"
+          gh release upload "$REF" artifacts/* --clobber

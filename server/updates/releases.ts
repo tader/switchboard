@@ -7,14 +7,14 @@ import { config } from '../config.ts';
 export const UPSTREAM = 'tader/switchboard';
 export const IMAGE = `ghcr.io/${UPSTREAM}`;
 export type Channel = 'stable' | 'validated-main';
-export interface Build { version: string; revision: string | null; mode: 'checkout' | 'compose' | 'unmanaged'; custom: boolean }
-export interface Target { version: string; revision: string; channel: Channel; notes: string; url: string; baseRevision?: string; protocol: 1; image?: string }
+export interface Build { version: string; revision: string | null; mode: 'checkout' | 'compose' | 'runtime' | 'unmanaged'; custom: boolean }
+export interface Target { version: string; revision: string; channel: Channel; notes: string; url: string; baseRevision?: string; protocol: 1; image?: string; runtime?: { origin: string; version: string; revision: string; protocol: number; platform: string; arch: string; archive: string; sha256: string } }
 function detectBuild(): Build {
   const version = JSON.parse(fs.readFileSync(path.join(config.root, 'package.json'), 'utf8')).version;
   try {
     const b = JSON.parse(fs.readFileSync(path.join(config.root, 'build-info.json'), 'utf8'));
     if (!/^[a-f0-9]{40}$/.test(b.revision) || b.version !== version) throw Error();
-    return { version, revision: b.revision, mode: process.env.SWITCHBOARD_INSTALL_MODE === 'compose' ? 'compose' : 'checkout', custom: false };
+    return { version, revision: b.revision, mode: process.env.SWITCHBOARD_INSTALL_MODE === 'runtime' ? 'runtime' : process.env.SWITCHBOARD_INSTALL_MODE === 'compose' ? 'compose' : 'checkout', custom: false };
   } catch { /* Ordinary checkout or an unidentifiable archive. */ }
   try {
     const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: config.root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -59,6 +59,7 @@ export function eligible(build: Build, target: Target): boolean {
   return target.protocol === 1 && target.baseRevision === build.revision && target.revision !== build.revision && (target.channel === 'stable' ? semver.gt(target.version, build.version) : semver.gte(target.version, build.version));
 }
 export async function selectTarget(channel: Channel, mode: Build['mode'], fetcher: typeof fetch = fetch, sourceBuild = false): Promise<Target> {
+  if (mode === 'runtime' && channel !== 'stable') throw Error('Prepared runtimes require stable releases');
   let revision: string, version: string, notes = '', url: string;
   if (channel === 'stable') {
     const release = await github('releases/latest', fetcher);
@@ -79,6 +80,13 @@ export async function selectTarget(channel: Channel, mode: Build['mode'], fetche
   if (pkg.managedUpgradeProtocol !== 1) throw Error('This release does not support gated managed startup; use a compatible release');
   if (!semver.valid(pkg.version) || (version && pkg.version !== version)) throw Error('Release version does not match its source');
   const target: Target = { version: pkg.version, revision, channel, notes, url, protocol: 1 };
+  if (mode === 'runtime') {
+    const response = await fetcher(`https://github.com/${UPSTREAM}/releases/download/v${target.version}/runtime-darwin-${process.arch}.json`, { signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) throw Error('Prepared runtime is not ready');
+    const m = await response.json() as NonNullable<Target['runtime']>;
+    if (m.origin !== UPSTREAM || m.version !== target.version || m.revision !== target.revision || m.protocol !== 1 || m.platform !== 'darwin' || m.arch !== process.arch || !['arm64', 'x64'].includes(m.arch) || m.archive !== `switchboard-runtime-darwin-${m.arch}.tar.gz` || !/^[a-f0-9]{64}$/.test(m.sha256)) throw Error('Incompatible prepared runtime');
+    target.runtime = m;
+  }
   if (mode === 'compose' && !sourceBuild) target.image = await imageDigest(revision, fetcher);
   return target;
 }

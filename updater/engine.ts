@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DatabaseSync, backup } from 'node:sqlite';
+import { prepareRuntime } from './runtime.ts';
 import { randomBytes } from 'node:crypto';
 import type { Job } from '../server/updates/control.ts';
 import type { Target } from '../server/updates/releases.ts';
@@ -12,9 +14,9 @@ const exec = promisify(execFile);
 const UPSTREAM = 'https://github.com/tader/switchboard.git';
 const IMAGE = 'ghcr.io/tader/switchboard@sha256:';
 export interface Settings {
-  instance: string; mode: 'checkout' | 'compose'; dataDir: string; stateDir: string; appUrl: string;
+  instance: string; mode: 'checkout' | 'compose' | 'runtime'; dataDir: string; stateDir: string; appUrl: string;
   initialRelease?: string; env: Record<string, string>; token?: string;
-  compose?: { files: string[]; project: string; service: string; directory: string; sourceBuild?: boolean; dataVolume?: string };
+  compose?: { files: string[]; project: string; service: string; directory: string; sourceBuild?: boolean; dataVolume?: string; stateVolume?: string; privateNetwork?: boolean };
 }
 export interface Journal {
   job: Job; phase: string; previous: string; target?: string; backup?: string; opened?: boolean;
@@ -28,7 +30,7 @@ export function atomic(file: string, value: unknown) {
   const dir = fs.openSync(path.dirname(file), 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
 }
 export function validateSettings(s: Settings) {
-  if (!/^[\w-]{1,80}$/.test(s.instance) || !['checkout', 'compose'].includes(s.mode)) throw Error('Invalid instance or mode');
+  if (!/^[\w-]{1,80}$/.test(s.instance) || !['checkout', 'compose', 'runtime'].includes(s.mode)) throw Error('Invalid instance or mode');
   for (const p of [s.dataDir, s.stateDir]) if (!path.isAbsolute(p)) throw Error('Data and updater state paths must be absolute');
   if (s.compose?.dataVolume && (s.dataDir !== '/data' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(s.compose.dataVolume))) throw Error('Named-volume mode requires exact dataDir /data and an explicit volume name');
   const canonical = (p: string): string => fs.existsSync(p) ? fs.realpathSync(p) : path.join(canonical(path.dirname(p)), path.basename(p));
@@ -36,17 +38,19 @@ export function validateSettings(s: Settings) {
   if (s.initialRelease && (state === canonical(s.initialRelease) || state.startsWith(canonical(s.initialRelease) + path.sep))) throw Error('Updater state must be outside the application source tree');
   if (data === state || data.startsWith(state + path.sep) || state.startsWith(data + path.sep)) throw Error('Updater state must be outside data and backup');
   const url = new URL(s.appUrl);
-  if (url.username || url.password || url.pathname !== '/' || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) throw Error('Use HTTPS or loopback HTTP for appUrl');
-  if (s.mode === 'checkout' && (!s.initialRelease || !path.isAbsolute(s.initialRelease))) throw Error('Set initialRelease to an absolute source directory');
+  if (url.username || url.password || url.pathname !== '/' || (url.protocol !== 'https:' && !(url.protocol === 'http:' && (['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || s.mode === 'compose' && s.compose?.privateNetwork === true && url.hostname === s.compose.service || s.mode === 'runtime' && Object.values(os.networkInterfaces()).flat().some(i => i?.address === url.hostname.replace(/^\[|\]$/g, '')))))) throw Error('Use HTTPS or loopback HTTP for appUrl');
+  if (s.mode !== 'compose' && (!s.initialRelease || !path.isAbsolute(s.initialRelease))) throw Error('Set initialRelease to an absolute source directory');
   if (s.mode === 'compose' && (!s.compose || !/^[a-z0-9][a-z0-9_-]*$/.test(s.compose.project) || !/^[a-zA-Z0-9_-]+$/.test(s.compose.service) || !path.isAbsolute(s.compose.directory) || !s.compose.files.length || s.compose.files.some(f => !path.isAbsolute(f)))) throw Error('Configure the fixed Compose project, service, directory and absolute files');
   for (const key of Object.keys(s.env ?? {})) if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) throw Error('Invalid environment key');
 }
 export function acquireController(s: Settings) {
   fs.mkdirSync(s.stateDir, { recursive: true, mode: 0o700 }); fs.chmodSync(s.stateDir, 0o700);
+  const lease = new DatabaseSync(path.join(s.stateDir, 'controller-lease.db'));
+  try { lease.exec('PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS lease(id INTEGER); BEGIN EXCLUSIVE;'); }
+  catch { lease.close(); throw Error('Another updater is running'); }
   const file = path.join(s.stateDir, 'controller.lock');
-  try { const old = JSON.parse(fs.readFileSync(file, 'utf8')); if (old.host !== os.hostname()) throw Error('Controller is locked on another host'); let alive = true; try { process.kill(old.pid, 0); } catch (e: any) { if (e.code === 'ESRCH') alive = false; } if (alive) throw Error('Another updater is running'); fs.unlinkSync(file); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
-  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname() }), { flag: 'wx', mode: 0o600 });
-  return () => fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname() }), { mode: 0o600 });
+  return () => { fs.rmSync(file, { force: true }); lease.close(); };
 }
 export async function command(file: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv) {
   // Never forward subprocess output: npm/build/Compose output can contain credentials.
@@ -66,9 +70,15 @@ function assertNoExternalData(root: string, dir = root) {
     else if (entry.isDirectory()) assertNoExternalData(root, p);
   }
 }
+export async function assertListenAvailable(host: string, port: number) {
+  const socket = net.createServer();
+  await new Promise<void>((resolve, reject) => { socket.once('error', () => reject(Error('The listen address or port is unavailable; stop the existing listener or choose another port'))); socket.listen(port, host, () => socket.close(() => resolve())); });
+}
 export class Controller {
   s: Settings;
   journal?: Journal;
+  child?: import('node:child_process').ChildProcess;
+  onMessage?: (message: any) => void;
   constructor(s: Settings) { validateSettings(s); this.s = s; this.journal = readJson(path.join(s.stateDir, 'journal.json')); }
   save() {
     atomic(path.join(this.s.stateDir, 'journal.json'), this.journal);
@@ -77,13 +87,26 @@ export class Controller {
       atomic(path.join(dir, `${this.journal.job.id}.json`), this.journal);
     }
   }
+  async pairOwnedChild() {
+    const child = this.child; if (!child?.connected) throw Error('Owned server IPC is unavailable');
+    const id = -Date.now();
+    const result = await new Promise<any>((resolve, reject) => {
+      const listener = (m: any) => { if (m?.kind !== 'local-manager' || m.id !== id) return; clearTimeout(timer); child.off('message', listener); m.error ? reject(Error('Local pairing unavailable')) : resolve(m.result); };
+      const timer = setTimeout(() => { child.off('message', listener); reject(Error('Local pairing timed out')); }, 3000);
+      child.on('message', listener); child.send({ kind: 'local-manager', id, action: 'pair' });
+    });
+    if (typeof result.token !== 'string' || !result.token.startsWith('swbu_')) throw Error('Invalid pairing response');
+    this.s.token = result.token;
+  }
   async api(endpoint: string, body?: unknown): Promise<any> {
-    const r = await fetch(`${this.s.appUrl.replace(/\/$/, '')}/api/updater/${endpoint}`, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${this.s.token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(endpoint === 'drain' ? 60_000 : 30_000), redirect: 'error' });
+    const request = () => fetch(`${this.s.appUrl.replace(/\/$/, '')}/api/updater/${endpoint}`, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${this.s.token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(endpoint === 'drain' ? 60_000 : 30_000), redirect: 'error' });
+    let r = await request();
+    if (r.status === 401 && this.s.mode === 'runtime' && this.child?.connected) { await this.pairOwnedChild(); r = await request(); }
     if (!r.ok) throw Error(`Application updater API returned ${r.status}`);
     return r.json();
   }
   async report(state: string) { if (!this.journal) return; this.journal.phase = state; this.save(); return this.api('report', { id: this.journal.job.id, state, durations: this.journal.durations }); }
-  composeArgs(override?: string) { const c = this.s.compose!; return ['compose', '--project-directory', c.directory, '-p', c.project, ...c.files.flatMap(f => ['-f', f]), ...(override ? ['-f', override] : [])]; }
+  composeArgs(override?: string) { const c = this.s.compose!; return ['compose', '--project-directory', c.directory, '-p', c.project, ...c.files.flatMap(f => ['-f', f]), ...((override ?? (fs.existsSync(path.join(this.s.stateDir, 'active-compose.json')) ? path.join(this.s.stateDir, 'active-compose.json') : undefined)) ? ['-f', override ?? path.join(this.s.stateDir, 'active-compose.json')] : [])]; }
   async compose(args: string[], override?: string) { return command('docker', [...this.composeArgs(override), ...args], this.s.compose!.directory); }
   async composeInfo() {
     const info = JSON.parse(await this.compose(['config', '--format', 'json']));
@@ -109,7 +132,7 @@ export class Controller {
   }
   current(): string { return readJson<{ release: string }>(path.join(this.s.stateDir, 'current.json'))?.release ?? this.s.initialRelease!; }
   async identifyCurrent() {
-    if (this.s.mode === 'checkout') return this.current();
+    if (this.s.mode !== 'compose') return this.current();
     await this.composeInfo();
     const ids = (await this.compose(['ps', '-q', this.s.compose!.service])).split(/\s+/).filter(Boolean);
     if (ids.length !== 1) throw Error('Start exactly one configured Compose service before enrollment');
@@ -125,6 +148,7 @@ export class Controller {
       if (!t.image) throw Error('No published immutable image is ready');
       await command('docker', ['pull', t.image]); await this.verifyImage(t.image, t); return t.image;
     }
+    if (this.s.mode === 'runtime') return prepareRuntime(t, this.s.stateDir);
     fs.mkdirSync(path.dirname(release), { recursive: true, mode: 0o700 });
     // Incomplete preparations are disposable. Never modify the operator checkout.
     if (!fs.existsSync(path.join(release, '.prepared'))) {
@@ -159,8 +183,8 @@ export class Controller {
     // Only migrations run: no main.ts, extension loading, networking or credential decryption.
     const script = "import('./server/db.ts').then(m=>{m.initDb();m.db.close()})";
     try {
-      if (this.s.mode === 'checkout') await command(process.execPath, ['--input-type=module', '-e', script], target, { ...process.env, SWITCHBOARD_DATA_DIR: dir });
-      else await command('docker', ['run', '--rm', '--network=none', '--entrypoint', 'node', '--mount', `type=bind,src=${fs.realpathSync(dir)},dst=/rehearsal`, '-e', 'SWITCHBOARD_DATA_DIR=/rehearsal', target, '--input-type=module', '-e', script]);
+      if (this.s.mode !== 'compose') await command(this.s.mode === 'runtime' ? path.join(target, 'bin/node') : process.execPath, ['--input-type=module', '-e', script], target, { ...process.env, SWITCHBOARD_DATA_DIR: dir });
+      else await command('docker', ['run', '--rm', '--network=none', '--entrypoint', 'node', '--mount', this.s.compose?.stateVolume ? `type=volume,src=${this.s.compose.stateVolume},dst=/managed-state` : `type=bind,src=${fs.realpathSync(dir)},dst=/rehearsal`, '-e', this.s.compose?.stateVolume ? 'SWITCHBOARD_DATA_DIR=/managed-state/rehearsal' : 'SWITCHBOARD_DATA_DIR=/rehearsal', target, '--input-type=module', '-e', script]);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
   async stop() {
@@ -175,6 +199,10 @@ export class Controller {
         const until = Date.now() + 2000;
         while (!lock && Date.now() < until) { await new Promise(r => setTimeout(r, 100)); lock = readJson(path.join(this.s.dataDir, '.server-lock')); }
         if (!lock && this.childAlive()) throw Error('Managed child is alive without a data lock; refusing backup or concurrent start');
+      }
+      if (lock && !this.childAlive()) {
+        let alive = true; try { process.kill(lock.pid, 0); } catch (e: any) { if (e.code === 'ESRCH') alive = false; else throw e; }
+        if (!alive && lock.host === os.hostname()) { fs.rmSync(path.join(this.s.dataDir, '.server-lock'), { force: true }); lock = undefined; }
       }
       if (lock) {
         if (lock.host !== os.hostname() || !Number.isSafeInteger(lock.pid) || lock.pid < 2) throw Error('Cannot stop a foreign instance');
@@ -206,7 +234,9 @@ export class Controller {
     if (this.s.mode === 'compose') await this.compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', this.s.compose!.service], this.override(release, gated));
     else {
       if (fs.existsSync(path.join(this.s.dataDir, '.server-lock'))) throw Error('Server lock is still held');
-      const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: 'checkout' }, detached: true, stdio: 'ignore' });
+      if (this.s.mode === 'runtime') await assertListenAvailable(this.s.env.SWITCHBOARD_HOST ?? '127.0.0.1', Number(this.s.env.SWITCHBOARD_PORT ?? (new URL(this.s.appUrl).port || 8770)));
+      const child = spawn(this.s.mode === 'runtime' ? path.join(release, 'bin/node') : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
+      this.child = child; child.on('message', message => this.onMessage?.(message));
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       atomic(path.join(this.s.stateDir, 'child.json'), { pid: child.pid }); child.unref();
       const started = await command('ps', ['-p', String(child.pid), '-o', 'lstart=']);
@@ -226,7 +256,7 @@ export class Controller {
     // Fixed code, paths and operations. No application env, networking, shell or Docker socket.
     const script = `
       const fs=require('node:fs'),path=require('node:path');
-      const [op,uid,gid]=process.argv.slice(1);
+      const [op,uid,gid,transfer]=process.argv.slice(1);
       const check=(dir)=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,e.name);if(e.isSymbolicLink()&&/^Singleton/.test(e.name))continue;if(e.isSymbolicLink()){const r=fs.realpathSync(p);if(!r.startsWith('/managed-data/'))throw Error('External persistent link');}else if(e.isDirectory())check(p);}};
       const copy=(src,dst)=>{
         const st=fs.lstatSync(src);if(/^Singleton/.test(path.basename(src)))return;
@@ -242,10 +272,14 @@ export class Controller {
         if(op==='identity')console.log(fs.readFileSync('/managed-data/update-instance-id','utf8'));
         if(op==='unlock')fs.rmSync('/managed-data/.server-lock',{force:true});
         if(op==='snapshot'){check('/managed-data');for(const n of fs.readdirSync('/managed-data'))copy('/managed-data/'+n,'/transfer/'+n);own('/transfer');}
-        if(op==='restore'){for(const n of fs.readdirSync('/managed-data'))fs.rmSync('/managed-data/'+n,{recursive:true,force:true});for(const n of fs.readdirSync('/transfer'))copy('/transfer/'+n,'/managed-data/'+n);fs.rmSync('/managed-data/.server-lock',{force:true});}
+        if(op==='restore'){for(const n of fs.readdirSync('/managed-data'))fs.rmSync('/managed-data/'+n,{recursive:true,force:true});for(const n of fs.readdirSync('/transfer'))copy('/transfer/'+n,'/managed-data/'+n);fs.rmSync('/managed-data/.server-lock',{force:true});const p='/managed-data/update-control.json';if(fs.existsSync(p)){const s=JSON.parse(fs.readFileSync(p));if(s.job)s.job.state='rolled-back';fs.writeFileSync(p,JSON.stringify(s),{mode:384});}}
         if(op==='rehearse'){const {DatabaseSync,backup}=require('node:sqlite');const db=new DatabaseSync('/managed-data/switchboard.db',{readOnly:true});try{await backup(db,'/transfer/switchboard.db');}finally{db.close();}own('/transfer');}
       })().catch(error=>{console.error('Data helper failed',error.code??'unknown',error.syscall??'unknown');process.exit(1);});`;
-    return command('docker', ['run', '--rm', '--network=none', '--read-only', '--user', '0:0', '--entrypoint', 'node', '--mount', `type=${this.s.compose!.dataVolume ? 'volume' : 'bind'},src=${this.s.compose!.dataVolume ?? fs.realpathSync(this.s.dataDir)},dst=/managed-data${['snapshot', 'rehearse', 'identity'].includes(operation) ? ',readonly' : ''}`, '--mount', `type=bind,src=${fs.realpathSync(directory)},dst=/transfer${operation === 'restore' ? ',readonly' : ''}`, image, '-e', script, operation, String(process.getuid?.() ?? 0), String(process.getgid?.() ?? 0)]);
+    const stateVolume = this.s.compose!.stateVolume;
+    const relative = path.relative(this.s.stateDir, directory);
+    if (stateVolume && (relative.startsWith('..') || path.isAbsolute(relative))) throw Error('Transfer must be inside updater state');
+    const helperScript = script.replaceAll("'/transfer/'", "(transfer+'/')").replaceAll("'/transfer/switchboard.db'", "(transfer+'/switchboard.db')").replaceAll("'/transfer'", 'transfer');
+    return command('docker', ['run', '--rm', '--network=none', '--read-only', '--user', '0:0', '--entrypoint', 'node', '--mount', `type=${this.s.compose!.dataVolume ? 'volume' : 'bind'},src=${this.s.compose!.dataVolume ?? fs.realpathSync(this.s.dataDir)},dst=/managed-data${['snapshot', 'rehearse', 'identity'].includes(operation) ? ',readonly' : ''}`, '--mount', stateVolume ? `type=volume,src=${stateVolume},dst=/state${operation === 'restore' ? ',readonly' : ''}` : `type=bind,src=${fs.realpathSync(directory)},dst=/transfer${operation === 'restore' ? ',readonly' : ''}`, image, '-e', helperScript, operation, String(process.getuid?.() ?? 0), String(process.getgid?.() ?? 0), stateVolume ? path.posix.join('/state', relative) : '/transfer']);
   }
   async snapshot() {
     if (this.s.mode !== 'compose') assertNoExternalData(this.s.dataDir);
@@ -278,6 +312,7 @@ export class Controller {
       await this.start(j.previous); await this.ready();
       // Rollback startup also crosses an external-side-effect boundary.
       j.opened = true; this.save(); await this.api('open', {});
+      if (this.s.mode === 'compose') this.override(j.previous, false);
       atomic(path.join(this.s.stateDir, 'current.json'), { release: j.previous });
       j.durations.total = Date.now() - j.startedAt; if (j.outageAt) j.durations.outage = Date.now() - j.outageAt;
       await this.report('rolled-back');
@@ -313,6 +348,7 @@ export class Controller {
       // Persist BEFORE asking the candidate to load extensions or accept requests.
       this.journal.opened = true; this.journal.phase = 'opening'; this.save();
       await this.api('report', { id: job.id, state: 'opening' }); await this.api('open', {});
+      if (this.s.mode === 'compose') this.override(this.journal.target, false);
       atomic(path.join(this.s.stateDir, 'current.json'), { release: this.journal.target });
       this.journal.durations.outage = Date.now() - this.journal.outageAt;
       this.journal.durations.total = Date.now() - this.journal.startedAt;

@@ -13,7 +13,7 @@ Stable releases are the default. **Validated main** explicitly opts into develop
 
 Version checks work with existing checkout, Compose and custom starts. Managed upgrades are optional. Keep using your existing start command if you prefer manual updates.
 
-To adopt managed upgrades, use a compatible release with the Updates page and gated startup support. Install Node 24.10 or newer, Git and npm on the host. Compose mode also requires Docker Engine 25 or newer and Docker Compose v2 with `config --format json`, `--no-deps`, and `--pull never` support. The application container must have no Docker socket or Docker control access. The updater runs on the host as the owner of the instance and connects **outbound** to the application's authenticated updater API. It opens no network listener.
+To adopt host-managed upgrades, use a compatible release with the Updates page and gated startup support. The complete Compose bundle below does not need host build tools. For a host-managed checkout, install Node 24.10 or newer, Git and npm on the host. Compose mode also requires Docker Engine 25 or newer and Docker Compose v2 with `config --format json`, `--no-deps`, and `--pull never` support. The application container must have no Docker socket or Docker control access. The updater runs on the host as the owner of the instance and connects **outbound** to the application's authenticated updater API. It opens no network listener.
 
 Use a dedicated updater credential, created through one-time enrollment. A general administrator API token cannot authenticate the updater. Only full-access administrators can check, enroll or request upgrades; scoped tokens, MCP credentials and peer credentials cannot manage upgrades.
 
@@ -59,7 +59,17 @@ node /srv/switchboard-updater/launcher/main.ts launch /srv/switchboard-updater-s
 
 The launcher owns application starts and stops after adoption. The instance also takes an OS-released database lock to prevent concurrent servers from using its data. Do not run the old start command against that data while managed operation is enabled.
 
-## Compose installations
+## Complete Compose stack
+
+The release's versioned Compose example bundle includes an application container, a separate updater container, named data/state volumes, matching settings and a management wrapper. Only the trusted updater has Docker access; host Node, Git and npm are not required for the image variant.
+
+Extract the bundle into a Docker-shared folder, retain its version-pinned `.env`, then run `./switchboard up`. Use `./switchboard logs switchboard` to obtain the first administrator setup link and complete setup in the browser. In **Admin → Updates**, create an enrollment code and run `./switchboard enroll ONE_TIME_CODE`. The page shows the updater connected within a few seconds. Codes expire in ten minutes and work once.
+
+Use `./switchboard restart`, `./switchboard down` and `./switchboard up` for stack management. The wrapper includes the saved image pin automatically, so even a full stack restart retains the selected release and does not restart gated. `down` preserves volumes; `down -v` deletes them. Use `./switchboard backup` for a complete snapshot and `./switchboard restore BACKUP_ID` for an explicit restore that preserves current data first. Keep independent off-host copies; backups contain secrets. Follow the bundle's README for exact setup, source-build, backup and recovery commands.
+
+The container controller uses an explicit private service address. Ordinary host controllers still require HTTPS or loopback HTTP. Existing host-managed Compose installations can continue using the configuration below.
+
+## Existing host-managed Compose installations
 
 Use `"mode": "compose"` and a fixed Compose project/service. `env` is for checkout starts; Compose retains its existing service environment and `.env` resolution. Add:
 
