@@ -68,20 +68,29 @@ Keep these working: `HUB_*` environment variables (read after `SWITCHBOARD_*`), 
 
 Commits are authored with the maintainer's GitHub noreply identity (set in this repository's git config). Any contributor attribution must accurately reflect the contribution; do not hard-code a particular agent, model or vendor. Before each commit, check the staged content for personal data and secrets: the maintainer's domain, names, email addresses and local paths; anything that looks like a token or key. `compose.yaml`, `docker-compose.dev.yml`, `.data/` and `AGENTS.local.md` are git-ignored; only the `*.example.*` compose files are tracked.
 
+## Automatic merges
+
+`main` requires one approving review, dismissal of approvals after new changes,
+all four CI jobs, an up-to-date branch and resolved conversations. These rules
+also apply to administrators. GitHub does not allow authors to approve their
+own PRs; a different reviewer must approve them.
+
+`.github/workflows/auto-merge.yml` squash-merges approved, non-draft PRs after
+GitHub reports them fully mergeable. It runs after CI and every five minutes
+(to catch later approvals and bot-created PRs), checks the expected head commit,
+and never bypasses protection or executes PR code. After a bot merge it
+explicitly dispatches main checks and Release Please because `GITHUB_TOKEN`
+merges do not trigger push workflows. A failed dispatch is reported as a failed
+workflow; rerun the named main workflow manually if needed. Draft PRs stay paused.
+
 ## Automatic versions
 
-`.github/workflows/bump-version.yml` checks pushes to `main` against GitHub's
-merged PR metadata (merge, squash, and rebase merges). Each merged PR gets one
-patch bump in the root `package.json` and `package-lock.json`, committed by
-`github-actions[bot]`. Direct pushes do not bump the version.
+`.github/workflows/release-please.yml` maintains version/changelog PRs and creates
+releases after those PRs merge. Release PRs need the same approval and required
+CI checks as other PRs. The release workflow explicitly dispatches CI on bot PR
+heads and publishes matching application/updater images and prepared runtimes.
+Wait for publication to finish before deploying a released version.
 
-The bump script records the PR number in the commit body so reruns skip it.
-If main advances during a push, it retries from the latest main; runs are not
-cancelled or grouped because that could drop merges. Run the script only in an
-isolated checkout: it resets tracked files to `origin/main` on each attempt.
-
-The workflow requests `contents: write` with the built-in `GITHUB_TOKEN`;
-branch protection must permit that push. Wait for the workflow to finish and
-fetch its version commit before deploying so the UI shows the new version.
-Bot pushes with `GITHUB_TOKEN` do not trigger other push workflows; any future
-automated deployment must account for that.
+Bot merges with `GITHUB_TOKEN` do not trigger push workflows. The automatic merge
+workflow explicitly dispatches main validation with edge publishing enabled and
+Release Please; a manual CI dispatch does not publish edge images by default.

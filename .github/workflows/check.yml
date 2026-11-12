@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      publish_edge:
+        description: Publish edge images after validating main
+        type: boolean
+        default: false
       expected_sha:
         description: Expected release PR head commit
         required: false
@@ -34,7 +38,7 @@ jobs:
     uses: ./.github/workflows/docker-publish.yml
     with:
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      publish: ${{ github.event_name == 'push' }}
+      publish: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_edge) }}
     permissions:
       contents: read
       packages: write
