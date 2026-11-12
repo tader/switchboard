@@ -319,8 +319,9 @@ export function initDb() {
     for (const ext of ['', '-wal', '-shm']) if (fs.existsSync(legacy + ext)) fs.renameSync(legacy + ext, file + ext);
   }
   db = new DatabaseSync(file);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   const version = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+  if (version > migrations.length) { db.close(); throw new Error('Database schema is newer than this server supports. Use its matching release or restore a matching backup.'); }
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   for (let i = version; i < migrations.length; i++) {
     db.exec('BEGIN');
     try {

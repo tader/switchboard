@@ -1,3 +1,6 @@
+import { ensureUpdateIdentity, lifecycle, updates, updaterApi, startUpdateChecks } from './updates/control.ts';
+import { runningBuild } from './updates/releases.ts';
+import { lockInstance } from './updates/instance-lock.ts';
 import { stopBrowserProfiles, sweepBrowserProfiles } from './browser-profiles.ts';
 import { startContractCollectors } from './contracts/service.ts';
 import { credentialsApi } from './routes/credentials.ts';
@@ -30,9 +33,11 @@ import { initializePeers } from './peer-settings.ts';
 import { stopProviderMcp } from './provider-mcp.ts';
 
 fs.mkdirSync(config.dataDir, { recursive: true });
+const unlockInstance = lockInstance(config.dataDir);
+ensureUpdateIdentity();
+runningBuild();
 initKey();
 initDb();
-recoverHistoricalConnectionErrors();
 
 const app = new Hono<Env>();
 
@@ -51,6 +56,14 @@ app.use('*', async (c, next) => {
   c.header('referrer-policy', 'same-origin');
 });
 
+app.use('*', async (c, next) => {
+  const statusRead = c.req.method === 'GET' && ['/api/admin/updates', '/api/me'].includes(c.req.path);
+  if (!statusRead && !['/healthz', '/readyz'].includes(c.req.path) && !c.req.path.startsWith('/api/updater/') && lifecycle.state !== 'open') { c.header('retry-after', '5'); return c.json({ error: 'Switchboard is restarting. Reconnect when ready; requests are not replayed.' }, 503); }
+  await next();
+});
+app.route('/api/updater', updaterApi);
+app.route('/api/admin/updates', updates);
+app.get('/readyz', c => c.json({ ready: lifecycle.state === 'open' }, lifecycle.state === 'open' ? 200 : 503));
 app.get('/healthz', (c) => c.json({ ok: true }));
 app.get('/api/openapi.json', (c) => c.json(openapiDocument()));
 app.route('/api/oauth/authorize', authorizeApi);
@@ -85,39 +98,76 @@ app.get('*', (c) => {
   return c.html(fs.readFileSync(index, 'utf8'));
 });
 
-const setupUrl = ensureAdmin();
-initializePeers();
-await plugins.start();
-const stopPeerAgent = startPeerAgent();
-const stopContracts=config.sharedContracts?startContractCollectors():undefined;
-await sweepConnectFlows();
-await sweepBrowserProfiles();
-setInterval(() => { void sweepConnectFlows().then(() => sweepBrowserProfiles()).catch(() => {}); }, 30_000).unref();
-prune();
-setInterval(prune, 6 * 3600_000).unref();
-
-if (setupUrl) {
-  console.log(`\nNo administrator can sign in yet. Set a password for "${config.adminUsername}" (valid 24 hours):\n${setupUrl}\n`);
-}
+let stopPeerAgent = () => {};
+let stopContracts: (() => unknown) | undefined;
+let stopUpdateChecks = () => {};
+let stopWebSocketProxy = () => {};
+let stopPeerWebSockets = () => {};
+const timers: NodeJS.Timeout[] = [];
+let opening: Promise<void> | undefined;
+lifecycle.open = async () => {
+  if (lifecycle.state === 'open') return;
+  if (opening) return opening;
+  if (!['starting', 'staged'].includes(lifecycle.state)) throw new HttpError(409, 'Server is draining');
+  // Opening is irreversible: plugin initialization can perform external writes.
+  lifecycle.state = 'opening';
+  opening = (async () => {
+    recoverHistoricalConnectionErrors();
+    const setupUrl = ensureAdmin();
+    initializePeers();
+    await plugins.start();
+    stopPeerAgent = startPeerAgent();
+    stopContracts = config.sharedContracts ? startContractCollectors() : undefined;
+    await sweepConnectFlows(); await sweepBrowserProfiles();
+    timers.push(setInterval(() => { void sweepConnectFlows().then(() => sweepBrowserProfiles()).catch(() => {}); }, 30_000));
+    prune(); timers.push(setInterval(prune, 6 * 3600_000));
+    for (const timer of timers) timer.unref();
+    stopUpdateChecks = startUpdateChecks();
+    stopWebSocketProxy = attachWebSocketProxy(server as import('node:http').Server);
+    stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Server);
+    if (setupUrl) console.log(`\nNo administrator can sign in yet. Set a password for "${config.adminUsername}" (valid 24 hours):\n${setupUrl}\n`);
+    lifecycle.state = 'open';
+    console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);
+  })();
+  return opening;
+};
 
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, () => {
-  console.log(`Switchboard listening on ${config.host}:${config.port} (${config.publicUrl})`);
+  if (lifecycle.state === 'staged') console.log('Switchboard staged; awaiting updater activation');
 });
-const stopWebSocketProxy = attachWebSocketProxy(server as import('node:http').Server);
-const stopPeerWebSockets = attachPeerWebSockets(server as import('node:http').Server);
-
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, async () => {
+// Track HTTP lifetimes; long-lived streams are closed after the finite-request drain.
+const requests = new Set<import('node:http').ServerResponse>();
+server.on('request', (_req, res) => { requests.add(res); res.once('close', () => requests.delete(res)); });
+let draining: Promise<void> | undefined;
+lifecycle.drain = async () => {
+  if (draining) return draining;
+  lifecycle.state = 'draining';
+  draining = (async () => {
+    for (const timer of timers) clearInterval(timer);
+    stopUpdateChecks(); stopPeerAgent(); await stopContracts?.();
+    // Keep extension resources alive until finite calls have completed or the drain expires.
+    // Arbitrary extension-owned producers have no separate pause contract.
+    const deadline = Date.now() + 30_000;
+    while ([...requests].some(r => !String(r.getHeader('content-type') ?? '').includes('text/event-stream') && !r.req.url?.startsWith('/api/updater/')) && Date.now() < deadline) await new Promise(r => setTimeout(r, 50));
+    stopWebSocketSubscriptions(); stopWebSockets(); stopProviderMcp();
+    stopWebSocketProxy(); stopPeerWebSockets();
+    await plugins.stop();
     await stopBrowserProfiles();
-    await stopContracts?.();
-    stopWebSocketSubscriptions();
-    stopWebSockets();
-    stopProviderMcp();
-    stopWebSocketProxy();
-    stopPeerWebSockets();
-    stopPeerAgent();
-    server.close();
-    await plugins.stop().catch(() => {});
-    process.exit(0);
+    for (const res of requests) if (!res.req.url?.startsWith('/api/updater/')) res.destroy();
+  })();
+  return draining;
+};
+if (lifecycle.state === 'starting') await lifecycle.open();
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(sig, async () => {
+    try {
+      await lifecycle.drain();
+      server.close();
+      unlockInstance();
+      process.exit(0);
+    } catch {
+      // Retain the lease and gated process: an incomplete cleanup is not a safe snapshot boundary.
+      console.error('Shutdown incomplete. The instance remains gated; owner recovery is required.');
+    }
   });
 }
