@@ -310,6 +310,12 @@ const migrations: string[] = [
   ALTER TABLE connections ADD COLUMN browser_profile_id TEXT REFERENCES browser_profiles(id) ON DELETE RESTRICT;
   CREATE INDEX connections_browser_profile ON connections(browser_profile_id);`,
   `CREATE TABLE connection_attention (connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE, updated_at INTEGER NOT NULL);`,
+  `ALTER TABLE invites ADD COLUMN purpose TEXT NOT NULL DEFAULT 'invite';
+   CREATE TABLE account_security_events (
+     id INTEGER PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+     event TEXT NOT NULL CHECK(event IN ('local-recovery-requested', 'local-recovery-completed')),
+     created_at INTEGER NOT NULL
+   );`,
 ];
 
 export function initDb() {

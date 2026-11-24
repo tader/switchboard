@@ -6,10 +6,10 @@ let controller: Controller | undefined, release: (() => void) | undefined, quitt
 let latestStatus: any;
 const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 function emit(value: unknown) { process.stdout.write(JSON.stringify(value) + '\n'); }
-async function ipc(action: string) {
+async function ipc(action: string, userId?: string) {
   const c = controller?.child; if (!c?.connected) throw Error('Server is not connected');
   const id = ++sequence;
-  return new Promise<any>((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(Error('Server response timed out')); }, 30_000); pending.set(id, { resolve(v) { clearTimeout(timer); resolve(v); }, reject(e) { clearTimeout(timer); reject(e); } }); c.send({ kind: 'local-manager', id, action }); });
+  return new Promise<any>((resolve, reject) => { const timer = setTimeout(() => { pending.delete(id); reject(Error('Server response timed out')); }, 30_000); pending.set(id, { resolve(v) { clearTimeout(timer); resolve(v); }, reject(e) { clearTimeout(timer); reject(e); } }); c.send({ kind: 'local-manager', id, action, userId }); });
 }
 async function start(s: Settings) {
   if (controller) throw Error('Already started');
@@ -40,6 +40,12 @@ lines.on('line', line => { work = work.then(async () => {
     const m = JSON.parse(line);
     if (m.action === 'start') await start(m.settings);
     else if (m.action === 'stop' || m.action === 'quit') { quitting = m.action === 'quit'; await stop(); if (quitting && !busy) process.exit(0); }
+    else if (['account-users', 'account-setup', 'account-recovery'].includes(m.action) && typeof m.requestId === 'string' && m.requestId.length <= 64) {
+      try {
+        if (busy || stopping || quitting) throw Error('Busy');
+        emit({ event: 'account-result', requestId: m.requestId, action: m.action, ...await ipc(m.action, m.userId) });
+      } catch { emit({ event: 'account-result', requestId: m.requestId, action: m.action, error: 'Account action unavailable. Update Switchboard or retry when it is idle.' }); }
+    }
     else if (m.action === 'status' && controller) {
       if (busy) { emit({ event: 'status', ...latestStatus, eligible: false, job: controller.journal?.job && { ...controller.journal.job, state: controller.journal.phase } }); return; }
       const status = await ipc('status'); latestStatus = status;

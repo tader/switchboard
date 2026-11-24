@@ -19,7 +19,11 @@ One place that signs in to services (Gmail, Outlook, Google Calendar, GitHub, an
 
 `compose.example.yaml` assumes Traefik on an external `traefik` network with a `letsencrypt` resolver; adjust it to your setup. `compose.yaml` and `docker-compose.dev.yml` are ignored by git, so your own domain stays out of the repository.
 
-On first start, and whenever no administrator can sign in, the log contains a setup link for `SWITCHBOARD_ADMIN_USERNAME` valid for 24 hours. Restarting prints a fresh one. Other users are added on the Users page and get a one-time invite link.
+On first start, and whenever no administrator can sign in, the log contains a setup link for `SWITCHBOARD_ADMIN_USERNAME` valid for 24 hours. Restarting prints a fresh one. Other users are added on the Users page and get a one-time invite link. On a fresh installation, the setup form lets you choose a username as well as a password. Existing invitation and password-reset links keep the account's username.
+
+A trusted local runtime manager can offer password recovery for enabled local users. This requires a connected private parent process, runtime installation mode, and explicit `SWITCHBOARD_LOCAL_ACCOUNT_RECOVERY=1` opt-in. It is disabled in ordinary server deployments. There is no HTTP endpoint for requesting these links, and updater credentials cannot request them. The manager must authenticate the local installation owner before each request; enabling this mode trusts that owner with recovery of all local accounts.
+
+Local recovery links work once, expire after 10 minutes, and replace older invitations for the selected account. Completing recovery signs out that user's existing browser sessions without changing their username, role, connections or data. Disabled users and peer-shadow accounts cannot use local recovery. Recovery events are recorded locally without link URLs or tokens.
 
 ### Configuration
 

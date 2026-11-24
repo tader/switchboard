@@ -1,5 +1,5 @@
 import { accessChanged } from './access-events.ts';
-import { all, now, one, run } from './db.ts';
+import { all, db, now, one, run } from './db.ts';
 import { hashPassword, randomId, randomToken, sha256, verifyPassword } from './crypto.ts';
 import { config } from './config.ts';
 import { badRequest, notFound } from './http.ts';
@@ -152,31 +152,65 @@ export function deleteOtherSessions(userId: string, keepToken?: string) {
 
 // --- invites (one-time links to set a password) ---
 
-export function createInvite(userId: string, validHours = 72): { url: string; expiresAt: number } {
+export function createInvite(userId: string, validHours = 72, purpose: 'invite' | 'initial-setup' | 'local-recovery' = 'invite'): { url: string; expiresAt: number } {
   const token = randomToken();
   const expiresAt = now() + validHours * 3600_000;
   run('DELETE FROM invites WHERE user_id = ?', userId);
-  run('INSERT INTO invites (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)', sha256(token), userId, expiresAt, now());
+  run('INSERT INTO invites (token_hash, user_id, expires_at, created_at, purpose) VALUES (?, ?, ?, ?, ?)', sha256(token), userId, expiresAt, now(), purpose);
   return { url: `${config.publicUrl}/invite#${token}`, expiresAt };
 }
 
-export function inviteUser(token: string): User | undefined {
+/** Recovery never resurrects disabled users or permits peer-shadow accounts. */
+function eligibleInvite(token: string): { user: User; purpose: string } | undefined {
   const r = one(
-    `SELECT u.* FROM invites i JOIN users u ON u.id = i.user_id WHERE i.token_hash = ? AND i.expires_at > ?`,
-    sha256(token), now(),
+    `SELECT u.*, i.purpose AS invite_purpose FROM invites i JOIN users u ON u.id = i.user_id
+     WHERE i.token_hash = ? AND i.expires_at > ?`, sha256(token), now(),
   );
-  return r && toUser(r);
+  if (!r) return;
+  if (r.invite_purpose === 'local-recovery' && (r.disabled || r.peer_shadow)) return;
+  if (r.invite_purpose === 'initial-setup' && one('SELECT 1 FROM users WHERE password_hash IS NOT NULL')) return;
+  return { user: toUser(r), purpose: r.invite_purpose };
 }
+export function inviteUser(token: string): User | undefined { return eligibleInvite(token)?.user; }
+export function inviteAllowsUsername(token: string): boolean { return eligibleInvite(token)?.purpose === 'initial-setup'; }
 
-export function acceptInvite(token: string, password: string): User {
-  const user = inviteUser(token);
-  if (!user) throw badRequest('This link is invalid or has expired');
-  setPassword(user.id, password);
-  run('DELETE FROM invites WHERE user_id = ?', user.id);
-  run('DELETE FROM sessions WHERE user_id = ?', user.id);
+export function acceptInvite(token: string, password: string, username?: string): User {
+  // Consume and modify atomically; failures leave the invite and account unchanged.
+  db.exec('BEGIN IMMEDIATE');
+  let accepted: User;
+  try {
+    const invite = eligibleInvite(token);
+    if (!invite) throw badRequest('This link is invalid or has expired');
+    const { user, purpose } = invite;
+    if (typeof password !== 'string' || password.length < 8) throw badRequest('Use at least 8 characters');
+    if (username !== undefined) {
+      if (purpose !== 'initial-setup' || typeof username !== 'string') throw badRequest('Username cannot be changed with this link');
+      updateUser(user.id, { username: username.trim() });
+    }
+    setPassword(user.id, password);
+    run('DELETE FROM invites WHERE user_id = ?', user.id);
+    run('DELETE FROM sessions WHERE user_id = ?', user.id);
+    if (purpose !== 'local-recovery') run('UPDATE users SET disabled = 0 WHERE id = ?', user.id);
+    if (purpose === 'local-recovery') recordLocalRecovery(user.id, 'local-recovery-completed');
+    accepted = getUser(user.id)!;
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
   accessChanged();
-  run('UPDATE users SET disabled = 0 WHERE id = ?', user.id);
-  return getUser(user.id)!;
+  return accepted;
+}
+function recordLocalRecovery(userId: string, event: 'local-recovery-requested' | 'local-recovery-completed') {
+  run('INSERT INTO account_security_events(user_id, event, created_at) VALUES (?, ?, ?)', userId, event, now());
+}
+/** Caller must enforce the private managed-runtime IPC boundary. No HTTP route calls this. */
+export function createLocalRecoveryInvite(userId: string): { url: string; expiresAt: number } {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const user = getUser(userId);
+    if (!user || user.disabled || !listUsers().some(u => u.id === userId)) throw badRequest('Account unavailable');
+    const invite = createInvite(userId, 1 / 6, 'local-recovery');
+    recordLocalRecovery(userId, 'local-recovery-requested');
+    db.exec('COMMIT'); return invite;
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
 export function pendingInvites(): Map<string, number> {
@@ -190,7 +224,7 @@ export function ensureAdmin(): string | undefined {
   let admin = one('SELECT * FROM users WHERE username = ?', config.adminUsername);
   if (!admin) admin = { id: createUser(config.adminUsername, 'admin').id };
   run(`UPDATE users SET role = 'admin', disabled = 0 WHERE id = ?`, admin.id);
-  return createInvite(admin.id, 24).url;
+  return createInvite(admin.id, 24, one('SELECT 1 FROM users WHERE password_hash IS NOT NULL') ? 'invite' : 'initial-setup').url;
 }
 
 // --- API tokens ---
