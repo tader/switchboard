@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.0](https://github.com/tader/switchboard/compare/v0.14.1...v0.15.0) (2026-11-24)
+
+
+### Features
+
+* support private local account setup and recovery ([#63](https://github.com/tader/switchboard/issues/63)) ([cab69c5](https://github.com/tader/switchboard/commit/cab69c581bd14fbcc7e5a6b780f52d71041fffcf))
+
+
+### Bug Fixes
+
+* report updater preflight failures and cancel queued jobs ([#61](https://github.com/tader/switchboard/issues/61)) ([87a475c](https://github.com/tader/switchboard/commit/87a475c1288ba6198c4194c55f65e7b92010f1c7))
+
 ## [0.14.1](https://github.com/tader/switchboard/compare/v0.14.0...v0.14.1) (2026-11-12)
 
 
