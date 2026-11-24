@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { type Env, endSession, requireBrowserOrigin, sessionCookie, loginAllowed, loginFailed, loginSucceeded, requireFullAccess, requireUser, startSession } from '../auth.ts';
 import { HttpError, badRequest } from '../http.ts';
 import {
-  acceptInvite, checkLogin, createToken, deleteOtherSessions, deleteSession, deleteToken, inviteUser, listTokens, setPassword, updateToken,
+  acceptInvite, checkLogin, createToken, deleteOtherSessions, deleteSession, deleteToken, inviteUser, inviteAllowsUsername, listTokens, setPassword, updateToken,
 } from '../users.ts';
 import { verifyPassword } from '../crypto.ts';
 import { one } from '../db.ts';
@@ -38,12 +38,13 @@ account.post('/auth/logout', requireBrowserOrigin, (c) => {
 account.get('/auth/invite/:token', (c) => {
   const user = inviteUser(c.req.param('token'));
   if (!user) throw badRequest('This link is invalid or has expired');
-  return c.json({ username: user.username, hasPassword: user.hasPassword });
+  return c.json({ username: user.username, hasPassword: user.hasPassword, allowUsername: inviteAllowsUsername(c.req.param('token')) });
 });
 
 account.post('/auth/invite', requireBrowserOrigin, async (c) => {
-  const { token, password } = await c.req.json<{ token: string; password: string }>();
-  const user = acceptInvite(token, password ?? '');
+  const { token, password, username } = await c.req.json<{ token: string; password: string; username?: string }>();
+  if (typeof token !== 'string' || typeof password !== 'string' || (username !== undefined && typeof username !== 'string')) throw badRequest('Invalid account details');
+  const user = acceptInvite(token, password, username);
   startSession(c, user.id);
   return c.json(user);
 });
