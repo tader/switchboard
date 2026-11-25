@@ -37,8 +37,9 @@ export class CDP {
       ...(headless ? ['--headless=new'] : []), ...extraArgs, 'about:blank',
     ];
     this.child = spawnProcess === spawn
-      ? spawn(process.execPath, [fileURLToPath(new URL('./authentication-browser-host.js', import.meta.url)), executable, ...args], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe', 'ipc'] })
+      ? spawn(process.execPath, [fileURLToPath(new URL('./authentication-browser-host.js', import.meta.url)), executable, ...args], { stdio: process.platform === 'win32' ? ['pipe', 'pipe', 'ignore', 'ignore', 'ignore', 'ipc'] : ['ignore', 'ignore', 'ignore', 'pipe', 'pipe', 'ipc'] })
       : spawnProcess(executable, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
+    if (process.platform === 'win32' && spawnProcess === spawn) { this.child.stdio[3] = this.child.stdin; this.child.stdio[4] = this.child.stdout; }
     children.add(this.child);
     this.child.once('exit', () => children.delete(this.child));
     this.child.once('error', () => children.delete(this.child));
