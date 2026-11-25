@@ -81,10 +81,10 @@ export async function selectTarget(channel: Channel, mode: Build['mode'], fetche
   if (!semver.valid(pkg.version) || (version && pkg.version !== version)) throw Error('Release version does not match its source');
   const target: Target = { version: pkg.version, revision, channel, notes, url, protocol: 1 };
   if (mode === 'runtime') {
-    const response = await fetcher(`https://github.com/${UPSTREAM}/releases/download/v${target.version}/runtime-darwin-${process.arch}.json`, { signal: AbortSignal.timeout(20_000) });
+    const response = await fetcher(`https://github.com/${UPSTREAM}/releases/download/v${target.version}/runtime-${process.platform}-${process.arch}.json`, { signal: AbortSignal.timeout(20_000) });
     if (!response.ok) throw Error('Prepared runtime is not ready');
     const m = await response.json() as NonNullable<Target['runtime']>;
-    if (m.origin !== UPSTREAM || m.version !== target.version || m.revision !== target.revision || m.protocol !== 1 || m.platform !== 'darwin' || m.arch !== process.arch || !['arm64', 'x64'].includes(m.arch) || m.archive !== `switchboard-runtime-darwin-${m.arch}.tar.gz` || !/^[a-f0-9]{64}$/.test(m.sha256)) throw Error('Incompatible prepared runtime');
+    if (m.origin !== UPSTREAM || m.version !== target.version || m.revision !== target.revision || m.protocol !== 1 || m.platform !== process.platform || m.arch !== process.arch || !['arm64', 'x64'].includes(m.arch) || m.archive !== `switchboard-runtime-${process.platform}-${m.arch}.tar.gz` || !/^[a-f0-9]{64}$/.test(m.sha256)) throw Error('Incompatible prepared runtime');
     target.runtime = m;
   }
   if (mode === 'compose' && !sourceBuild) target.image = await imageDigest(revision, fetcher);

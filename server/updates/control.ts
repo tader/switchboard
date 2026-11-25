@@ -23,6 +23,7 @@ function write(s: State) {
   const tmp = `${file()}.tmp`, fd = fs.openSync(tmp, 'w', 0o600);
   try { fs.writeFileSync(fd, JSON.stringify(s)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, file());
+  if (process.platform === 'win32') return;
   const dir = fs.openSync(config.dataDir, 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
 }
 let checking: Promise<void> | undefined;
