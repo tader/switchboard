@@ -33,9 +33,14 @@ import { attachPeerWebSockets, startPeerAgent } from './peers.ts';
 import { initializePeers } from './peer-settings.ts';
 import { stopProviderMcp } from './provider-mcp.ts';
 
-let parentDisconnected = false;
+const ownedProcess = typeof process.send === 'function';
 let stopOwnedServer: (() => Promise<void>) | undefined;
-if (process.send) process.once('disconnect', () => { parentDisconnected = true; void stopOwnedServer?.(); });
+if (ownedProcess) {
+  if (!process.connected) process.exit(1);
+  // Before lifecycle initialization completes there is no safe drain handler.
+  // Exit rather than leave an orphan waiting on a partial startup.
+  process.once('disconnect', () => { if (stopOwnedServer) void stopOwnedServer(); else process.exit(0); });
+}
 fs.mkdirSync(config.dataDir, { recursive: true });
 const unlockInstance = lockInstance(config.dataDir);
 ensureUpdateIdentity();
@@ -180,8 +185,8 @@ async function shutdownOwnedServer() {
     }
 }
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, shutdownOwnedServer);
-if (process.send) {
+if (ownedProcess) {
   stopOwnedServer = shutdownOwnedServer;
-  if (parentDisconnected || !process.connected) void shutdownOwnedServer();
+  if (!process.connected) void shutdownOwnedServer();
   process.on('message', (message: any) => { if (message?.kind === 'local-manager-shutdown') void shutdownOwnedServer(); });
 }
