@@ -31,7 +31,8 @@ export class CDP {
     this.buffer = Buffer.alloc(0);
     this.closed = false;
     const args = [
-      ...(process.platform === 'win32' ? ['--remote-debugging-io-pipes=3,4'] : []),
+      // Edge's compatibility relaunch discards inherited private pipe handles.
+      ...(process.platform === 'win32' && executable.toLowerCase().endsWith('msedge.exe') ? ['--edge-skip-compat-layer-relaunch'] : []),
       `--user-data-dir=${profile}`, '--remote-debugging-pipe', '--no-first-run',
       '--no-default-browser-check', '--disable-background-timer-throttling', '--disable-background-networking', '--disable-component-update',
       ...(headless ? ['--headless=new'] : []), ...extraArgs, 'about:blank',
