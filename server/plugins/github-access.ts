@@ -18,6 +18,8 @@ export interface GithubContext {
   caller?: Caller;
   githubConnectionId?: string | null;
   preferredConnectionId?: string;
+  /** Internal operation scope, never accepted from HTTP request data. */
+  installation?: boolean;
 }
 interface Credential { connectionId?: string; configured?: boolean; peer?: boolean }
 
@@ -88,7 +90,18 @@ async function request(url: string, accept: string, credential: Credential, ctx:
     return (await execute(ctx.user!, credential.connectionId, { method: 'GET', url, headers: Object.entries(headers) }, undefined, ctx.caller)).response;
   }
   if (credential.configured) headers.authorization = `Bearer ${config.githubToken}`;
-  try { return await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(fresh ? 10_000 : 120_000), ...(fresh ? { cache: 'no-store' as const } : {}) }); }
+  try {
+    const options: RequestInit = { headers, redirect: 'manual', signal: AbortSignal.timeout(fresh ? 10_000 : 120_000), ...(fresh ? { cache: 'no-store' as const } : {}) };
+    const response = await fetch(url, options);
+    const limited = response.status === 429 || response.status === 403 && (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after'));
+    const target = new URL(url);
+    if (!credential.configured && ctx.installation && config.pluginInstallGithubToken && limited
+        && target.origin === 'https://api.github.com' && !target.username && !target.password) {
+      await response.body?.cancel();
+      return await fetch(url, { ...options, headers: { ...headers, authorization: `Bearer ${config.pluginInstallGithubToken}` } });
+    }
+    return response;
+  }
   catch { throw badRequest('Could not reach GitHub; try again later'); }
 }
 

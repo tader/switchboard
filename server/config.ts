@@ -28,6 +28,8 @@ export const config = {
   webDir: path.resolve(env.WEB_DIR ?? path.join(root, 'web', 'dist')),
   /** Optional token for installing/updating plugins from private repositories and higher rate limits. */
   githubToken: env.GITHUB_TOKEN,
+  /** Rate-limit fallback for plugin installation only; never a service connection. */
+  pluginInstallGithubToken: env.PLUGIN_INSTALL_GITHUB_TOKEN,
   /** Days to keep the audit trail; 0 keeps it forever. */
   auditRetentionDays: Number(env.AUDIT_RETENTION_DAYS ?? 90),
   /** Watch plugin directories and reload on change. */

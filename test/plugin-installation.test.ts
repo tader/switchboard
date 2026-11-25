@@ -644,3 +644,65 @@ test('missing GitHub ref identifies the source and how to repair it', async () =
   await assert.rejects(gh.resolveCommit('owner/missing-ref', 'deleted-branch'), /could not resolve or validate ref deleted-branch.*Version & updates/);
   await assert.rejects(gh.previewInstall({ repo: 'owner/missing-ref', ref: 'deleted-branch', channel: 'branch' }), /could not resolve or validate ref deleted-branch.*Version & updates/);
 });
+
+test('desktop token is a rate-limit fallback restricted to installation flows', async () => {
+  const gh = await import('../server/plugins/github.ts');
+  const { repositoryFile } = await import('../server/plugins/github-access.ts');
+  const { config } = await import('../server/config.ts');
+  const previous = config.pluginInstallGithubToken;
+  const previousConfigured = config.githubToken;
+  const previousCatalog = catalog;
+  config.pluginInstallGithubToken = 'synthetic-install-token';
+  config.githubToken = undefined;
+  const token = 'Bearer synthetic-install-token';
+  try {
+    await fixture('owner/bootstrap-app', [{ id: 'bootstrap-app', dependencies: ['bootstrap-dependency'] }]);
+    await fixture('owner/bootstrap-dependency', [{ id: 'bootstrap-dependency' }]);
+    repos.get('owner/bootstrap-app')!.redirect = 'https://codeload.github.com';
+    catalog = { schemaVersion: 1, plugins: [{ id: 'bootstrap-dependency', name: 'Dependency', description: '', repo: 'owner/bootstrap-dependency', path: 'plugins/bootstrap-dependency' }] };
+    catalogResponse = (url, auth) => url.startsWith('https://api.github.com/repos/') && auth !== token
+      ? new Response(null, { status: 403, headers: { 'x-ratelimit-remaining': '0' } }) : undefined;
+    seen.length = 0;
+    await gh.install({ repo: 'owner/bootstrap-app' });
+    assert(seen.some(r => r.url === catalogUrl && r.authorization === token));
+    assert(seen.some(r => r.url.includes('/owner/bootstrap-dependency/') && r.authorization === token));
+    assert(seen.filter(r => r.url.startsWith('https://codeload.github.com/')).every(r => r.authorization === null));
+
+    seen.length = 0;
+    const checks = await gh.checkUpdates({ installation: true });
+    assert(checks.find(r => r.id === 'bootstrap-app')?.error);
+    await assert.rejects(gh.previewUpdates([{ id: 'bootstrap-app' }], { installation: true }), /rate limit/);
+    assert(seen.every(r => r.authorization !== token));
+
+    await fixture('owner/bootstrap-app', [{ id: 'bootstrap-app', version: '1.1.0', dependencies: ['bootstrap-new-dependency'] }]);
+    catalogResponse = (url, auth) => url === catalogUrl && auth !== token ? new Response(null, { status: 429 }) : undefined;
+    seen.length = 0;
+    await assert.rejects(gh.previewUpdates([{ id: 'bootstrap-app' }]), /rate limit/);
+    assert(seen.some(r => r.url === catalogUrl));
+    assert(seen.every(r => r.authorization !== token), 'update dependencies must not enable installation credentials');
+
+    seen.length = 0;
+    catalogResponse = () => new Response('public');
+    await repositoryFile({ repo: 'owner/public', path: 'plugin.json' }, { installation: true });
+    assert.deepEqual(seen.map(r => r.authorization), [null]);
+
+    for (const status of [401, 403, 404]) {
+      seen.length = 0;
+      catalogResponse = () => new Response(null, { status });
+      await assert.rejects(repositoryFile({ repo: 'owner/public', path: 'plugin.json' }, { installation: true }));
+      assert(seen.every(r => r.authorization === null));
+    }
+    seen.length = 0;
+    catalogResponse = () => new Response(null, { status: 429 });
+    await assert.rejects(repositoryFile({ repo: 'owner/public', path: 'plugin.json' }));
+    assert(seen.every(r => r.authorization === null));
+    seen.length = 0;
+    await assert.rejects(repositoryFile({ repo: 'owner/public', path: 'plugin.json' }, { user: alice, githubConnectionId: aliceToken, installation: true }));
+    assert(seen.every(r => r.authorization === 'Bearer alice-good'));
+  } finally {
+    config.pluginInstallGithubToken = previous;
+    config.githubToken = previousConfigured;
+    catalog = previousCatalog;
+    catalogResponse = undefined;
+  }
+});

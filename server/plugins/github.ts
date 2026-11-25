@@ -128,6 +128,7 @@ export async function previewUpdates(requests: UpdateRequest[], ctx: GithubConte
 }
 
 async function buildPlanNow(installations: { input: RepoRef; expectedId?: string }[] | undefined, updates: UpdateRequest[], ctx: GithubContext): Promise<PluginPlan> {
+  ctx = { ...ctx, installation: !!installations?.length && updates.length === 0 };
   const before = snapshot();
   const archives: RepositoryArchive[] = [];
   const fetched = new Map<string, Promise<RepositoryArchive>>();
@@ -362,6 +363,7 @@ export async function update(id: string, options: UpdateOptions = {}, ctx: Githu
 }
 
 export async function checkUpdates(ctx: GithubContext = {}) {
+  ctx = { ...ctx, installation: false };
   const installed = [...plugins.plugins.values()].filter((p) => p.source?.type === 'github');
   const latest = new Map<string, Promise<string>>();
   return Promise.all(installed.map(async (p) => {
