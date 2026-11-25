@@ -35,8 +35,9 @@ export function validateSettings(s: Settings) {
   for (const p of [s.dataDir, s.stateDir]) if (!path.isAbsolute(p)) throw Error('Data and updater state paths must be absolute');
   if (s.compose?.dataVolume && (s.dataDir !== '/data' || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(s.compose.dataVolume))) throw Error('Named-volume mode requires exact dataDir /data and an explicit volume name');
   const canonical = (p: string): string => fs.existsSync(p) ? fs.realpathSync(p) : path.join(canonical(path.dirname(p)), path.basename(p));
-  const data = canonical(s.dataDir), state = canonical(s.stateDir);
-  if (s.initialRelease && (state === canonical(s.initialRelease) || state.startsWith(canonical(s.initialRelease) + path.sep))) throw Error('Updater state must be outside the application source tree');
+  const comparison = (p: string) => process.platform === 'win32' ? canonical(p).toLowerCase() : canonical(p);
+  const data = comparison(s.dataDir), state = comparison(s.stateDir);
+  if (s.initialRelease && (state === comparison(s.initialRelease) || state.startsWith(comparison(s.initialRelease) + path.sep))) throw Error('Updater state must be outside the application source tree');
   if (data === state || data.startsWith(state + path.sep) || state.startsWith(data + path.sep)) throw Error('Updater state must be outside data and backup');
   const url = new URL(s.appUrl);
   if (url.username || url.password || url.pathname !== '/' || (url.protocol !== 'https:' && !(url.protocol === 'http:' && (['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || s.mode === 'compose' && s.compose?.privateNetwork === true && url.hostname === s.compose.service || s.mode === 'runtime' && Object.values(os.networkInterfaces()).flat().some(i => i?.address === url.hostname.replace(/^\[|\]$/g, '')))))) throw Error('Use HTTPS or loopback HTTP for appUrl');

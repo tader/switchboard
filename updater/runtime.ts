@@ -22,7 +22,8 @@ export function inspectArchive(archive: Buffer) {
     if (bytes.subarray(at, at + 512).every(b => b === 0)) return;
     const prefix = string(at + 345, 155), name = (prefix ? prefix + '/' : '') + string(at, 100);
     const type = string(at + 156, 1); safeEntry(name, type === '5' ? 'Directory' : type === '0' || !type ? 'File' : 'Unsafe');
-    if (names.has(name)) throw Error('Duplicate archive entry'); names.add(name);
+    const key = process.platform === 'win32' ? name.replace(/\/$/, '').toLowerCase() : name;
+    if (names.has(key)) throw Error('Duplicate archive entry'); names.add(key);
     const sizeText = string(at + 124, 12).trim(); if (!/^[0-7]+$/.test(sizeText)) throw Error('Invalid archive size');
     const size = parseInt(sizeText, 8); const next = at + 512 + Math.ceil(size / 512) * 512;
     if (next > bytes.length) throw Error('Truncated archive'); at = next;

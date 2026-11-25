@@ -7,8 +7,7 @@ import { CDP, findBrowser } from '../server/authentication-browser.ts';
 const profile=fs.mkdtempSync(path.join(os.tmpdir(),'browser-pipe-rehearsal-'));
 const direct = new CDP(await findBrowser(undefined,'edge'),profile,{headless:true,spawnProcess:(file, args, options)=>{
   const child=spawn(file,args,{...options,stdio:['ignore','ignore','pipe','pipe','pipe']});
-  // Synthetic profile only: these diagnostics never run against saved sign-ins.
-  child.stderr.on('data',chunk=>console.error(String(chunk).slice(0,2000)));
+  child.stderr.on('data',()=>{});
   child.on('exit',code=>console.log('Synthetic direct browser exit:',code));return child;
 }});
 try {await direct.call('Browser.getVersion');console.log('PASS: direct Windows browser pipes');} finally {await direct.close();}
