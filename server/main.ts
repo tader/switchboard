@@ -33,7 +33,6 @@ import { attachPeerWebSockets, startPeerAgent } from './peers.ts';
 import { initializePeers } from './peer-settings.ts';
 import { stopProviderMcp } from './provider-mcp.ts';
 
-if (process.send) process.once('disconnect', () => process.kill(process.pid, 'SIGTERM'));
 fs.mkdirSync(config.dataDir, { recursive: true });
 const unlockInstance = lockInstance(config.dataDir);
 ensureUpdateIdentity();
@@ -166,8 +165,7 @@ lifecycle.drain = async () => {
   return draining;
 };
 if (lifecycle.state === 'starting') await lifecycle.open();
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(sig, async () => {
+async function shutdownOwnedServer() {
     try {
       await lifecycle.drain();
       server.close();
@@ -177,5 +175,9 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const) {
       // Retain the lease and gated process: an incomplete cleanup is not a safe snapshot boundary.
       console.error('Shutdown incomplete. The instance remains gated; owner recovery is required.');
     }
-  });
+}
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, shutdownOwnedServer);
+if (process.send) {
+  process.once('disconnect', shutdownOwnedServer);
+  process.on('message', (message: any) => { if (message?.kind === 'local-manager-shutdown') void shutdownOwnedServer(); });
 }

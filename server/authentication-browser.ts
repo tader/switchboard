@@ -7,6 +7,7 @@ process.once('exit', () => { for (const child of children) child.kill('SIGTERM')
 
 export async function findBrowser(configured?: string, family?: string) {
   const candidates = configured ? [configured] : [
+    ...(process.platform === 'win32' ? [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].filter(Boolean).flatMap(root => [`${root}/Microsoft/Edge/Application/msedge.exe`, `${root}/Google/Chrome/Application/chrome.exe`]) : []),
     '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     '/usr/bin/microsoft-edge', '/usr/bin/microsoft-edge-stable', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
@@ -30,6 +31,7 @@ export class CDP {
     this.buffer = Buffer.alloc(0);
     this.closed = false;
     const args = [
+      ...(process.platform === 'win32' ? ['--remote-debugging-io-pipes=3,4'] : []),
       `--user-data-dir=${profile}`, '--remote-debugging-pipe', '--no-first-run',
       '--no-default-browser-check', '--disable-background-timer-throttling', '--disable-background-networking', '--disable-component-update',
       ...(headless ? ['--headless=new'] : []), ...extraArgs, 'about:blank',

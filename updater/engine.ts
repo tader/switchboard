@@ -5,7 +5,7 @@ import net from 'node:net';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DatabaseSync, backup } from 'node:sqlite';
-import { prepareRuntime } from './runtime.ts';
+import { prepareRuntime, runtimeNode } from './runtime.ts';
 import { randomBytes } from 'node:crypto';
 import type { Job } from '../server/updates/control.ts';
 import type { Target } from '../server/updates/releases.ts';
@@ -27,6 +27,7 @@ export function atomic(file: string, value: unknown) {
   const temp = `${file}.${process.pid}.tmp`;
   const fd = fs.openSync(temp, 'w', 0o600); fs.writeFileSync(fd, JSON.stringify(value, null, 2)); fs.fsyncSync(fd); fs.closeSync(fd);
   fs.renameSync(temp, file);
+  if (process.platform === 'win32') return;
   const dir = fs.openSync(path.dirname(file), 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
 }
 export function validateSettings(s: Settings) {
@@ -201,7 +202,7 @@ export class Controller {
     // Only migrations run: no main.ts, extension loading, networking or credential decryption.
     const script = "import('./server/db.ts').then(m=>{m.initDb();m.db.close()})";
     try {
-      if (this.s.mode !== 'compose') await command(this.s.mode === 'runtime' ? path.join(target, 'bin/node') : process.execPath, ['--input-type=module', '-e', script], target, { ...process.env, SWITCHBOARD_DATA_DIR: dir });
+      if (this.s.mode !== 'compose') await command(this.s.mode === 'runtime' ? runtimeNode(target) : process.execPath, ['--input-type=module', '-e', script], target, { ...process.env, SWITCHBOARD_DATA_DIR: dir });
       else await command('docker', ['run', '--rm', '--network=none', '--entrypoint', 'node', '--mount', this.s.compose?.stateVolume ? `type=volume,src=${this.s.compose.stateVolume},dst=/managed-state` : `type=bind,src=${fs.realpathSync(dir)},dst=/rehearsal`, '-e', this.s.compose?.stateVolume ? 'SWITCHBOARD_DATA_DIR=/managed-state/rehearsal' : 'SWITCHBOARD_DATA_DIR=/rehearsal', target, '--input-type=module', '-e', script]);
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
@@ -221,6 +222,18 @@ export class Controller {
       if (lock && !this.childAlive()) {
         let alive = true; try { process.kill(lock.pid, 0); } catch (e: any) { if (e.code === 'ESRCH') alive = false; else throw e; }
         if (!alive && lock.host === os.hostname()) { fs.rmSync(path.join(this.s.dataDir, '.server-lock'), { force: true }); lock = undefined; }
+      }
+      if (lock && process.platform === 'win32') {
+        const owned = this.child;
+        if (!owned?.connected || owned.pid !== lock.pid || owned.exitCode !== null) throw Error('Stop the unmanaged server manually before adoption');
+        const exited = new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => { owned.off('exit', done); reject(Error('Server did not stop; refusing backup')); }, 45000);
+          const done = () => { clearTimeout(timeout); resolve(); };
+          owned.once('exit', done);
+        });
+        owned.send({ kind: 'local-manager-shutdown' });
+        await exited;
+        lock = undefined;
       }
       if (lock) {
         if (lock.host !== os.hostname() || !Number.isSafeInteger(lock.pid) || lock.pid < 2) throw Error('Cannot stop a foreign instance');
@@ -253,11 +266,11 @@ export class Controller {
     else {
       if (fs.existsSync(path.join(this.s.dataDir, '.server-lock'))) throw Error('Server lock is still held');
       if (this.s.mode === 'runtime') await assertListenAvailable(this.s.env.SWITCHBOARD_HOST ?? '127.0.0.1', Number(this.s.env.SWITCHBOARD_PORT ?? (new URL(this.s.appUrl).port || 8770)));
-      const child = spawn(this.s.mode === 'runtime' ? path.join(release, 'bin/node') : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
+      const child = spawn(this.s.mode === 'runtime' ? runtimeNode(release) : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
       this.child = child; child.on('message', message => this.onMessage?.(message));
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       atomic(path.join(this.s.stateDir, 'child.json'), { pid: child.pid }); child.unref();
-      const started = await command('ps', ['-p', String(child.pid), '-o', 'lstart=']);
+      const started = process.platform === 'win32' ? undefined : await command('ps', ['-p', String(child.pid), '-o', 'lstart=']);
       atomic(path.join(this.s.stateDir, 'child.json'), { pid: child.pid, started });
     }
   }
@@ -307,7 +320,7 @@ export class Controller {
     // Restrict every backup entry, even if original data had permissive modes.
     const restrict = (p: string) => { const st = fs.lstatSync(p); if (st.isSymbolicLink()) return; fs.chmodSync(p, st.isDirectory() ? 0o700 : 0o600 | (st.mode & 0o100)); if (st.isDirectory()) for (const name of fs.readdirSync(p)) restrict(path.join(p, name)); }; restrict(dir);
     fs.rmSync(path.join(dir, '.server-lock'), { force: true });
-    const sync = (p: string) => { const st = fs.lstatSync(p); if (st.isSymbolicLink()) return; if (st.isDirectory()) for (const n of fs.readdirSync(p)) sync(path.join(p, n)); const fd = fs.openSync(p, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }; sync(dir);
+    const sync = (p: string) => { const st = fs.lstatSync(p); if (st.isSymbolicLink()) return; if (st.isDirectory()) for (const n of fs.readdirSync(p)) sync(path.join(p, n)); if (process.platform === 'win32' && st.isDirectory()) return; const fd = fs.openSync(p, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); } }; sync(dir);
     this.journal!.backup = dir; this.save();
   }
   async rollback() {

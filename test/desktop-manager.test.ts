@@ -17,7 +17,11 @@ test('prepared runtime archives reject links, traversal, metadata and truncation
   assert.throws(() => inspectArchive(gzipSync(Buffer.alloc(512,1))));
   safeEntry('node_modules/package/index.js', 'File');
   const manifest = { origin: 'tader/switchboard' as const, version: '1.0.0', revision: 'a'.repeat(40), protocol: 1 as const, platform: 'darwin' as const, arch: 'arm64' as const, archive: 'switchboard-runtime-darwin-arm64.tar.gz', sha256: 'b'.repeat(64) };
-  validateManifest(manifest, manifest, 'arm64');
+  validateManifest(manifest, manifest, 'arm64', 'darwin');
+  const windows = { ...manifest, platform: 'win32' as const, archive: 'switchboard-runtime-win32-arm64.tar.gz' };
+  validateManifest(windows, windows, 'arm64', 'win32');
+  assert.throws(() => validateManifest(windows, windows, 'arm64', 'darwin'));
+  for (const name of ['C:/escape', 'folder/file:stream', 'CON', 'folder/nul.txt', 'trailing.']) assert.throws(() => safeEntry(name, 'File'));
   assert.throws(() => validateManifest(manifest, { version: '2.0.0', revision: manifest.revision }, 'arm64'));
   assert.throws(() => validateManifest(manifest, manifest, 'x64'));
 });

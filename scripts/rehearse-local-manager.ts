@@ -13,7 +13,7 @@ const url = `http://127.0.0.1:${port}`;
 const settings = { instance: 'local-manager', mode: 'runtime', initialRelease: runtime, stateDir: path.join(root, 'updater'), dataDir: path.join(root, 'data'), appUrl: url, env: { SWITCHBOARD_HOST: '127.0.0.1', SWITCHBOARD_PORT: String(port), SWITCHBOARD_PUBLIC_URL: url, SWITCHBOARD_UPDATE_CHECKS: 'false', SWITCHBOARD_WATCH_PLUGINS: 'false' } };
 let active: ReturnType<typeof launch> | undefined;
 function launch() {
-  const child = spawn(path.join(runtime, 'bin/node'), ['--disable-warning=ExperimentalWarning', 'updater/desktop.ts'], { cwd: runtime, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(path.join(runtime, 'bin', process.platform === 'win32' ? 'node.exe' : 'node'), ['--disable-warning=ExperimentalWarning', 'updater/desktop.ts'], { cwd: runtime, stdio: ['pipe', 'pipe', 'pipe'] });
   const events: any[] = []; readline.createInterface({ input: child.stdout }).on('line', line => { events.push(JSON.parse(line)); });
   child.stderr.on('data', () => {});
   const send = (action: string) => child.stdin.write(JSON.stringify({ action, ...(action === 'start' ? { settings } : {}) }) + '\n');

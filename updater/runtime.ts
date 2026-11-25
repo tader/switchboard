@@ -2,15 +2,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { x as extract } from 'tar';
+export const runtimeNode = (root: string) => path.join(root, 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
 import type { Target } from '../server/updates/releases.ts';
 
-export interface RuntimeManifest { origin: 'tader/switchboard'; version: string; revision: string; protocol: 1; platform: 'darwin'; arch: 'arm64' | 'x64'; archive: string; sha256: string }
-export function validateManifest(m: RuntimeManifest, t: Pick<Target, 'version' | 'revision'>, arch = process.arch) {
-  if (m.origin !== 'tader/switchboard' || m.version !== t.version || m.revision !== t.revision || m.protocol !== 1 || m.platform !== 'darwin' || m.arch !== arch || !['arm64', 'x64'].includes(m.arch) || m.archive !== `switchboard-runtime-darwin-${m.arch}.tar.gz` || !/^[a-f0-9]{64}$/.test(m.sha256)) throw Error('Incompatible prepared runtime');
+export interface RuntimeManifest { origin: 'tader/switchboard'; version: string; revision: string; protocol: 1; platform: 'darwin' | 'win32'; arch: 'arm64' | 'x64'; archive: string; sha256: string }
+export function validateManifest(m: RuntimeManifest, t: Pick<Target, 'version' | 'revision'>, arch = process.arch, platform = process.platform === 'win32' ? 'win32' : 'darwin') {
+  if (m.origin !== 'tader/switchboard' || m.version !== t.version || m.revision !== t.revision || m.protocol !== 1 || m.platform !== platform || m.arch !== arch || !['arm64', 'x64'].includes(m.arch) || m.archive !== `switchboard-runtime-${platform}-${m.arch}.tar.gz` || !/^[a-f0-9]{64}$/.test(m.sha256)) throw Error('Incompatible prepared runtime');
 }
 export function safeEntry(name: string, type: string) {
+  if (name.split('/').some(part => /[<>:"|?*]/.test(part) || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) throw Error('Unsafe runtime archive name');
   if (!name || name.startsWith('/') || name.includes('\\') || name.split('/').includes('..') || !['File', 'Directory', 'OldFile'].includes(type)) throw Error('Unsafe runtime archive');
 }
 export function inspectArchive(archive: Buffer) {
@@ -29,10 +30,10 @@ export function inspectArchive(archive: Buffer) {
   throw Error('Missing archive terminator');
 }
 export async function prepareRuntime(t: Target, stateDir: string, fetcher: typeof fetch = fetch): Promise<string> {
-  if (process.platform !== 'darwin' || !['arm64', 'x64'].includes(process.arch) || t.channel !== 'stable') throw Error('Prepared runtimes require a stable macOS release');
+  if (!['darwin', 'win32'].includes(process.platform) || !['arm64', 'x64'].includes(process.arch) || t.channel !== 'stable') throw Error('Prepared runtimes require a stable desktop release');
   const base = `https://github.com/tader/switchboard/releases/download/v${t.version}/`;
   const get = async (name: string) => { const r = await fetcher(base + name, { signal: AbortSignal.timeout(300_000) }); if (!r.ok) throw Error('Prepared runtime is not published yet'); if (r.url && !['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com'].includes(new URL(r.url).hostname)) throw Error('Untrusted runtime origin'); return r; };
-  const m = await (await get(`runtime-darwin-${process.arch}.json`)).json() as RuntimeManifest; validateManifest(m, t);
+  const m = await (await get(`runtime-${process.platform}-${process.arch}.json`)).json() as RuntimeManifest; validateManifest(m, t);
   if (t.runtime && (t.runtime.sha256 !== m.sha256 || t.runtime.arch !== m.arch || t.runtime.revision !== m.revision)) throw Error('Selected runtime identity changed');
   const release = path.join(stateDir, 'releases', t.revision);
   if (fs.existsSync(path.join(release, '.prepared'))) { const saved = JSON.parse(fs.readFileSync(path.join(release, 'runtime.json'), 'utf8')); validateManifest(saved, t); if (saved.sha256 !== m.sha256) throw Error('Runtime identity changed'); return release; }
@@ -43,9 +44,9 @@ export async function prepareRuntime(t: Target, stateDir: string, fetcher: typeo
     try { for await (const chunk of r.body as any) { size += chunk.length; if (size > 512 * 1024 * 1024) throw Error('Runtime exceeds download limit'); hash.update(chunk); fs.writeFileSync(fd, chunk); } } finally { fs.closeSync(fd); }
     if (hash.digest('hex') !== m.sha256) throw Error('Runtime checksum mismatch');
     inspectArchive(fs.readFileSync(archive));
-    await promisify(execFile)('/usr/bin/tar', ['-xzf', archive, '-C', staging], { timeout: 120_000 });
+    await extract({ file: archive, cwd: staging, strict: true, preservePaths: false });
     const b = JSON.parse(fs.readFileSync(path.join(staging, 'build-info.json'), 'utf8')); const pkg = JSON.parse(fs.readFileSync(path.join(staging, 'package.json'), 'utf8'));
-    if (b.version !== t.version || b.revision !== t.revision || pkg.version !== t.version || pkg.managedUpgradeProtocol !== 1 || !fs.existsSync(path.join(staging, 'bin/node'))) throw Error('Runtime build identity mismatch');
+    if (b.version !== t.version || b.revision !== t.revision || pkg.version !== t.version || pkg.managedUpgradeProtocol !== 1 || !fs.existsSync(runtimeNode(staging))) throw Error('Runtime build identity mismatch');
     fs.writeFileSync(path.join(staging, 'runtime.json'), JSON.stringify(m), { mode: 0o600 }); fs.writeFileSync(path.join(staging, '.prepared'), '', { mode: 0o600 }); fs.rmSync(release, { recursive: true, force: true }); fs.renameSync(staging, release); return release;
   } finally { fs.rmSync(archive, { force: true }); fs.rmSync(staging, { recursive: true, force: true }); }
 }
