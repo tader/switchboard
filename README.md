@@ -239,3 +239,7 @@ guide for the operation and authentication contracts.
 ### Reusable credentials
 
 The **Credentials** page manages named PAT/API-key credentials and compatible OAuth grants used by several connections. Promote an existing stored credential, then select it for another connection; rotate or reconnect once for all links. Supported auth methods also offer **Use existing credentials** during connection setup. See the in-app reusable credentials guide for ownership, OAuth scope boundaries, and management APIs. Existing private connections are unchanged until you opt into sharing.
+
+### Desktop plugin installation token
+
+The desktop apps can supply `SWITCHBOARD_PLUGIN_INSTALL_GITHUB_TOKEN` to the local server at startup. It is used only after anonymous GitHub rate limiting during plugin catalog browsing and installation, including previews and dependencies. It is not used for plugin updates, server updates or service connections. Changes in desktop settings take effect for the server after stopping and starting it. Keep this token out of settings files and command arguments; desktop apps store it in the operating system credential store.
