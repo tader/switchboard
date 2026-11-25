@@ -73,6 +73,8 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/prepared" | Out-Null
           tar -xzf artifacts/switchboard-runtime-win32-${{ matrix.arch }}.tar.gz -C "$env:RUNNER_TEMP/prepared"
           node scripts/rehearse-local-manager.ts "$env:RUNNER_TEMP/prepared"
+          if ($LASTEXITCODE) { throw 'Runtime lifecycle rehearsal failed' }
+          node scripts/rehearse-windows-browser.ts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: 'runtime-win32-${{ matrix.arch }}', path: artifacts/}
       - if: inputs.publish

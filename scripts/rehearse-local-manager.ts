@@ -20,6 +20,7 @@ function launch() {
   const wait = async (event: string) => { const until = Date.now() + 100_000; while (Date.now() < until) { const index = events.findIndex(e => e.event === event); if (index >= 0) return events.splice(index, 1)[0]; if (events.some(e => e.event === 'error')) throw Error('Supervisor error'); await new Promise(r => setTimeout(r, 100)); } throw Error(`Timed out: ${event}`); };
   return { child, send, wait, events };
 }
+async function exited(child: ReturnType<typeof spawn>) { if (child.exitCode !== null || child.signalCode !== null) return; await new Promise(r => child.once('exit', r)); }
 async function offline() { const end = Date.now() + 50_000; while (Date.now() < end) { try { await fetch(url + '/readyz', { signal: AbortSignal.timeout(500) }); } catch { return; } await new Promise(r => setTimeout(r, 100)); } throw Error('Owned server remained running'); }
 try {
   active = launch(); active.send('start');
@@ -29,9 +30,9 @@ try {
   active.send('status'); const paired = await active.wait('paired'); assert.equal(paired.event, 'paired');
   for (const endpoint of ['/api/me', '/api/admin/updates', '/api/connections']) assert.equal((await fetch(url + endpoint, { headers: { authorization: 'Bearer swbu_synthetic-narrow-credential' } })).status, 401);
   active.send('status'); const status = await active.wait('status'); assert.equal(status.ready, true); assert.equal(status.attention, 0);
-  active.send('quit'); await new Promise(r => active!.child.once('exit', r)); await offline();
+  active.send('quit'); await exited(active.child); await offline();
   active = launch(); active.send('start'); assert.equal((await active.wait('started')).setupUrl, undefined); active.send('status'); await active.wait('paired');
-  active.child.kill('SIGKILL'); await new Promise(r => active!.child.once('exit', r)); await offline();
+  active.child.kill('SIGKILL'); await exited(active.child); await offline();
   active = launch(); active.send('start'); await active.wait('started'); active.send('status'); await active.wait('paired');
   // Only the owned synthetic server PID is signalled. Three restart attempts, then stop.
   for (let crash = 0; crash < 4; crash++) {
@@ -42,9 +43,9 @@ try {
       while (true) { const next = JSON.parse(fs.readFileSync(path.join(settings.stateDir, 'child.json'), 'utf8')).pid; try { if (next !== pid && (await fetch(url + '/readyz')).ok) break; } catch {} if (Date.now() > until) throw Error('Owned restart timed out'); await new Promise(r => setTimeout(r, 100)); }
     }
   }
-  await active.wait('server-failed'); await new Promise(r => active!.child.once('exit', r)); await offline();
+  await active.wait('server-failed'); await exited(active.child); await offline();
   active = launch(); active.send('start'); await active.wait('started'); active.send('status'); await active.wait('paired');
-  active.child.stdin.end(); await new Promise(r => active!.child.once('exit', r)); await offline();
+  active.child.stdin.end(); await exited(active.child); await offline();
   console.log('PASS: independent prepared runtime, browser enrollment, private pairing, general API rejection, restart/adoption, manager crash cleanup, parent-pipe cleanup, bounded owned-server restarts');
   fs.writeFileSync(path.join(root, 'result.json'), JSON.stringify({ passed: true, port, checks: 8 })); console.log(`Artifacts: ${root}`);
 } finally { if (active?.child.exitCode === null && active.child.signalCode === null) { active.child.stdin.end(); } }
