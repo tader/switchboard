@@ -1,6 +1,8 @@
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import https from 'node:https';
+import tls from 'node:tls';
+import { X509Certificate } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { createUnzip, createBrotliDecompress } from 'node:zlib';
 import { badRequest } from './http.ts';
@@ -25,10 +27,10 @@ export function privateAddress(ip: string): boolean {
   return v === '::' || v === '::1' || v.startsWith('fc') || v.startsWith('fd') || /^fe[89ab]/.test(v) || v.startsWith('ff');
 }
 
-export async function publicOAuthFetch(url: URL, init: RequestInit | undefined, signal: AbortSignal): Promise<Response> {
+export async function publicOAuthFetch(url: URL, init: RequestInit | undefined, signal: AbortSignal, trust?: {ca: string[]; allowPrivate?: boolean}): Promise<Response> {
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   const addresses = net.isIP(hostname) ? [{ address: hostname, family: net.isIP(hostname) }] : await dns.lookup(hostname, { all: true });
-  if (!addresses.length || addresses.some(a => privateAddress(a.address))) throw badRequest('OAuth discovery points to a private or unresolved address');
+  if (!addresses.length || (!trust?.allowPrivate && addresses.some(a => privateAddress(a.address)))) throw badRequest('OAuth discovery points to a private or unresolved address');
   const address = addresses[0];
   const headers = new Headers(init?.headers);
   headers.set('accept-encoding', 'identity');
@@ -36,7 +38,7 @@ export async function publicOAuthFetch(url: URL, init: RequestInit | undefined, 
   if (body != null && typeof body !== 'string' && !(body instanceof URLSearchParams) && !(body instanceof Uint8Array)) throw badRequest('Unsupported OAuth request body');
   return new Promise((resolve, reject) => {
     const req = https.request(url, {
-      method: init?.method ?? 'GET', headers: Object.fromEntries(headers), signal,
+      ...(trust ? {agent:false,ca:trust.ca,allowPartialTrustChain:true} : {}), method: init?.method ?? 'GET', headers: Object.fromEntries(headers), signal,
       lookup: (_host, options, callback) => {
         if (typeof options === 'object' && options.all) callback(null, addresses);
         else callback(null, address.address, address.family);
@@ -81,4 +83,30 @@ export async function limitedText(response: Response, limit: number): Promise<st
       if (next.done) return chunks.join('');
     }
   } finally { reader.releaseLock(); }
+}
+
+/** Inspect only TLS; no HTTP data is sent before approval. Reuse the public DNS policy. */
+export async function inspectMetadataCertificate(url: URL, allowPrivate: boolean, ca?: string[]): Promise<string> {
+  const host=url.hostname.replace(/^\[|\]$/g,'');
+  const addresses=net.isIP(host)?[{address:host,family:net.isIP(host)}]:await dns.lookup(host,{all:true});
+  if(!addresses.length || (!allowPrivate && addresses.some(a=>privateAddress(a.address)))) throw badRequest('OAuth discovery points to a private or unresolved address');
+  return new Promise((resolve,reject)=>{
+    const socket=tls.connect({host:addresses[0].address,port:Number(url.port||443),servername:net.isIP(host)?undefined:host,rejectUnauthorized:!!ca,ca,allowPartialTrustChain:true},()=>{
+      try {
+        let cert=socket.getPeerCertificate(true);
+        const mismatch=tls.checkServerIdentity(host,cert); if(mismatch) throw mismatch;
+        const seen=new Set<string>(); let chosen:string|undefined;
+        while(cert?.raw && !seen.has(cert.fingerprint256)) {
+          seen.add(cert.fingerprint256); const x=new X509Certificate(cert.raw);
+          if(Date.now()<Date.parse(x.validFrom)||Date.now()>Date.parse(x.validTo)) throw badRequest('Certificate is expired or not yet valid');
+          if(x.ca || (x.checkIssued(x)&&x.verify(x.publicKey))) chosen=x.toString();
+          cert=cert.issuerCertificate;
+        }
+        if(!chosen) throw badRequest('No usable issuing certificate was supplied; contact IT');
+        resolve(chosen);
+      } catch(e){reject(e);} finally{socket.destroy();}
+    });
+    const deadline=setTimeout(()=>socket.destroy(new Error('Certificate inspection timed out')),5000);
+    socket.once('close',()=>clearTimeout(deadline));socket.on('error',reject);
+  });
 }

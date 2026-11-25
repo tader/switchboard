@@ -4,14 +4,15 @@
 //    lists the client's redirect URIs. Preferred by the MCP specification.
 //  - Dynamic Client Registration (RFC 7591) at /oauth/register, for clients that do not support the above.
 //  - A plain URL client id whose redirect URI is on the same origin (IndieAuth style), used by Switchboards.
-import { publicOAuthFetch, limitedText } from '../public-network.ts';
+import { publicOAuthFetch, limitedText, inspectMetadataCertificate } from '../public-network.ts';
 import { callbackUri } from '../oauth-redirect.ts';
 import crypto from 'node:crypto';
+import { metadataAuthorities, certificateFailure, offerCertificate, takeCertificate, saveCertificate, certificateDetails } from '../metadata-trust.ts';
 import { Hono } from 'hono';
-import { type Env, requireFullAccess, requireUser } from '../auth.ts';
+import { type Env, requireFullAccess, requireUser, requireAdmin } from '../auth.ts';
 import { config } from '../config.ts';
 import { randomToken, sha256 } from '../crypto.ts';
-import { now, one, run } from '../db.ts';
+import { now, one, run, all } from '../db.ts';
 import { badRequest } from '../http.ts';
 import { listConnections } from '../connections.ts';
 import { createToken, deleteToken, getUser } from '../users.ts';
@@ -66,18 +67,15 @@ function redirectAllowed(requested: string, allowed: string[]) {
 // With a plain-http public URL (local development) these checks are relaxed.
 const devMode = !config.secure;
 
-const metadataCache = new Map<string, { at: number; doc: any }>();
-
 async function fetchClientMetadata(clientId: string): Promise<{ client_name?: string; redirect_uris: string[] }> {
-  const hit = metadataCache.get(clientId);
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.doc;
   const url = new URL(clientId);
   if (url.username || url.password || url.hash) throw badRequest('Invalid client metadata URL');
   let res: Response;
   try {
-    res = await (devMode ? fetch(url, { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(5000) }) : publicOAuthFetch(url, { headers: { accept: 'application/json' } }, AbortSignal.timeout(5000)));
+    res = await (devMode && url.protocol === 'http:' ? fetch(url, { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(5000) }) : publicOAuthFetch(url, { headers: { accept: 'application/json' } }, AbortSignal.timeout(5000), {ca:metadataAuthorities(url.origin),allowPrivate:devMode}));
     if (res.status >= 300 && res.status < 400) { await res.body?.cancel(); throw badRequest('Client metadata redirects are not supported'); }
   } catch (e: any) {
+    if(certificateFailure(e)) { const error=badRequest('Switchboard doesn’t trust this certificate.'); Object.assign(error,{code:'oauth_metadata_certificate_untrusted'}); throw error; }
     throw badRequest(`Could not fetch the client metadata document: ${e.cause?.message ?? e.message}`);
   }
   if (!res.ok) { await res.body?.cancel(); throw badRequest(`The client metadata document responded ${res.status}`); }
@@ -92,7 +90,6 @@ async function fetchClientMetadata(clientId: string): Promise<{ client_name?: st
   if (!Array.isArray(doc.redirect_uris) || !doc.redirect_uris.length) throw badRequest('The client metadata document lists no redirect_uris');
   for (const uri of doc.redirect_uris) callbackUri(uri);
   if (doc.token_endpoint_auth_method && doc.token_endpoint_auth_method !== 'none') throw badRequest('Only public clients (token_endpoint_auth_method "none") are supported');
-  metadataCache.set(clientId, { at: Date.now(), doc });
   return doc;
 }
 
@@ -146,6 +143,33 @@ async function validate(p: AuthorizeParams) {
 /** Pages and API for the signed-in user. */
 export const authorizeApi = new Hono<Env>();
 authorizeApi.use('*', requireUser, requireFullAccess);
+
+function reviewUrl(value: unknown) {
+  let url:URL; try{url=new URL(String(value));}catch{throw badRequest('Invalid metadata URL');}
+  if(url.protocol!=='https:' || url.username || url.password || url.hash || url.pathname==='/') throw badRequest('Invalid metadata URL'); return url;
+}
+authorizeApi.post('/certificate-review', requireAdmin, async c=>{
+  if(!c.get('sessionToken')) throw badRequest('Use an administrator browser session');
+  const {client_id}=await c.req.json(); const url=reviewUrl(client_id);
+  try { const r=await publicOAuthFetch(url,undefined,AbortSignal.timeout(5000),{ca:metadataAuthorities(url.origin),allowPrivate:devMode}); await r.body?.cancel(); throw badRequest('The certificate is already trusted; retry sign-in'); }
+  catch(e){if(!certificateFailure(e)) throw e;}
+  const pem=await inspectMetadataCertificate(url,devMode);
+  await inspectMetadataCertificate(url,devMode,[pem]);
+  return c.json(offerCertificate(c.get('sessionToken')!,url.href,pem));
+});
+authorizeApi.post('/certificate-trust',requireAdmin,async c=>{
+  const {reviewToken}=await c.req.json(); const r=takeCertificate(c.get('sessionToken')??'',reviewToken);
+  await inspectMetadataCertificate(new URL(r.url),devMode,[r.pem]);
+  saveCertificate(r.origin,r.pem,c.get('user').id); return c.json({ok:true});
+});
+export const certificateApi=new Hono<Env>();
+certificateApi.use('*',requireUser,requireAdmin);
+certificateApi.get('/',c=>c.json(all<any>('SELECT m.*,u.username AS approved_by_name FROM metadata_certificates m LEFT JOIN users u ON u.id=m.approved_by ORDER BY m.created_at DESC').map(({pem,...r})=>({...r,...certificateDetails(pem)}))));
+certificateApi.delete('/:id',c=>{
+  if(!c.get('sessionToken')) throw badRequest('Use an administrator browser session');
+  const r=one('SELECT * FROM metadata_certificates WHERE id = ?',c.req.param('id'));
+  if(r){run('INSERT INTO metadata_certificate_events(origin,fingerprint,event,user_id,created_at) VALUES(?,?,?,?,?)',r.origin,certificateDetails(r.pem).fingerprint,'removed',c.get('user').id,Date.now());run('DELETE FROM metadata_certificates WHERE id = ?',r.id);}return c.json({ok:true});
+});
 
 authorizeApi.get('/', async (c) => {
   const p = c.req.query() as AuthorizeParams;
