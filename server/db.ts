@@ -316,6 +316,8 @@ const migrations: string[] = [
      event TEXT NOT NULL CHECK(event IN ('local-recovery-requested', 'local-recovery-completed')),
      created_at INTEGER NOT NULL
    );`,
+  `CREATE TABLE metadata_certificates(id TEXT PRIMARY KEY, origin TEXT NOT NULL UNIQUE, pem TEXT NOT NULL, approved_by TEXT NOT NULL, created_at INTEGER NOT NULL);
+   CREATE TABLE metadata_certificate_events(id INTEGER PRIMARY KEY, origin TEXT NOT NULL, fingerprint TEXT NOT NULL, event TEXT NOT NULL, user_id TEXT NOT NULL, created_at INTEGER NOT NULL);`,
 ];
 
 export function initDb() {

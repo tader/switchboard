@@ -1,0 +1,5 @@
+# OAuth metadata certificate trust
+
+Custom certificate authorities apply only to OAuth client metadata on the exact approved HTTPS origin. Default and OS trust roots are combined for this path. TLS inspection sends no HTTP data; review tokens are session-bound, single-use and expire after five minutes. Only administrator browser sessions can approve or remove trust. Leaf hostname and validity checks remain mandatory. No metadata or TLS-session cache retains removed exceptions.
+
+Local verification: server typecheck, production web build, all 261 tests. The new synthetic real-TLS regression covers private-address refusal, no HTTP during inspection, hostname mismatch, administrator/same-origin/session enforcement, replay denial, CA-scoped renewal, normal redirect validation, removal and retained event history. Chrome renders of the narrow certificate review screen were inspected in light/dark, with an overflow assertion. A previous-revision scratch database upgraded successfully and preserved a synthetic user. Actual enterprise Windows certificate-store behavior still needs confirmation on the affected managed device.

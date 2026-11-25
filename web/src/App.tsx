@@ -1,3 +1,4 @@
+import { Certificates } from './pages/Certificates';
 import { Updates } from './pages/Updates';
 import { Credentials } from './pages/Credentials';
 import { Suspense, lazy, useEffect, useState } from 'react';
@@ -74,6 +75,7 @@ export function App() {
           <Route path="/admin/peers" element={<Navigate to={`/peers${loc.search}`} replace />} />
           {admin && <Route path="/admin/plugins" element={<Plugins />} />}
           {admin && <Route path="/admin/updates" element={<Updates />} />}
+          {admin && <Route path="/admin/certificates" element={<Certificates />} />}
           {admin && <Route path="/admin/users" element={<Users />} />}
           <Route path="*" element={<Navigate to="/connections" replace />} />
         </Routes>

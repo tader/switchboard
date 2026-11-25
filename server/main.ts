@@ -22,7 +22,7 @@ import { plugins } from './plugins/manager.ts';
 import { account } from './routes/account.ts';
 import { admin } from './routes/admin.ts';
 import { api, oauth, proxy } from './routes/connections.ts';
-import { authorizationServerMetadata, authorizeApi, protectedResourceMetadata, registerEndpoint, selfRevoke, tokenEndpoint } from './routes/provider.ts';
+import { authorizationServerMetadata, authorizeApi, certificateApi, protectedResourceMetadata, registerEndpoint, selfRevoke, tokenEndpoint } from './routes/provider.ts';
 import { mcp } from './mcp.ts';
 import { cors } from 'hono/cors';
 import { openapiDocument } from './self-openapi.ts';
@@ -70,6 +70,7 @@ app.get('/readyz', c => c.json({ ready: lifecycle.state === 'open' }, lifecycle.
 app.get('/healthz', (c) => c.json({ ok: true }));
 app.get('/api/openapi.json', (c) => c.json(openapiDocument()));
 app.route('/api/oauth/authorize', authorizeApi);
+app.route('/api/admin/certificates',certificateApi);
 
 // OAuth discovery for MCP clients. Public and without credentials, so browser-based clients may read them.
 const publicCors = cors({ origin: '*', allowHeaders: ['content-type', 'authorization', 'mcp-protocol-version'], maxAge: 86400 });
