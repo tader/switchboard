@@ -316,7 +316,7 @@ export class Controller {
     if (this.s.mode !== 'compose') assertNoExternalData(this.s.dataDir);
     const dir = path.join(this.s.stateDir, 'backups', this.journal!.job.id); fs.mkdirSync(path.dirname(dir), { recursive: true, mode: 0o700 });
     fs.rmSync(dir, { recursive: true, force: true }); if (this.s.mode === 'compose') { fs.mkdirSync(dir, { mode: 0o700 }); await this.dataHelper('snapshot', dir, this.journal!.previous); }
-    else fs.cpSync(this.s.dataDir, dir, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true, filter: p => !/^Singleton/.test(path.basename(p)) });
+    else fs.cpSync(this.s.dataDir, dir, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true, filter: p => !/^Singleton/.test(path.basename(p)) && !(path.dirname(p) === this.s.dataDir && /^\.server-lease\.db(?:-|$)/.test(path.basename(p))) });
     // Restrict every backup entry, even if original data had permissive modes.
     const restrict = (p: string) => { const st = fs.lstatSync(p); if (st.isSymbolicLink()) return; fs.chmodSync(p, st.isDirectory() ? 0o700 : 0o600 | (st.mode & 0o100)); if (st.isDirectory()) for (const name of fs.readdirSync(p)) restrict(path.join(p, name)); }; restrict(dir);
     fs.rmSync(path.join(dir, '.server-lock'), { force: true });
