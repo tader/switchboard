@@ -40,3 +40,43 @@ jobs:
         run: |
           test "$REF" = "v$(node -p 'require("./package.json").version')"
           gh release upload "$REF" artifacts/* --clobber
+
+  windows-runtime:
+    strategy:
+      matrix:
+        include:
+          - {runner: windows-latest, arch: x64}
+          - {runner: windows-11-arm, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: '${{ inputs.ref }}'}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with: {node-version: '24'}
+      - run: npm ci
+      - run: npm ci --prefix web
+      - run: npm run build --prefix web
+      - name: Download verified runtime Node
+        shell: pwsh
+        run: |
+          $version = 'v24.22.3'
+          $archive = "node-$version-win-${{ matrix.arch }}.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/$version/$archive" -OutFile "$env:RUNNER_TEMP/$archive"
+          $sums = (Invoke-WebRequest "https://nodejs.org/dist/$version/SHASUMS256.txt").Content
+          $line = ($sums -split "`n" | Where-Object { $_.Trim().EndsWith(" $archive") })
+          if (!$line -or (Get-FileHash "$env:RUNNER_TEMP/$archive" -Algorithm SHA256).Hash.ToLower() -ne ($line -split '\s+')[0]) { throw 'Node checksum mismatch' }
+          Expand-Archive "$env:RUNNER_TEMP/$archive" "$env:RUNNER_TEMP/node"
+          python scripts/package-runtime.py --platform win32 --node "$env:RUNNER_TEMP/node/node-$version-win-${{ matrix.arch }}/node.exe" --arch '${{ matrix.arch }}' --revision "$(git rev-parse HEAD)" --output artifacts
+      - name: Exercise independent runtime lifecycle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/prepared" | Out-Null
+          tar -xzf artifacts/switchboard-runtime-win32-${{ matrix.arch }}.tar.gz -C "$env:RUNNER_TEMP/prepared"
+          node scripts/rehearse-local-manager.ts "$env:RUNNER_TEMP/prepared"
+          if ($LASTEXITCODE) { throw 'Runtime lifecycle rehearsal failed' }
+          node scripts/rehearse-windows-browser.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: 'runtime-win32-${{ matrix.arch }}', path: artifacts/}
+      - if: inputs.publish
+        env: {GH_TOKEN: '${{ github.token }}', REF: '${{ inputs.ref }}'}
+        run: gh release upload "$env:REF" artifacts/* --clobber
