@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.16.0](https://github.com/tader/switchboard/compare/v0.15.0...v0.16.0) (2026-11-25)
+
+
+### Features
+
+* add installation-only GitHub rate-limit token ([81fce24](https://github.com/tader/switchboard/commit/81fce2404ffcec83a53cc5b033c4f2c041124306))
+* add installation-only GitHub rate-limit token ([#66](https://github.com/tader/switchboard/issues/66)) ([b005fa1](https://github.com/tader/switchboard/commit/b005fa18485ad6f317d68680e60a8533ea793a54))
+* add native Windows runtime support ([#64](https://github.com/tader/switchboard/issues/64)) ([a945e28](https://github.com/tader/switchboard/commit/a945e28175fd8f421f8427b5b5f041428e44473b))
+
+
+### Bug Fixes
+
+* support scoped workplace certificates during MCP sign-in ([#65](https://github.com/tader/switchboard/issues/65)) ([df8b24f](https://github.com/tader/switchboard/commit/df8b24fddc211032b42014c1a726229f4f9ccdc0))
+
 ## [0.15.0](https://github.com/tader/switchboard/compare/v0.14.1...v0.15.0) (2026-11-24)
 
 
