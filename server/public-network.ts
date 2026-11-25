@@ -38,7 +38,7 @@ export async function publicOAuthFetch(url: URL, init: RequestInit | undefined, 
   if (body != null && typeof body !== 'string' && !(body instanceof URLSearchParams) && !(body instanceof Uint8Array)) throw badRequest('Unsupported OAuth request body');
   return new Promise((resolve, reject) => {
     const req = https.request(url, {
-      agent: false, ...(trust ? {ca:trust.ca,allowPartialTrustChain:true} : {}), method: init?.method ?? 'GET', headers: Object.fromEntries(headers), signal,
+      ...(trust ? {agent:false,ca:trust.ca,allowPartialTrustChain:true} : {}), method: init?.method ?? 'GET', headers: Object.fromEntries(headers), signal,
       lookup: (_host, options, callback) => {
         if (typeof options === 'object' && options.all) callback(null, addresses);
         else callback(null, address.address, address.family);
