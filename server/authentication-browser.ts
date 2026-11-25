@@ -100,7 +100,7 @@ export class CDP {
   }
 
   async page(url: string, browserContextId?: string) {
-    await this.call('Browser.getVersion');
+    await this.call('Browser.getVersion', {}, undefined, process.platform === 'win32' ? 60_000 : 20_000);
     const { targetId } = await this.call('Target.createTarget', { url, ...(browserContextId ? { browserContextId } : {}) });
     const { sessionId } = await this.call('Target.attachToTarget', { targetId, flatten: true });
     return new Page(this, sessionId, targetId);

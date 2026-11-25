@@ -10,7 +10,7 @@ const direct = new CDP(await findBrowser(undefined,'edge'),profile,{headless:tru
   child.stderr.on('data',()=>{});
   child.on('exit',code=>console.log('Synthetic direct browser exit:',code));return child;
 }});
-try {await direct.call('Browser.getVersion');console.log('PASS: direct Windows browser pipes');} finally {await direct.close();}
+try {await direct.call('Browser.getVersion',{},undefined,60_000);console.log('PASS: direct Windows browser pipes');} finally {await direct.close();}
 const browser=new CDP(await findBrowser(undefined,'edge'),profile,{headless:true});
-try { const version=await browser.call('Browser.getVersion');assert.ok(version.product); const page=await browser.page('data:text/html,<title>Synthetic</title>');assert.ok(page);console.log('PASS: installed browser accepts private control pipes'); }
+try { const version=await browser.call('Browser.getVersion',{},undefined,60_000);assert.ok(version.product); const page=await browser.page('data:text/html,<title>Synthetic</title>');assert.ok(page);console.log('PASS: installed browser accepts private control pipes'); }
 finally {await browser.close();fs.rmSync(profile,{recursive:true,force:true});}
