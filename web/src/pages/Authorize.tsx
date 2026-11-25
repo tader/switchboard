@@ -10,6 +10,10 @@ export function Authorize() {
   const { user } = useSession();
   const params = Object.fromEntries(new URLSearchParams(location.search));
   const [request, setRequest] = useState<{ client: string; verifiedName: boolean; domain: string | null; redirectHost: string; forMcp: boolean; secure: boolean } | null>();
+  const [certificateError,setCertificateError]=useState(false);
+  const [review,setReview]=useState<any>(null);
+  const [reviewBusy,setReviewBusy]=useState(false);
+  const [verified,setVerified]=useState(false);
   const [error, setError] = useState('');
   const [connections, setConnections] = useState<Connection[]>([]);
   const [limited, setLimited] = useState(true);
@@ -19,6 +23,7 @@ export function Authorize() {
   useEffect(() => {
     api(`/oauth/authorize${location.search}`).then(setRequest, (e) => {
       setError(e.message);
+      setCertificateError(e.code === 'oauth_metadata_certificate_untrusted');
       setRequest(null);
     });
     api<Connection[]>('/connections').then(setConnections, () => {});
@@ -33,6 +38,7 @@ export function Authorize() {
     } catch (e: any) {
       setError(e.message);
       setBusy(null);
+      if(e.code === 'oauth_metadata_certificate_untrusted'){setCertificateError(true);setRequest(null);setReview(null);setVerified(false);}
     }
   };
 
@@ -45,8 +51,23 @@ export function Authorize() {
   }
   if (!request) {
     return (
-      <AuthCard title="This request is not valid">
+      <AuthCard title={certificateError ? 'Review the connection certificate' : 'This request is not valid'}>
+        <div className="space-y-4">
         <Alert>{error}</Alert>
+        {certificateError && <>
+          <p className="text-sm break-all">{new URL(params.client_id).host}</p>
+          {user.role !== 'admin' ? <p className="text-sm">Ask your Switchboard administrator to review this certificate.</p> : <>
+            <p className="text-sm">Your workplace may inspect secure connections. Verify this fingerprint with IT before trusting it.</p>
+            {!review ? <Button loading={reviewBusy} onClick={async()=>{setReviewBusy(true);try{setReview(await api('/oauth/authorize/certificate-review',{body:{client_id:params.client_id}}));}catch(e:any){setError(e.message);}finally{setReviewBusy(false);}}}>Review certificate</Button> : <>
+              <dl className="space-y-2 text-xs break-all">{[['Host',review.origin],['Subject',review.subject],['Issuer',review.issuer],['Valid from',review.validFrom],['Expires',review.validTo],['SHA-256 fingerprint',review.fingerprint]].map(([label,value])=><div key={label}><dt className="text-zinc-500">{label}</dt><dd className="whitespace-pre-wrap">{value}</dd></div>)}</dl>
+              <p className="text-sm">Trust applies only to OAuth client metadata for this host and port.</p>
+              <label className="flex gap-2 text-sm"><input type="checkbox" checked={verified} onChange={e=>setVerified(e.target.checked)}/>I verified this fingerprint with IT.</label>
+              <Button variant="primary" disabled={!verified||reviewBusy} loading={reviewBusy} onClick={async()=>{setReviewBusy(true);try{await api('/oauth/authorize/certificate-trust',{body:{reviewToken:review.reviewToken}});location.reload();}catch(e:any){setError(e.message);setReview(null);setVerified(false);}finally{setReviewBusy(false);}}}>Trust for this host and retry</Button>
+            </>}
+          </>}
+          <Button onClick={()=>location.reload()}>Retry</Button>
+        </>}
+        </div>
       </AuthCard>
     );
   }
