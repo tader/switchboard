@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/tader/switchboard/compare/v0.16.0...v0.17.0) (2026-11-26)
+
+
+### Features
+
+* add expiring redacted Activity output previews ([c4ff1ae](https://github.com/tader/switchboard/commit/c4ff1ae1f6d074f988b61af8257d0ac44221860c))
+
+
+### Bug Fixes
+
+* abbreviate credential method in activity table ([#69](https://github.com/tader/switchboard/issues/69)) ([0dbe759](https://github.com/tader/switchboard/commit/0dbe75976f42b8fa25d44d86b9229974e6aed004))
+
 ## [0.16.0](https://github.com/tader/switchboard/compare/v0.15.0...v0.16.0) (2026-11-25)
 
 
