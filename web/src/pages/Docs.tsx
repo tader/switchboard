@@ -97,7 +97,10 @@ export function Docs() {
 
   const sections = useMemo(() => {
     const m = new Map<string, DocInfo[]>();
-    for (const d of (list.data ?? []).filter(d => matchesSearch(view.q, d.title, d.sourceName, d.section))) m.set(d.section, [...(m.get(d.section) ?? []), d]);
+    for (const d of (list.data ?? []).filter(d => matchesSearch(view.q, d.title, d.sourceName, d.section))) {
+      const group = d.source === 'core' ? d.section : `Services · ${d.sourceName}`;
+      m.set(group, [...(m.get(group) ?? []), d]);
+    }
     return [...m.entries()];
   }, [list.data, view.q]);
   const index = list.data?.findIndex((d) => d.id === id) ?? -1;

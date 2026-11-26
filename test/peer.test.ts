@@ -107,10 +107,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   const enrolled = await request('POST', '/api/admin/peers', { name: 'Test laptop', ownerUserId: me.id });
   assert.equal(enrolled.status, 201, JSON.stringify(enrolled.data));
 
-  const peer = launch(peerPort, peerDir, {
-    SWITCHBOARD_PEER_URL: centralUrl,
-    SWITCHBOARD_PEER_TOKEN: enrolled.data.token,
-  });
+  const peer = launch(peerPort, peerDir);
   await waitFor(() => peer.output().includes('Switchboard listening'));
   let peerCookie = '';
   const peerRequest = async (method: string, pathname: string, body?: unknown) => {
@@ -127,6 +124,7 @@ test('a real peer keeps credentials local and executes a per-user connection', a
   const peerInvitation = peer.output().match(/\/invite#(\S+)/)?.[1];
   assert.ok(peerInvitation, peer.output());
   assert.equal((await peerRequest('POST', '/api/auth/invite', { token: peerInvitation, password: 'peer password' })).status, 200);
+  assert.equal((await peerRequest('POST', '/api/admin/peers', { direction: 'outgoing', name: 'Peer Switchboard', url: centralUrl, token: enrolled.data.token })).status, 201);
   assert.equal((await peerRequest('PUT', '/api/admin/plugins/shell-command/settings', { enabled: true })).status, 200);
   await waitFor(async () => (await request('GET', '/api/admin/peers')).data[0]?.online === true);
   const peerState = await peerRequest('GET', '/api/admin/peers');

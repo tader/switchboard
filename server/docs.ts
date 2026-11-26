@@ -1,4 +1,4 @@
-// In-app documentation: Switchboard's own guides (docs/guides and docs/plugins.md) and guides that
+// In-app documentation: Switchboard's own guides (docs/guides) and guides that
 // plugins ship in their docs/ folder. Guides are Markdown with optional front matter:
 //
 //   ---
@@ -65,6 +65,7 @@ function readDoc(file: string, base: Omit<Doc, 'title' | 'order' | 'services' | 
   const { meta, body } = parse(fs.readFileSync(file, 'utf8'));
   return {
     ...base,
+    section: base.source === 'core' && meta.adminOnly ? 'Administration' : base.section,
     file,
     title: String(meta.title ?? titleOf(body, path.basename(file, '.md'))),
     order: Number(meta.order ?? 100),
@@ -82,14 +83,24 @@ function collect(): Doc[] {
     if (f.endsWith('.md')) docs.push(readDoc(path.join(GUIDES, 'guides', f), { ...core, id: `guides/${f.slice(0, -3)}`, section: 'Using Switchboard' }));
   }
   docs.push({ id: 'guides/api-reference', title: 'API reference', section: 'Using Switchboard', order: 31, source: 'core', sourceName: 'Switchboard', services: [], adminOnly: false, generate: apiReference });
-  if (fs.existsSync(path.join(GUIDES, 'plugins.md'))) {
-    docs.push(readDoc(path.join(GUIDES, 'plugins.md'), { ...core, id: 'guides/plugins', section: 'Administration' }));
-  }
-
   const pluginDocs: (Doc & { dependents: boolean; exclude: string[] })[] = [];
   for (const p of plugins.plugins.values()) {
     if (p.status !== 'active') continue;
     const dir = path.join(p.dir, 'docs');
+    if (p.services.length) {
+      docs.push({
+        id: `${p.id}/service-overview`, title: `${p.manifest.name} services`, section: 'Services', order: 0,
+        source: p.id, sourceName: p.manifest.name, services: p.services.map(s => s.id), adminOnly: false,
+        generate: () => [
+          `# ${p.manifest.name} services`,
+          'Open [Connections](/connections) to add a service and choose a sign-in method.',
+          ...p.services.flatMap(s => [
+            `## ${s.name}`, s.description ?? '',
+            ...s.authMethods.map(m => `- **${m.name}**${m.unavailable ? ' — ' + m.unavailable : m.description ? ' — ' + m.description : ''}`),
+          ]),
+        ].join('\n\n'),
+      });
+    }
     if (!fs.existsSync(dir)) continue;
     for (const f of fs.readdirSync(dir).sort()) {
       if (!f.endsWith('.md')) continue;
@@ -121,7 +132,7 @@ export function listDocs(admin: boolean): DocInfo[] {
   const order = ['Using Switchboard', 'Services', 'Administration'];
   return collect()
     .filter((d) => admin || !d.adminOnly)
-    .sort((a, b) => order.indexOf(a.section) - order.indexOf(b.section) || a.order - b.order || a.title.localeCompare(b.title))
+    .sort((a, b) => order.indexOf(a.section) - order.indexOf(b.section) || a.sourceName.localeCompare(b.sourceName) || a.order - b.order || a.title.localeCompare(b.title))
     .map(info);
 }
 

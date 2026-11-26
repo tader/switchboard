@@ -119,9 +119,8 @@ test('plugin releases, installation and updates use a shared GitHub connection w
   const consumer = await launch('consumer', port, providerUrl);
   const enrollment = await consumer.call('POST', '/api/admin/peers', { name: 'GitHub owner' });
   assert.equal(enrollment.status, 201, JSON.stringify(enrollment.data));
-  const owner = await launch('owner', port + 4000, providerUrl, {
-    SWITCHBOARD_PEER_URL: `http://127.0.0.1:${port}`, SWITCHBOARD_PEER_TOKEN: enrollment.data.token,
-  });
+  const owner = await launch('owner', port + 4000, providerUrl);
+  assert.equal((await owner.call('POST', '/api/admin/peers', { direction: 'outgoing', name: 'Consumer', url: `http://127.0.0.1:${port}`, token: enrollment.data.token })).status, 201);
   await waitFor(async () => (await owner.call('GET', '/api/admin/peers')).data[0]?.online);
   const ownerPeer = (await owner.call('GET', '/api/admin/peers')).data[0].id;
   const connected = await owner.call('POST', '/api/connections', { service: 'github', method: 'token', name: 'shared-github', config: { token: secret } });

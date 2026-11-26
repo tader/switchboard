@@ -1,6 +1,5 @@
 import { loadConnection } from './connections.ts';
 import * as peerAccess from './peers.ts';
-import { config } from './config.ts';
 import { encrypt, decrypt, randomId } from './crypto.ts';
 import { all, db, now, one, run } from './db.ts';
 import { HttpError, badRequest, notFound } from './http.ts';
@@ -88,13 +87,7 @@ export function sharedConnection(peerId: string, connectionId: string) {
   if (!row) throw new HttpError(403, 'This connection is not shared with this peer');
   return row;
 }
-/** Idempotent conversion: environment variables are only a bootstrap, never an implicit grant. */
 export function initializePeers() {
-  if (!one('SELECT 1 FROM instance_settings WHERE key = ?', 'peer-bootstrap')) {
-    if (!!config.peerUrl !== !!config.peerToken) throw new Error('SWITCHBOARD_PEER_URL and SWITCHBOARD_PEER_TOKEN must be set together');
-    if (config.peerUrl && config.peerToken) createPeerLink({ name: 'Peer Switchboard', url: config.peerUrl, token: config.peerToken }, one("SELECT id FROM users WHERE role = 'admin' AND disabled = 0 ORDER BY created_at, id LIMIT 1").id);
-    run('INSERT INTO instance_settings (key, value) VALUES (?, ?)', 'peer-bootstrap', 'done');
-  }
   const admin = one("SELECT id FROM users WHERE role = 'admin' AND disabled = 0 AND peer_shadow = 0 ORDER BY created_at, id LIMIT 1");
   if (!admin) return;
   for (const row of all('SELECT c.* FROM connections c JOIN users u ON u.id = c.user_id WHERE u.peer_shadow = 1 ORDER BY c.created_at, c.id')) {
