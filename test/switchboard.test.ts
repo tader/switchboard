@@ -600,7 +600,7 @@ test('plugin settings keep secrets hidden', async () => {
 test('docs: hub guides, plugin guides, links per service', async () => {
   const docs = (await req('GET', '/api/docs')).data;
   const ids = docs.map((d: any) => d.id);
-  for (const id of ['guides/mcp', 'guides/api', 'guides/api-reference', 'guides/plugins', 'google/oauth-client', 'google-keep/setup']) assert.ok(ids.includes(id), id);
+  for (const id of ['guides/mcp', 'guides/api', 'guides/api-reference', 'google/oauth-client', 'google-keep/setup']) assert.ok(ids.includes(id), id);
   assert.deepEqual([...new Set(docs.map((d: any) => d.section))], ['Using Switchboard', 'Services', 'Administration']);
 
   const mcp = (await req('GET', '/api/docs/guides/mcp')).data;
@@ -608,15 +608,14 @@ test('docs: hub guides, plugin guides, links per service', async () => {
   assert.ok(!mcp.markdown.includes('{{'), 'placeholders filled');
   const google = (await req('GET', '/api/docs/google/oauth-client')).data;
   assert.match(google.markdown, new RegExp(`${base}/oauth/callback`));
-  const authoring = (await req('GET', '/api/docs/guides/plugins')).data;
-  assert.match(authoring.markdown, /`\{\{publicUrl\}\}`/, 'escaped placeholders stay literal');
+  assert.equal((await req('GET', '/api/docs/guides/plugins')).status, 404);
   const ref = (await req('GET', '/api/docs/guides/api-reference')).data;
   assert.match(ref.markdown, /### `POST \/api\/call`/);
 
   const services = (await req('GET', '/api/services')).data;
   const guides = (id: string) => services.find((s: any) => s.id === id).guides.map((g: any) => g.id);
-  assert.deepEqual(guides('gmail'), ['google/oauth-client'], 'dependents get the Google guide');
-  assert.deepEqual(guides('google-keep'), ['google-keep/setup'], 'but Keep is excluded from it');
+  assert.deepEqual(guides('gmail'), ['gmail/service-overview', 'google/oauth-client'], 'dependents get the Google guide');
+  assert.deepEqual(guides('google-keep'), ['google-keep/service-overview', 'google-keep/setup'], 'but Keep is excluded from it');
   assert.equal((await req('GET', '/api/docs/nope/nothing')).status, 404);
 });
 

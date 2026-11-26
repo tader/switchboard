@@ -38,8 +38,6 @@ Local recovery links work once, expire after 10 minutes, and replace older invit
 | `SWITCHBOARD_SESSION_TTL_SECS` | 14 days | |
 | `SWITCHBOARD_WATCH_PLUGINS` | `true` | Reload plugins when their files change. |
 | `SWITCHBOARD_AUDIT_RETENTION_DAYS` | `90` | How long the activity log is kept; `0` keeps it forever. |
-| `SWITCHBOARD_PEER_URL` | | First-start bootstrap for one outgoing peer URL; later changes are managed in the UI. |
-| `SWITCHBOARD_PEER_TOKEN` | | First-start bootstrap token created on the accepting peer; grants are selected locally. |
 
 Switchboard was called Hub before: `HUB_*` variables, `hub_` tokens, the `X-Hub-Token` header and an existing `hub.db` keep working.
 
@@ -73,13 +71,11 @@ export SWITCHBOARD_PORT=8770
 export SWITCHBOARD_PUBLIC_URL=http://127.0.0.1:8770
 export SWITCHBOARD_DATA_DIR="$HOME/.local/share/switchboard-peer"
 
-export SWITCHBOARD_PEER_URL=https://switchboard.example.com
-export SWITCHBOARD_PEER_TOKEN='sws_…'
 
 npm start
 ```
 
-The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Machine-specific plugins are configured in this local UI; for example, install **Shell command** from **Plugins → Community**, then enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service can be shared with peers.
+The local UI is then available only on that machine at `http://127.0.0.1:8770`. Open the setup link printed on first start to create its local administrator. Under **Peers**, add an outgoing peer with the accepting instance’s URL and device token. Machine-specific plugins are configured in this local UI; for example, install **Shell command** from **Plugins → Community**, then enable **Allow shell commands** under **Plugins → Shell command → Settings** before the Shell command service can be shared with peers.
 
 The peer needs only outbound HTTPS/WebSocket access to the accepting peer. No inbound firewall or router port is required. For unattended use, put the variables in a permission-restricted service configuration and run Switchboard as a dedicated low-privilege OS user. Shell commands execute with that user's filesystem permissions.
 

@@ -118,7 +118,7 @@ The external [`google`](https://github.com/tader/switchboard-plugin-google) plug
 
 ## Documentation
 
-Put Markdown files in a `docs/` folder in the plugin. They appear in Switchboard's **Docs** under *Services* while the plugin is active. The connect dialog links to them for the services they cover. Optional front matter:
+Switchboard generates a service overview from the names, descriptions and sign-in methods registered by each active plugin. Put additional setup and usage guides in a `docs/` folder in the plugin. They appear in Switchboard's **Docs** under *Services* while the plugin is active. The connect dialog links to them for the services they cover. Optional front matter:
 
 ```markdown
 ---
