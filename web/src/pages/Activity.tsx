@@ -369,7 +369,7 @@ export function Activity() {
                       <td className="px-3 py-1.5">
                         <div className="flex min-w-0 items-baseline gap-2">
                           <span className={cx('w-11 shrink-0 font-mono text-[11px] font-bold', e.method === 'TOKEN' ? 'text-violet-600 dark:text-violet-400' : METHOD_COLORS[e.method ?? ''])}>
-                            {e.method}
+                            {e.method === 'CREDENTIAL' ? 'CRED' : e.method}
                           </span>
                           <span className="min-w-0 truncate font-mono text-[12px]" title={e.url ?? undefined}>
                             {e.wsOperation ? `${e.wsOperation}${e.wsTarget ? ` · ${e.wsTarget}` : ''}` : e.mcpOperation ? `${e.mcpOperation}${e.mcpTarget ? ` · ${e.mcpTarget}` : ''}` : path}
