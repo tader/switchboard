@@ -29,7 +29,7 @@ const outputs = await imp('server/activity-output.ts'); outputs.initOutputStore(
 const caller = { source: 'console', tokenId: null, tokenName: null, ip: null, userAgent: null };
 const ids = {};
 for (const state of ['legacy', 'omitted', 'expired', 'retained', 'fresh']) {
-  const id = audit.record({ userId: owner.id, caller, method: 'GET', url: 'https://api.example.test/' + state, status: 200 });
+  const id = audit.record({ userId: owner.id, caller, method: 'GET', url: 'https://api.example.test/' + state, status: 200, connection: { id: 'synthetic-connection', name: 'Fixture API', serviceId: 'fixture' } });
   ids[state] = id;
   if (state === 'retained' || state === 'fresh') await outputs.observeOutput(Response.json({ account_id: 'demo-' + 'a'.repeat(120) }), id, owner.id, { fields: { account_id: { maxBytes: 128 } } }, []).text();
   else db.run('UPDATE audit_log SET output_state = ? WHERE id = ?', state, id);
@@ -52,8 +52,8 @@ try {
   const page = await context.newPage();
   let reveals = 0;
   page.on('request', r => { if (new URL(r.url()).pathname.endsWith('/output')) reveals++; });
-  const open = async state => {
-    await page.goto(base + '/activity?range=all');
+  const open = async (state, filter = '') => {
+    await page.goto(base + '/activity?range=all' + filter);
     const row = page.locator('tbody tr').filter({ hasText: '/' + state });
     await row.waitFor(); await row.focus(); await page.keyboard.press('Enter');
     await page.getByRole('dialog').waitFor();
@@ -109,6 +109,12 @@ try {
     await page.keyboard.press('Escape');
   }
   await page.setViewportSize({ width: 1280, height: 900 });
+  for (const filter of ['&client=web', '&connection=synthetic-connection']) {
+    await open('retained', filter);
+    await page.getByRole('button', { name: 'View output', exact: true }).click();
+    await page.locator('pre').waitFor();
+    await page.keyboard.press('Escape');
+  }
   // Closing during a held reveal and switching entries discards late output.
   let releaseReply;
   await page.route('**/api/audit/' + ids.retained + '/output', async route => {
