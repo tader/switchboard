@@ -77,6 +77,7 @@ export function Layout({ children }: { children: ReactNode }) {
             Plugins
           </NavItem>
           <NavItem to="/admin/updates" icon={<RefreshCw />}>Server updates</NavItem>
+          <NavItem to="/admin/activity-retention" icon={<History />}>Activity retention</NavItem>
           <NavItem to="/admin/certificates" icon={<KeyRound />}>Certificates</NavItem>
           <NavItem to="/admin/users" icon={<Users />}>
             Users

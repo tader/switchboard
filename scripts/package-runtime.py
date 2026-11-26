@@ -14,7 +14,7 @@ out = pathlib.Path(a.output).resolve(); out.mkdir(parents=True, exist_ok=True)
 version = json.loads((root / 'package.json').read_text())['version']
 with tempfile.TemporaryDirectory(prefix='switchboard-runtime-') as tmp:
     stage = pathlib.Path(tmp) / 'runtime'; stage.mkdir()
-    for name in ['server', 'plugins', 'docs', 'updater']:
+    for name in ['server', 'plugins', 'docs', 'updater', 'shared']:
         shutil.copytree(root / name, stage / name, symlinks=False)
     shutil.copytree(root / 'web/dist', stage / 'web/dist')
     for name in ['package.json', 'package-lock.json']:

@@ -22,6 +22,7 @@ bundle = pathlib.Path(tempfile.mkdtemp(prefix='switchboard-polling-', dir=scratc
 project = 'swb-polling-' + str(os.getpid())
 env = dict(os.environ, SWITCHBOARD_BUNDLE_DIR=str(bundle))
 shutil.copy2(root / 'distribution/compose/compose.yaml', bundle / 'compose.yaml')
+shutil.copy2(root / 'distribution/compose/switchboard', bundle / 'switchboard')
 with socket.socket() as sock:
     sock.bind(('127.0.0.1', 0))
     port = sock.getsockname()[1]
@@ -72,7 +73,9 @@ def settings(script):
     cli('exec', '-T', 'updater', 'node', '-e', "const fs=require('fs'),p='/state/settings.json',s=JSON.parse(fs.readFileSync(p));" + script + ";fs.writeFileSync(p,JSON.stringify(s),{mode:384})")
 
 try:
-    cli('up', '-d', '--pull', 'never')
+    # The base service is deliberately gated. Exercise the released startup
+    # path so controller recovery and storage validation precede readiness.
+    run(['./switchboard', 'up'])
     wait(lambda: request('/readyz'), 'Application readiness timeout')
     logs = cli('logs', '--no-color', 'switchboard')
     code = next(line.split('/invite#')[1].strip() for line in logs.splitlines() if '/invite#' in line)

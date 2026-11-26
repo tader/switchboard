@@ -12,7 +12,9 @@ try {
     fs.mkdirSync(settings.stateDir, { recursive: true, mode: 0o700 }); fs.chmodSync(configFile, 0o600);
     // Install a self-contained launcher outside every application release.
     const dest = path.join(settings.stateDir, 'launcher'); fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
-    for (const name of ['main.ts', 'engine.ts', 'runtime.ts']) fs.copyFileSync(path.join(import.meta.dirname, name), path.join(dest, name));
+    for (const name of ['main.ts', 'engine.ts', 'runtime.ts', 'activity-previews.ts']) fs.copyFileSync(path.join(import.meta.dirname, name), path.join(dest, name));
+    const shared = path.join(settings.stateDir, 'shared'); fs.mkdirSync(shared, { recursive: true, mode: 0o700 });
+    fs.copyFileSync(path.join(import.meta.dirname, '../shared/activity-preview-store.ts'), path.join(shared, 'activity-preview-store.ts'));
     console.log('Launcher installed. Enroll it with a one-time code from Admin → Updates, then use launch (checkout) or run (Compose).');
   } else if (action === 'enroll') {
     if (!code) throw Error('Provide the one-time enrollment code');

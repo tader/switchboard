@@ -212,3 +212,64 @@ test('old server rejects a future database schema before any normal startup', ()
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, SWITCHBOARD_DATA_DIR: s.dataDir }, encoding: 'utf8' });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /schema is newer/);
 });
+
+test('checkout backup excludes preview files and rollback retires generation before restart', async () => {
+  const { provisionPreviews } = await import('../updater/activity-previews.ts');
+  const c = new FakeController(settings('preview-rollback')); c.failReady = true;
+  const env = await provisionPreviews(c.s, c.current(), c.previewExclusions(), async () => '', atomic);
+  const ownedFile = 'preview-' + env.SWITCHBOARD_ACTIVITY_PREVIEW_STORE_ID + '-12345678-1234-1234-1234-123456789abc.enc';
+  const generation = JSON.parse(fs.readFileSync(path.join(c.previewRoot(), 'generation.json'), 'utf8')).generation;
+  fs.writeFileSync(path.join(c.previewRoot(), ownedFile), 'synthetic-ciphertext', { mode: 0o600 });
+  fs.writeFileSync(path.join(c.previewRoot(), 'unrelated-sentinel'), 'must survive', { mode: 0o600 });
+  fs.writeFileSync(path.join(c.s.dataDir, 'synthetic.db'), 'metadata-only');
+  const invalidate = c.invalidateOutputs.bind(c);
+  c.invalidateOutputs = async () => { c.events.push('invalidate-previews'); await invalidate(); };
+  await c.execute(job());
+  assert.equal(c.journal!.phase, 'rolled-back');
+  assert.equal(fs.readFileSync(path.join(c.journal!.backup!, 'synthetic.db'), 'utf8'), 'metadata-only');
+  assert.ok(!fs.existsSync(path.join(c.journal!.backup!, ownedFile)));
+  assert.ok(!fs.existsSync(path.join(c.s.stateDir, 'failed-data-synthetic-job', ownedFile)));
+  assert.ok(!fs.existsSync(path.join(c.previewRoot(), ownedFile)));
+  assert.notEqual(JSON.parse(fs.readFileSync(path.join(c.previewRoot(), 'generation.json'), 'utf8')).generation, generation);
+  assert.ok(c.events.indexOf('invalidate-previews') < c.events.indexOf('start:/synthetic/previous'));
+  assert.equal(fs.readFileSync(path.join(c.previewRoot(), 'unrelated-sentinel'), 'utf8'), 'must survive');
+  fs.rmSync(c.previewRoot(), { recursive: true, force: true });
+});
+
+class ActivationController extends Controller {
+  events: string[] = [];
+  override async compose(args: string[]) { this.events.push('compose:' + args[0]); return ''; }
+  override async composeInfo() { this.events.push('validate'); return {}; }
+  override async identifyStoppedImage() { return 'sha256:' + 'a'.repeat(64); }
+  override async stop() { this.events.push('stop'); }
+  override async start(_release: string, gated = true) { if (!gated) this.assertUngatedStartAllowed(); this.events.push('start:' + gated); }
+  override async api(endpoint: string) { this.events.push('api:' + endpoint); return {}; }
+  override async rollback() { this.events.push('recover-rollback'); this.journal!.phase = 'rolled-back'; this.save(); }
+}
+function activation(name: string) {
+  const s = settings(name); s.mode = 'compose';
+  s.compose = { files: ['/fixture/compose.yaml'], directory: '/fixture', project: 'fixture', service: 'app' };
+  return new ActivationController(s);
+}
+test('healthy activation creates without opening first and validates before ungated start', async () => {
+  const c = activation('activate-healthy');
+  await c.activateCompose();
+  assert.deepEqual(c.events, ['compose:stop', 'compose:create', 'validate', 'stop', 'start:false']);
+});
+test('pre-open wrapper activation follows journal recovery rather than opening the candidate', async () => {
+  const c = activation('activate-recover');
+  c.journal = { job: job(), phase: 'starting', previous: '/previous', target: '/candidate', startedAt: Date.now(), durations: {} };
+  await c.activateCompose();
+  assert.deepEqual(c.events, ['recover-rollback']);
+  assert.equal(c.journal.phase, 'rolled-back');
+});
+test('recovery-required and uncertain opening keep activation stopped', async () => {
+  for (const [phase, opened] of [['recovery-required', true], ['opening', true]] as const) {
+    const c = activation('activate-' + phase);
+    c.journal = { job: job(), phase, opened, previous: '/previous', target: '/candidate', startedAt: Date.now(), durations: {} };
+    await assert.rejects(c.activateCompose(), /Owner recovery/);
+    assert.equal(c.journal.phase, 'recovery-required');
+    assert.ok(!c.events.some(event => event.startsWith('start:') || event === 'compose:create'));
+    await assert.rejects(Controller.prototype.start.call(c, '/candidate', false), /Journal recovery/);
+  }
+});

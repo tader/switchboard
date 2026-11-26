@@ -24,15 +24,21 @@ stack() {
   if [ -s "$tmp/active.json" ]; then base -f "$tmp/active.json" "$@"; else base "$@"; fi
 }
 source=$(base config --format json | docker run --rm -i --entrypoint node "$image" -e 'let s="";for await(const c of process.stdin)s+=c;console.log(JSON.parse(s).services.updater.environment.SWITCHBOARD_SOURCE_BUILD)')
+activate_stack() {
+  stack stop updater
+  stack run --rm --no-deps updater node updater/compose.ts activate
+  read_active
+  stack up -d --no-deps updater
+}
 case "$action" in
-  up) if [ "$source" = true ] && [ ! -s "$tmp/active.json" ]; then base -f compose.source.yaml build switchboard; base -f compose.source.yaml up -d; else stack up -d; fi ;;
+  up) if [ "$source" = true ] && [ ! -s "$tmp/active.json" ]; then base -f compose.source.yaml build switchboard; fi; activate_stack ;;
   down) stack down "$@" ;;
-  restart) stack stop; stack up -d ;;
+  restart) activate_stack ;;
   stop) stack stop ;;
   status) stack ps ;;
   logs) stack logs "$@" ;;
   enroll) [ "$#" -eq 1 ] || { echo 'Usage: ./switchboard enroll ONE_TIME_CODE' >&2; exit 1; }; stack exec -T updater node updater/main.ts enroll /state/settings.json "$1" ;;
-  restore) [ "$#" -eq 1 ] || { echo "Usage: ./switchboard restore BACKUP_ID" >&2; exit 1; }; stack stop; stack run --rm --no-deps updater node updater/compose.ts restore "$1"; read_active; stack up -d ;;
-  backup) stack stop updater; stack run --rm --no-deps updater node updater/compose.ts backup; stack up -d updater ;;
+  restore) [ "$#" -eq 1 ] || { echo "Usage: ./switchboard restore BACKUP_ID" >&2; exit 1; }; stack stop; stack run --rm --no-deps updater node updater/compose.ts restore "$1"; read_active; stack up -d --no-deps updater ;;
+  backup) stack stop updater; stack run --rm --no-deps updater node updater/compose.ts backup; stack up -d --no-deps updater ;;
   *) echo 'Usage: ./switchboard up|down|restart|stop|status|logs|enroll CODE|backup|restore BACKUP_ID' >&2; exit 1 ;;
 esac

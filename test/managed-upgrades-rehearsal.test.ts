@@ -16,6 +16,7 @@ async function freePort() { const s = net.createServer(); await new Promise<void
 function release(dir: string, revision: string, version: string) {
   fs.mkdirSync(dir);
   fs.cpSync(path.join(root, 'server'), path.join(dir, 'server'), { recursive: true });
+  fs.cpSync(path.join(root, 'shared'), path.join(dir, 'shared'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'plugins')); fs.mkdirSync(path.join(dir, 'web'));
   fs.symlinkSync(path.join(root, 'node_modules'), path.join(dir, 'node_modules'));
   atomic(path.join(dir, 'package.json'), { type: 'module', version, managedUpgradeProtocol: 1 });

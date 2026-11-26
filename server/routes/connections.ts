@@ -1,3 +1,4 @@
+import { readOutput } from '../activity-output.ts';
 import { listBrowserProfiles, renameBrowserProfile } from '../browser-profiles.ts';
 import { contracts } from '../contracts/routes.ts';
 import { validateWebSocketValue } from '../websocket-schema.ts';
@@ -22,6 +23,7 @@ import { mcpClientMetadata } from '../mcp-auth.ts';
 import { executeMcp, validateMcpInput, type McpInput, type McpOperation } from '../provider-mcp.ts';
 
 export const api = new Hono<Env>();
+api.use('/audit/:id/output*', async (c, next) => { c.header('cache-control', 'no-store'); await next(); });
 api.use('*', requireUser);
 if(config.sharedContracts)api.route('/', contracts);
 
@@ -254,6 +256,12 @@ api.get('/audit/histogram', requireFullAccess, (c) => {
   return c.json(auditHistogram(c.get('user').id, { ...q, from: num(q.from), to: num(q.to), tz: num(q.tz), buckets: num(q.buckets) }, includePeerActivity(c)));
 });
 api.get('/audit/facets', requireFullAccess, (c) => c.json(auditFacets(c.get('user').id, includePeerActivity(c))));
+for (const [suffix, payload] of [['output', true], ['output/status', false]] as const) {
+  api.get(`/audit/:id/${suffix}`, requireFullAccess, (c) => {
+    c.header('cache-control', 'no-store');
+    return c.json(readOutput(c.get('user').id, Number(c.req.param('id')), payload));
+  });
+}
 api.get('/audit/:id', requireFullAccess, (c) => c.json(getAudit(c.get('user').id, Number(c.req.param('id')), includePeerActivity(c))));
 
 // --- saved calls ---

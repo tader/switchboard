@@ -318,6 +318,17 @@ const migrations: string[] = [
    );`,
   `CREATE TABLE metadata_certificates(id TEXT PRIMARY KEY, origin TEXT NOT NULL UNIQUE, pem TEXT NOT NULL, approved_by TEXT NOT NULL, created_at INTEGER NOT NULL);
    CREATE TABLE metadata_certificate_events(id INTEGER PRIMARY KEY, origin TEXT NOT NULL, fingerprint TEXT NOT NULL, event TEXT NOT NULL, user_id TEXT NOT NULL, created_at INTEGER NOT NULL);`,
+  `ALTER TABLE audit_log ADD COLUMN output_state TEXT NOT NULL DEFAULT 'legacy';
+   ALTER TABLE audit_log ADD COLUMN output_nonce TEXT;
+   CREATE TABLE audit_outputs (
+     audit_id INTEGER PRIMARY KEY REFERENCES audit_log(id) ON DELETE CASCADE,
+     capture_id TEXT NOT NULL UNIQUE, generation TEXT NOT NULL, captured_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+   );
+   CREATE INDEX audit_outputs_expiry ON audit_outputs(expires_at);
+   CREATE TABLE audit_output_unlinks(capture_id TEXT PRIMARY KEY);
+   CREATE TRIGGER audit_output_delete AFTER DELETE ON audit_outputs BEGIN
+     INSERT OR IGNORE INTO audit_output_unlinks VALUES (OLD.capture_id);
+   END;`,
 ];
 
 export function initDb() {

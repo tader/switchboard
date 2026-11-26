@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 // Audit trail of every request Switchboard makes on a user's behalf, and every raw token it hands out.
 // Everything is redacted before it is written: credentials Switchboard added are already masked by the
 // proxy, and secret-looking values the caller sent are masked here.
+import { outputMetadata, outputPolicy } from './activity-output.ts';
 import type { Context } from 'hono';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Env } from './auth.ts';
@@ -137,6 +139,7 @@ export function record(e: AuditEntry): number {
     e.caller.ip, e.caller.userAgent, e.requestHeaders ? JSON.stringify(redactHeaders(e.requestHeaders)) : null, e.requestBody ?? null,
     e.mcpOperation ?? null, e.mcpTarget ? redactUrl(e.mcpTarget) : null, e.mcpOutcome ?? null, e.caller.peerId ?? null, e.caller.peerUserId ?? null, e.wsOperation ?? null, e.wsTarget ?? null, e.wsOutcome ?? null,
   );
+  run('UPDATE audit_log SET output_state = ?, output_nonce = ? WHERE id = ?', outputPolicy().hours ? 'omitted' : 'disabled', randomUUID(), Number(r.lastInsertRowid));
   return Number(r.lastInsertRowid);
 }
 
@@ -250,7 +253,7 @@ const toEntry = (r: any, full = false) => ({
   retried: !!r.retried,
   error: r.error,
   ...(full
-    ? { ip: r.ip, userAgent: r.user_agent, requestHeaders: r.request_headers ? JSON.parse(r.request_headers) : [], requestBody: r.request_body }
+    ? { ip: r.ip, userAgent: r.user_agent, requestHeaders: r.request_headers ? JSON.parse(r.request_headers) : [], requestBody: r.request_body, output: outputMetadata(r.user_id, r.id) }
     : {}),
 });
 

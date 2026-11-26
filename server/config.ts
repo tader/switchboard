@@ -14,6 +14,13 @@ const publicUrl = (env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/+$/,
 export const config = {
   /** Staged shared-contract implementation; disabled until adapters pass conformance. */
   sharedContracts: env.SHARED_CONTRACTS === '1',
+  /** Set only by a manager that invalidates previews before every restore. */
+  previewRoot: env.ACTIVITY_PREVIEW_ROOT,
+  previewInstance: env.ACTIVITY_PREVIEW_INSTANCE,
+  previewEpoch: env.ACTIVITY_PREVIEW_EPOCH,
+  previewStoreId: env.ACTIVITY_PREVIEW_STORE_ID,
+  previewRestoreSafe: env.ACTIVITY_PREVIEW_RESTORE_SAFE === '1',
+  previewExcludedRoots: env.ACTIVITY_PREVIEW_EXCLUDED_ROOTS,
   root,
   dataDir,
   port,

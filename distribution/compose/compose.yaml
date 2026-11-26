@@ -7,8 +7,10 @@ services:
     environment:
       SWITCHBOARD_PUBLIC_URL: ${SWITCHBOARD_PUBLIC_URL:-http://127.0.0.1:8770}
       SWITCHBOARD_INSTALL_MODE: compose
+      SWITCHBOARD_START_GATED: '1'
     volumes:
       - app-data:/data
+      - activity-previews:/activity-previews
   updater:
     image: ${SWITCHBOARD_UPDATER_IMAGE:-ghcr.io/tader/switchboard-updater:latest}
     restart: unless-stopped
@@ -22,6 +24,8 @@ services:
       - '${SWITCHBOARD_BUNDLE_DIR}:${SWITCHBOARD_BUNDLE_DIR}:ro'
     command: ['node', 'updater/compose.ts']
 volumes:
+  activity-previews:
+    name: ${COMPOSE_PROJECT_NAME:-switchboard}-activity-previews
   app-data:
     name: ${COMPOSE_PROJECT_NAME:-switchboard}-app-data
   updater-state:

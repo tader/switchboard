@@ -1,3 +1,4 @@
+import { OutputPreview, type OutputMetadata } from '../components/OutputPreview';
 import { useViewState } from '../components/ListControls';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, History, RefreshCw, Search, X } from 'lucide-react';
@@ -8,6 +9,7 @@ import { ActivityChart, type Breakdown } from '../components/ActivityChart';
 import { METHOD_COLORS, ago, bytes, cx, useResource } from '../lib';
 
 interface Entry {
+  output?: OutputMetadata;
   id: number;
   at: number;
   peer: { id: string; name: string; userId: string } | null;
@@ -160,6 +162,12 @@ export function Activity() {
   const facets = useResource(() => api<Facets>('/audit/facets'));
   const connections = useResource(() => api<Connection[]>('/connections'));
   const [selected, setSelected] = useState<number | null>(null);
+  const invoker = useRef<HTMLElement | null>(null);
+  const activityList = useRef<HTMLTableElement>(null);
+  const closeEntry = () => {
+    setSelected(null);
+    requestAnimationFrame(() => (invoker.current?.isConnected ? invoker.current : activityList.current)?.focus());
+  };
 
   // Live mode refreshes the newest page, to watch agents as they work.
   const live = view.live === 'true';
@@ -327,7 +335,7 @@ export function Activity() {
       ) : (
         <Card className="overflow-hidden">
           <div className="scrollbar-thin overflow-x-auto">
-            <table className="w-full min-w-[56rem] table-fixed text-left text-[13px]">
+            <table ref={activityList} tabIndex={-1} aria-label="Activity requests" className="w-full min-w-[56rem] table-fixed text-left text-[13px]">
               <colgroup>
                 <col className="w-32" />
                 <col className="w-36" />
@@ -358,7 +366,10 @@ export function Activity() {
                   return (
                     <tr
                       key={e.id}
-                      onClick={() => setSelected(e.id)}
+                      tabIndex={0}
+                      aria-label={`View ${e.method ?? 'request'} details`}
+                      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); invoker.current = event.currentTarget; setSelected(e.id); } }}
+                      onClick={event => { invoker.current = event.currentTarget; setSelected(e.id); }}
                       className={cx('cursor-pointer transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/40', fresh.has(e.id) && 'bg-indigo-50/70 dark:bg-indigo-500/10')}
                     >
                       <td className="whitespace-nowrap px-3 py-2 text-zinc-500" title={new Date(e.at).toLocaleString()}>
@@ -407,14 +418,14 @@ export function Activity() {
           </div>
         </Card>
       )}
-      <EntryDialog id={selected} onClose={() => setSelected(null)} onFilter={(patch) => (setSelected(null), set(patch))} />
+      <EntryDialog id={selected} onClose={closeEntry} onFilter={(patch) => (setSelected(null), set(patch))} />
     </>
   );
 }
 
 function EntryDialog({ id, onClose, onFilter }: { id: number | null; onClose: () => void; onFilter: (p: Record<string, string>) => void }) {
   const entry = useResource(async () => (id ? api<Entry>(`/audit/${id}`) : null), [id]);
-  const e = entry.data;
+  const e = entry.data?.id === id ? entry.data : null;
   const body = useMemo(() => {
     if (!e?.requestBody) return undefined;
     try {
@@ -447,7 +458,7 @@ function EntryDialog({ id, onClose, onFilter }: { id: number | null; onClose: ()
           {e.method === 'TOKEN' && !e.error && (
             <Alert tone="amber">The raw access token was handed out. Requests made with it go to the service directly and are not in this trail.</Alert>
           )}
-          <dl className="grid grid-cols-[8rem_1fr] gap-x-4 gap-y-1.5">
+          <dl className="grid grid-cols-[6rem_1fr] gap-x-3 sm:grid-cols-[8rem_1fr] sm:gap-x-4 gap-y-1.5">
             {e.wsOperation && <><Row label="Operation">{e.wsOperation}</Row><Row label="Target">{e.wsTarget ?? '—'}</Row><Row label="Outcome">{e.wsOutcome}</Row></>}
             {e.mcpOperation && <><Row label="Operation">{e.mcpOperation}</Row><Row label="Target">{e.mcpTarget ?? '—'}</Row><Row label="Outcome">{e.mcpOutcome}</Row></>}
             <Row label="Status">
@@ -498,7 +509,8 @@ function EntryDialog({ id, onClose, onFilter }: { id: number | null; onClose: ()
               {body.json !== undefined ? <JsonView value={body.json} /> : <pre className="whitespace-pre-wrap break-all font-mono text-[12.5px]">{body.text}</pre>}
             </section>
           )}
-          <p className="text-xs text-zinc-400">Secrets are masked before anything is stored. Request bodies are kept up to 4 KB; response bodies are not kept.</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">Secrets are masked before requests are stored. Request bodies are kept up to 4 KB.</p>
+          <OutputPreview key={e.id} id={e.id} metadata={e.output ?? { state: 'legacy' }} />
         </div>
       )}
     </Dialog>

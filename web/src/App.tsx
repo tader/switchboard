@@ -1,3 +1,4 @@
+import { ActivityRetention } from './pages/ActivityRetention';
 import { Certificates } from './pages/Certificates';
 import { Updates } from './pages/Updates';
 import { Credentials } from './pages/Credentials';
@@ -76,6 +77,7 @@ export function App() {
           {admin && <Route path="/admin/plugins" element={<Plugins />} />}
           {admin && <Route path="/admin/updates" element={<Updates />} />}
           {admin && <Route path="/admin/certificates" element={<Certificates />} />}
+          {admin && <Route path="/admin/activity-retention" element={<ActivityRetention />} />}
           {admin && <Route path="/admin/users" element={<Users />} />}
           <Route path="*" element={<Navigate to="/connections" replace />} />
         </Routes>

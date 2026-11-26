@@ -209,3 +209,15 @@ Connection errors clear after a confirmed successful HTTP request, MCP operation
 Failed requests and MCP tool errors do not count as recovery. An older in-flight success cannot erase a newer failure. Saving refreshed credentials alone does not clear an unresolved connection error; the operation must succeed.
 
 At startup, Switchboard also reconciles errors saved by older versions when the latest audit entry proves a successful operation started after the error. Errors without that evidence, newer failures, and revoked/expired shared credentials remain flagged. This updates current connection health; historical failures stay in Activity.
+
+## Activity output previews
+
+Open a request in [Activity](/activity) and choose **View output** to read a retained preview. Previews show only selected fields from reviewed operations. No preview is saved for most operations. Expired previews cannot be recovered; revealing or retrying a load never repeats the original service request.
+
+Full-access owners may use `GET /api/audit/:id/output`. It returns `state`, and only while retained, `preview`, `captureId`, `expiresAt` (epoch milliseconds), `decisionAt` and `displayForMs`. The payload-free `GET /api/audit/:id/output/status` uses the same authorization and expiry rules. Both are `Cache-Control: no-store`. Connection-limited tokens cannot read either endpoint, and administrators cannot reveal another owner's output through peer metadata visibility.
+
+For a custom viewer, anchor each display grant to monotonic time at request send, cap it at 15 seconds, and renew with status checks every five seconds. Before accepting a renewal, check that the previous grant has not elapsed on either the monotonic or wall clock. An elapsed grant requires a fresh reveal, even if a renewal callback runs before overdue timers after resume. Clear output immediately on denial, changed capture, failed checks, offline or page hide. Never persist or share a cached payload.
+
+Administrators can change retention in [Activity retention](/admin/activity-retention). Read `GET /api/admin/activity-retention` first: it returns `hours`, `revision` and `capture` (`available` plus a reason). The availability describes the Switchboard server, including when a desktop manager connects to it. PUT the desired hours with that loaded revision, for example `{"hours":4,"revision":"<loaded revision>"}`. The revision is an opaque string bound to the policy and restore epoch. A stale revision returns 409 without changing retention; reload and review the change before submitting again. Missing or invalid revisions return 400.
+
+The default is four hours. Zero stops capture and clears stored previews; shorter values also shorten existing deadlines. Longer values affect future previews. Request retention is independent. Managed restore discards all live previews. Installations without isolated storage and compatible restore invalidation omit capture, which the retention page reports separately from the saved hours.

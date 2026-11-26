@@ -6,5 +6,6 @@ COPY --from=docker /usr/local/libexec/docker/cli-plugins/docker-compose /usr/loc
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
+COPY shared ./shared
 COPY updater ./updater
 CMD ["node", "updater/compose.ts"]

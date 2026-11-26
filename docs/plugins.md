@@ -397,3 +397,9 @@ shutdown and host-crash cleanup. Run `npm test` and `npm run typecheck`.
 Integration-specific browser tests belong with their respective adapters. Synthetic
 tests do not establish whether a particular identity provider will permit silent
 sign-in.
+
+## Reviewed Activity output projections
+
+A service may declare optional `outputPreviews` rules. Each rule matches an exact `origin`, `path`, `method: 'GET'` and allowed `authMethods` IDs. Core accepts only final HTTP 200 JSON objects from audited local data calls, without query parameters. Declare `fields: { public_identifier: { maxBytes: 128 } }` for individually reviewed string fields. Unknown and nested fields are dropped; missing, empty, whitespace/control-containing, credential-echoing or oversized selected values cause omission. Do not declare secrets or private profile fields.
+
+Core bounds decoded input and serialized output at 16 KiB, captures only on clean stream completion and excludes sign-in, token exchanges, peer calls and native transports. Existing plugins omit this declaration and remain uncaptured. Document exact coverage and exclusions in the owning plugin, and use synthetic fixtures for sensitive fields, limits, errors and auth methods.

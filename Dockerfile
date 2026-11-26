@@ -22,6 +22,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 RUN node -e "const fs=require('fs'); const revision=process.env.SWITCHBOARD_REVISION; if(!/^[a-f0-9]{40}$/.test(revision||'')) { fs.writeFileSync('build-info.json',JSON.stringify({version:require('./package.json').version,revision:null})); } else fs.writeFileSync('build-info.json',JSON.stringify({version:require('./package.json').version,revision}));"
 ENV SWITCHBOARD_INSTALL_MODE=compose
+COPY shared ./shared
 COPY server ./server
 COPY plugins ./plugins
 COPY docs ./docs
