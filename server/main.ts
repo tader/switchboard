@@ -1,4 +1,4 @@
-import { initOutputStore, sweepOutputs } from './activity-output.ts';
+import { initOutputStore, maintainOutputs } from './activity-output.ts';
 import { startLocalManager } from './local-manager.ts';
 import { ensureUpdateIdentity, lifecycle, updates, updaterApi, startUpdateChecks } from './updates/control.ts';
 import { runningBuild } from './updates/releases.ts';
@@ -134,7 +134,7 @@ lifecycle.open = async () => {
     await sweepConnectFlows(); await sweepBrowserProfiles();
     timers.push(setInterval(() => { void sweepConnectFlows().then(() => sweepBrowserProfiles()).catch(() => {}); }, 30_000));
     initOutputStore();
-    timers.push(setInterval(() => { try { sweepOutputs(); } catch { /* Retry next sweep. */ } }, 60_000));
+    timers.push(setInterval(() => { try { maintainOutputs(); } catch { /* Retry next sweep. */ } }, 60_000));
     prune(); timers.push(setInterval(prune, 6 * 3600_000));
     for (const timer of timers) timer.unref();
     stopUpdateChecks = startUpdateChecks();

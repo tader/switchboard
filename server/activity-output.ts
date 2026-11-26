@@ -1,15 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { config } from './config.ts';
 import { all, db, one, run } from './db.ts';
 import { encrypt, decrypt } from './crypto.ts';
 import { badRequest, notFound, HttpError } from './http.ts';
 import type { OutputPreviewRule } from './plugins/api.ts';
-import { openPreviewStore, syncDirectory, assertPreviewIsolation } from '../shared/activity-preview-store.ts';
+import { openPreviewStore, syncDirectory, previewGeneration, removePreviewFile, previewFilePattern, assertOwnedPreviewStore } from '../shared/activity-preview-store.ts';
 
 export const OUTPUT_LIMIT = 16 * 1024;
-let store: { root: string; generation: string; excluded: string[] } | undefined;
+let store: { root: string; generation: string; excluded: string[]; instance: string; storeId: string } | undefined;
 const policyKey = 'activity-output-retention';
 export function outputPolicy(): { hours: number; revision: number } {
   return JSON.parse(one('SELECT value FROM instance_settings WHERE key = ?', policyKey)?.value ?? '{"hours":4,"revision":0}');
@@ -20,21 +20,30 @@ function transaction<T>(f: () => T): T {
 }
 export function initOutputStore() {
   store = undefined;
-  if (!config.previewRoot || !config.previewRestoreSafe) return;
+  if (!config.previewRoot || !config.previewRestoreSafe || !config.previewInstance || !config.previewEpoch || !config.previewStoreId) return;
   try {
     const excluded = [config.dataDir, config.root, ...JSON.parse(config.previewExcludedRoots ?? '[]')];
-    const generation = openPreviewStore(config.previewRoot, excluded);
-    store = { root: config.previewRoot, generation, excluded };
+    if (assertOwnedPreviewStore(config.previewRoot, excluded, config.previewInstance).storeId !== config.previewStoreId) throw Error('Preview store binding changed');
+    openPreviewStore(config.previewRoot, excluded, config.previewInstance);
+    const state = previewGeneration(config.previewRoot, excluded, config.previewInstance);
+    const generation = fencedGeneration(state.generation);
+    store = { root: config.previewRoot, generation, excluded, instance: config.previewInstance, storeId: state.identity.storeId };
     sweepOutputs();
   } catch { store = undefined; console.warn('Activity output capture omitted: isolated preview storage unavailable'); }
 }
+function fencedGeneration(generation: string) {
+  return createHash('sha256').update(generation + ':' + config.previewEpoch).digest('hex');
+}
 function file(capture: string) {
   if (!store || !/^[a-f0-9-]{36}$/.test(capture)) throw Error('Preview storage unavailable');
-  assertPreviewIsolation(store.root, store.excluded);
-  // Recheck generation on every access, including after a manager invalidation.
-  const state = JSON.parse(fs.readFileSync(path.join(store.root, 'generation.json'), 'utf8'));
-  if (state.retiring || state.generation !== store.generation) throw Error('Preview generation retired');
-  return path.join(store.root, capture + '.enc');
+  const state = previewGeneration(store.root, store.excluded, store.instance);
+  if (state.retiring || fencedGeneration(state.generation) !== store.generation || state.identity.storeId !== store.storeId) throw Error('Preview generation retired');
+  return path.join(store.root, 'preview-' + store.storeId + '-' + capture + '.enc');
+}
+/** The startup and minute-timer path share recovery: no process restart is needed. */
+export function maintainOutputs() {
+  if (!store) { initOutputStore(); if (!store) sweepOutputs(); return; }
+  try { sweepOutputs(); } catch { store = undefined; }
 }
 export function sweepOutputs(time = Date.now()) {
   transaction(() => {
@@ -47,17 +56,15 @@ export function sweepOutputs(time = Date.now()) {
   });
   if (!store) return;
   for (const row of all('SELECT capture_id FROM audit_output_unlinks')) {
-    fs.rmSync(file(row.capture_id), { force: true });
+    removePreviewFile(store.root, path.basename(file(row.capture_id)), store.excluded, store.instance);
     run('DELETE FROM audit_output_unlinks WHERE capture_id = ?', row.capture_id);
   }
   for (const name of fs.readdirSync(store.root)) {
-    if (name === 'generation.json') continue;
-    const capture = name.endsWith('.enc') ? name.slice(0, -4) : '';
-    if (!capture || !one('SELECT 1 FROM audit_outputs WHERE capture_id = ? AND generation = ?', capture, store.generation)) {
-      fs.rmSync(path.join(store.root, name), { recursive: true, force: true });
-    } else if (!fs.existsSync(file(capture))) {
-      run("UPDATE audit_log SET output_state = 'unavailable' WHERE id = (SELECT audit_id FROM audit_outputs WHERE capture_id = ?)", capture);
-      run('DELETE FROM audit_outputs WHERE capture_id = ?', capture);
+    const match = name.match(previewFilePattern);
+    if (!match || match[1] !== store.storeId) continue; // Unknown sentinels/directories are never ours to delete.
+    const capture = match[2];
+    if (name.endsWith('.tmp') || !one('SELECT 1 FROM audit_outputs WHERE capture_id = ? AND generation = ?', capture, store.generation)) {
+      removePreviewFile(store.root, name, store.excluded, store.instance);
     }
   }
   // Missing files also revoke metadata (including files removed outside the app).
@@ -67,10 +74,32 @@ export function sweepOutputs(time = Date.now()) {
   }
   syncDirectory(store.root);
 }
-export function setOutputRetention(hours: unknown) {
+export function outputCaptureAvailability(): { available: boolean; reason: 'ready' | 'restore-unsupported' | 'not-provisioned' | 'storage-unavailable' } {
+  if (!config.previewRestoreSafe || !config.previewInstance || !config.previewEpoch || !config.previewStoreId) return { available: false, reason: 'restore-unsupported' };
+  if (!config.previewRoot) return { available: false, reason: 'not-provisioned' };
+  if (!store) return { available: false, reason: 'storage-unavailable' };
+  try {
+    file('00000000-0000-0000-0000-000000000000');
+    fs.accessSync(store.root, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+    return { available: true, reason: 'ready' };
+  } catch { return { available: false, reason: 'storage-unavailable' }; }
+}
+function retentionRevision(policy: ReturnType<typeof outputPolicy>) {
+  // Include value and the external restore epoch: a restored numeric revision is not a fresh approval.
+  return createHash('sha256').update(JSON.stringify({ ...policy, epoch: config.previewEpoch })).digest('hex');
+}
+export function outputRetentionSettings() {
+  const policy = outputPolicy();
+  return { hours: policy.hours, revision: retentionRevision(policy), capture: outputCaptureAvailability() };
+}
+export function setOutputRetention(hours: unknown, expectedRevision?: string) {
   if (typeof hours !== 'number' || !Number.isSafeInteger(hours) || hours < 0 || hours > Math.floor((Number.MAX_SAFE_INTEGER - Date.now()) / 3600_000)) throw badRequest('Enter a whole number of hours, 0 or greater.');
   transaction(() => {
     const old = outputPolicy();
+    if (expectedRevision !== undefined && (typeof expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(expectedRevision))) throw badRequest('Load the current retention policy revision before saving.');
+    if (expectedRevision !== undefined && retentionRevision(old) !== expectedRevision) {
+      throw Object.assign(new HttpError(409, 'Output preview retention changed. Reload the setting and review your change.'), { code: 'retention_conflict' });
+    }
     run('INSERT INTO instance_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', policyKey, JSON.stringify({ hours, revision: old.revision + 1 }));
     if (!hours) {
       run("UPDATE audit_log SET output_state = 'expired' WHERE id IN (SELECT audit_id FROM audit_outputs)");

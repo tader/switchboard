@@ -17,7 +17,7 @@ try {
   await command('docker', ['info', '--format', '{{.ServerVersion}}']);
   await command('docker', ['build', '--build-arg', `SWITCHBOARD_REVISION=${previousRevision}`, '-t', previousTag, root]);
   const source = path.join(temp, 'source'); fs.mkdirSync(source);
-  for (const name of ['server', 'plugins', 'docs', 'web', 'package.json', 'package-lock.json', 'Dockerfile', 'docker-entrypoint.sh', '.dockerignore']) fs.cpSync(path.join(root, name), path.join(source, name), { recursive: true, filter: p => !p.includes('/node_modules') && !p.includes('/web/dist') });
+  for (const name of ['server', 'shared', 'plugins', 'docs', 'web', 'package.json', 'package-lock.json', 'Dockerfile', 'docker-entrypoint.sh', '.dockerignore']) fs.cpSync(path.join(root, name), path.join(source, name), { recursive: true, filter: p => !p.includes('/node_modules') && !p.includes('/web/dist') });
   const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8')); pkg.version = '99.0.0'; atomic(path.join(source, 'package.json'), pkg); fs.chmodSync(path.join(source, 'package.json'), 0o644);
   let schema = fs.readFileSync(path.join(source, 'server/db.ts'), 'utf8'); schema = schema.replace('\n];\n', '\n  `ALTER TABLE connections ADD COLUMN synthetic_upgrade TEXT;`,\n];\n'); fs.writeFileSync(path.join(source, 'server/db.ts'), schema);
   await command('docker', ['build', '--build-arg', `SWITCHBOARD_REVISION=${revision}`, '-t', candidateTag, source]);

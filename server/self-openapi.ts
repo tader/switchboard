@@ -69,8 +69,8 @@ export function openapiDocument() {
         parameters: [id('Audit entry id')], description: 'Same owner authorization and deadline as reveal. No preview field. Anchor displayForMs to monotonic time at request send. Poll every 5 seconds; clear on failed checks or page hide.',
       }) },
       '/api/admin/activity-retention': {
-        get: op('Admin', 'Read output preview retention'),
-        put: op('Admin', 'Set output preview retention', { requestBody: json({ type: 'object', required: ['hours'], properties: { hours: { type: 'integer', minimum: 0, default: 4 } } }), description: 'Zero disables and removes stored previews. Shorter values clamp existing deadlines; increases apply to future captures. Request retention is independent.' }),
+        get: op('Admin', 'Read output preview retention', { description: 'Returns hours, revision and server-derived capture availability (available and reason). Availability describes the server installation, independent of the viewing client.' }),
+        put: op('Admin', 'Set output preview retention', { requestBody: json({ type: 'object', required: ['hours', 'revision'], properties: { hours: { type: 'integer', minimum: 0, default: 4 }, revision: { type: 'string', description: 'Opaque policy revision from the preceding GET, bound to its value and restore epoch; stale revisions return 409 without applying the change.' } } }), description: 'Zero disables and removes stored previews. Shorter values clamp existing deadlines; increases apply to future captures. Request retention is independent.' }),
       },
       '/api/credentials': {
         get: op('Credentials', 'List reusable credentials owned by the full-access caller'),

@@ -214,20 +214,24 @@ test('old server rejects a future database schema before any normal startup', ()
 });
 
 test('checkout backup excludes preview files and rollback retires generation before restart', async () => {
-  const { openPreviewStore } = await import('../shared/activity-preview-store.ts');
+  const { provisionPreviews } = await import('../updater/activity-previews.ts');
   const c = new FakeController(settings('preview-rollback')); c.failReady = true;
-  const generation = openPreviewStore(c.previewRoot(), c.previewExclusions());
-  fs.writeFileSync(path.join(c.previewRoot(), 'synthetic.enc'), 'synthetic-ciphertext', { mode: 0o600 });
+  const env = await provisionPreviews(c.s, c.current(), c.previewExclusions(), async () => '', atomic);
+  const ownedFile = 'preview-' + env.SWITCHBOARD_ACTIVITY_PREVIEW_STORE_ID + '-12345678-1234-1234-1234-123456789abc.enc';
+  const generation = JSON.parse(fs.readFileSync(path.join(c.previewRoot(), 'generation.json'), 'utf8')).generation;
+  fs.writeFileSync(path.join(c.previewRoot(), ownedFile), 'synthetic-ciphertext', { mode: 0o600 });
+  fs.writeFileSync(path.join(c.previewRoot(), 'unrelated-sentinel'), 'must survive', { mode: 0o600 });
   fs.writeFileSync(path.join(c.s.dataDir, 'synthetic.db'), 'metadata-only');
   const invalidate = c.invalidateOutputs.bind(c);
   c.invalidateOutputs = async () => { c.events.push('invalidate-previews'); await invalidate(); };
   await c.execute(job());
   assert.equal(c.journal!.phase, 'rolled-back');
   assert.equal(fs.readFileSync(path.join(c.journal!.backup!, 'synthetic.db'), 'utf8'), 'metadata-only');
-  assert.ok(!fs.existsSync(path.join(c.journal!.backup!, 'synthetic.enc')));
-  assert.ok(!fs.existsSync(path.join(c.s.stateDir, 'failed-data-synthetic-job', 'synthetic.enc')));
-  assert.ok(!fs.existsSync(path.join(c.previewRoot(), 'synthetic.enc')));
+  assert.ok(!fs.existsSync(path.join(c.journal!.backup!, ownedFile)));
+  assert.ok(!fs.existsSync(path.join(c.s.stateDir, 'failed-data-synthetic-job', ownedFile)));
+  assert.ok(!fs.existsSync(path.join(c.previewRoot(), ownedFile)));
   assert.notEqual(JSON.parse(fs.readFileSync(path.join(c.previewRoot(), 'generation.json'), 'utf8')).generation, generation);
   assert.ok(c.events.indexOf('invalidate-previews') < c.events.indexOf('start:/synthetic/previous'));
+  assert.equal(fs.readFileSync(path.join(c.previewRoot(), 'unrelated-sentinel'), 'utf8'), 'must survive');
   fs.rmSync(c.previewRoot(), { recursive: true, force: true });
 });

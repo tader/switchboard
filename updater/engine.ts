@@ -1,4 +1,4 @@
-import { assertPreviewIsolation, invalidatePreviews, openPreviewStore } from '../shared/activity-preview-store.ts';
+import { provisionPreviews, boundPreviewEnvironment, retirePreviewStores, verifyComposePreviewBacking } from './activity-previews.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -142,15 +142,26 @@ export class Controller {
       ? v.type === 'volume' && info.volumes?.[v.source]?.name === this.s.compose!.dataVolume
       : v.type === 'bind' && path.resolve(v.source) === this.s.dataDir);
     if (!volumes.some((v: any) => dataMount(v) && !v.read_only)) throw Error('Compose /data mount does not match the exact configured host path or named volume');
+    const offeredPreview = volumes.find((v: any) => v.target === '/activity-previews' && v.type === 'volume' && !v.read_only);
+    if (!this.s.compose!.previewVolume && offeredPreview && info.volumes?.[offeredPreview.source]?.name === this.s.compose!.project + '-activity-previews') {
+      this.s.compose!.previewVolume = info.volumes[offeredPreview.source].name;
+    }
     const previewMount = (v: any) => !!this.s.compose!.previewVolume && v.target === '/activity-previews' && v.type === 'volume' && info.volumes?.[v.source]?.name === this.s.compose!.previewVolume && this.s.compose!.previewVolume !== this.s.compose!.dataVolume && this.s.compose!.previewVolume !== this.s.compose!.stateVolume;
     if (this.s.compose!.previewVolume && (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(this.s.compose!.previewVolume) || !volumes.some((v: any) => previewMount(v) && !v.read_only))) throw Error('Exact isolated preview volume required');
     if (volumes.some((v: any) => !v.read_only && !dataMount(v) && !previewMount(v))) throw Error('All writable persistent mounts must be inside the managed /data mount');
+    if (this.s.compose!.previewVolume) {
+      const definition = info.volumes?.[offeredPreview?.source];
+      if (!definition || definition.driver && definition.driver !== 'local' || Object.keys(definition.driver_opts ?? {}).length) throw Error('Preview isolation requires a default local volume');
+      const names = (await command('docker', ['volume', 'ls', '--format', '{{.Name}}'])).split('\n');
+      if (!names.includes(this.s.compose!.previewVolume)) await command('docker', ['volume', 'create', this.s.compose!.previewVolume]);
+      await verifyComposePreviewBacking(this.s, command);
+    }
     if (service.privileged || volumes.some((v: any) => /docker\.sock/.test(v.source ?? '')) || service.use_api_socket) throw Error('Application must not have Docker control access');
     return service;
   }
-  override(image: string, gated: boolean) {
+  override(image: string, gated: boolean, previewEnv: Record<string, string> = {}) {
     const p = path.join(this.s.stateDir, 'active-compose.json');
-    atomic(p, { services: { [this.s.compose!.service]: { image, pull_policy: 'never', environment: { SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: 'compose', SWITCHBOARD_DATA_DIR: '/data', SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: this.s.compose!.previewVolume ? '/activity-previews' : '', SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: this.s.compose!.previewVolume ? '1' : '0', SWITCHBOARD_ACTIVITY_PREVIEW_EXCLUDED_ROOTS: JSON.stringify(['/state']) } } } });
+    atomic(p, { services: { [this.s.compose!.service]: { image, pull_policy: 'never', environment: { ...(readJson<any>(p)?.services?.[this.s.compose!.service]?.environment ?? {}), SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: 'compose', SWITCHBOARD_DATA_DIR: '/data', ...previewEnv } } } });
     return p;
   }
   current(): string { return readJson<{ release: string }>(path.join(this.s.stateDir, 'current.json'))?.release ?? this.s.initialRelease!; }
@@ -268,32 +279,23 @@ export class Controller {
   previewRoot() { return this.s.stateDir + '.activity-previews'; }
   previewExclusions(release = this.current()) { return [this.s.dataDir, this.s.stateDir, this.s.initialRelease!, release]; }
   async invalidateOutputs(restoreImage?: string) {
-    if (this.s.mode === 'compose') {
-      const volume = this.s.compose?.previewVolume;
-      if (!volume) return; // Old installations have never enabled capture.
-      await this.composeInfo();
-      // Fixed helper from the controller, not code from a rollback image. No data/state mounts.
-      const image = restoreImage ?? this.journal?.previous ?? await this.identifyCurrent();
-      await command('docker', ['run', '--rm', '--network=none', '--read-only', '--user', '0:0', '--entrypoint', 'node', '--mount', `type=volume,src=${volume},dst=/activity-previews`, image, '-e',
-        `const fs=require('node:fs'),crypto=require('node:crypto');const root='/activity-previews';const sync=()=>{const d=fs.openSync(root,'r');fs.fsyncSync(d);fs.closeSync(d)};const write=s=>{const f=fs.openSync(root+'/generation.tmp','w',384);fs.writeFileSync(f,JSON.stringify(s));fs.fsyncSync(f);fs.closeSync(f);fs.renameSync(root+'/generation.tmp',root+'/generation.json');sync()};const generation=crypto.randomUUID();write({generation,retiring:true});for(const n of fs.readdirSync(root))if(n!=='generation.json')fs.rmSync(root+'/'+n,{recursive:true,force:true});sync();write({generation});`]);
-    } else if (this.s.mode === 'checkout') {
-      assertPreviewIsolation(this.previewRoot(), this.previewExclusions());
-      invalidatePreviews(this.previewRoot());
-    }
-    // Native runtime managers must first integrate their additional installer restore paths.
+    await retirePreviewStores(this.s, this.s.mode === 'compose' ? restoreImage ?? this.journal?.previous ?? await this.identifyStoppedImage() : undefined,
+      this.s.mode === 'compose' ? ['/data', '/state', '/app'] : this.previewExclusions(), command, atomic);
   }
   async start(release: string, gated = true) {
-    if (this.s.mode === 'compose') await this.compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', this.s.compose!.service], this.override(release, gated));
+    if (this.s.mode === 'compose') {
+      await this.composeInfo();
+      let previewEnv: Record<string, string>;
+      try { previewEnv = await provisionPreviews(this.s, release, ['/data', '/state', '/app'], command, atomic); }
+      catch { previewEnv = boundPreviewEnvironment(this.s, ['/data', '/state', '/app']); }
+      await this.compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', this.s.compose!.service], this.override(release, gated, { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0', ...previewEnv }));
+    }
     else {
       if (fs.existsSync(path.join(this.s.dataDir, '.server-lock'))) throw Error('Server lock is still held');
       if (this.s.mode === 'runtime') await assertListenAvailable(this.s.env.SWITCHBOARD_HOST ?? '127.0.0.1', Number(this.s.env.SWITCHBOARD_PORT ?? (new URL(this.s.appUrl).port || 8770)));
-      const previewEnv = this.s.mode === 'checkout' ? {
-        SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: this.previewRoot(),
-        SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '1',
-        SWITCHBOARD_ACTIVITY_PREVIEW_EXCLUDED_ROOTS: JSON.stringify(this.previewExclusions(release)),
-      } : { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
-      if (this.s.mode === 'checkout') try { openPreviewStore(this.previewRoot(), this.previewExclusions(release)); }
-      catch { previewEnv.SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE = '0'; }
+      let previewEnv: Record<string, string> = { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
+      if (this.s.mode === 'checkout') try { previewEnv = { ...previewEnv, ...await provisionPreviews(this.s, release, this.previewExclusions(release), command, atomic) }; }
+      catch { previewEnv = boundPreviewEnvironment(this.s, this.previewExclusions(release)); }
       const child = spawn(this.s.mode === 'runtime' ? runtimeNode(release) : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, ...previewEnv, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
       this.child = child; child.on('message', message => this.onMessage?.(message));
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });

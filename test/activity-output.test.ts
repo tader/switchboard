@@ -10,6 +10,8 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'activity-output-'));
 process.env.SWITCHBOARD_DATA_DIR = path.join(tmp, 'data');
 process.env.SWITCHBOARD_ACTIVITY_PREVIEW_ROOT = path.join(tmp, 'outputs');
 process.env.SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE = '1';
+process.env.SWITCHBOARD_ACTIVITY_PREVIEW_INSTANCE = 'synthetic-instance';
+process.env.SWITCHBOARD_ACTIVITY_PREVIEW_EPOCH = 'synthetic-epoch';
 process.env.SWITCHBOARD_AUDIT_RETENTION_DAYS = '0';
 fs.mkdirSync(process.env.SWITCHBOARD_DATA_DIR);
 const { initDb, run, one, all } = await import('../server/db.ts');
@@ -25,6 +27,9 @@ const { HttpError } = await import('../server/http.ts');
 const { invalidatePreviews, openPreviewStore, assertPreviewIsolation } = await import('../shared/activity-preview-store.ts');
 const owner = createUser('preview-owner', 'admin'), other = createUser('preview-other', 'user');
 const root = process.env.SWITCHBOARD_ACTIVITY_PREVIEW_ROOT!;
+openPreviewStore(root, [process.env.SWITCHBOARD_DATA_DIR!], 'synthetic-instance');
+const { config: testConfig } = await import('../server/config.ts');
+testConfig.previewStoreId = JSON.parse(fs.readFileSync(path.join(root, 'store.json'), 'utf8')).storeId;
 const rule = { origin: 'https://api.example.test', method: 'GET' as const, path: '/profile', authMethods: ['user'], fields: { account_id: { maxBytes: 128 } } };
 const caller = { source: 'proxy' as const, tokenId: null, tokenName: null, ip: null, userAgent: null };
 const realNow = Date.now;
@@ -196,12 +201,12 @@ test('snapshots exclude exact ciphertext and payload; restore invalidation survi
   assert.ok(!dbBytes.includes(ciphertext)); assert.ok(!dbBytes.includes(Buffer.from('demo-account')));
   const metadata = one('SELECT * FROM audit_outputs WHERE audit_id = ?', id);
   const prior = JSON.parse(fs.readFileSync(path.join(root, 'generation.json'), 'utf8')).generation;
-  invalidatePreviews(root);
+  invalidatePreviews(root, [process.env.SWITCHBOARD_DATA_DIR!], 'synthetic-instance');
   assert.equal(files().length, 0);
   // Simulate crash after durable retirement but before physical cleanup/restore completes.
   fs.writeFileSync(path.join(root, filename), ciphertext);
-  fs.writeFileSync(path.join(root, 'generation.json'), JSON.stringify({ generation: '12345678-1234-1234-1234-123456789abc', retiring: true }));
-  assert.notEqual(openPreviewStore(root, [process.env.SWITCHBOARD_DATA_DIR!]), prior);
+  fs.writeFileSync(path.join(root, 'generation.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(root, 'generation.json'), 'utf8')), generation: '12345678-1234-1234-1234-123456789abc', retiring: true }));
+  assert.notEqual(openPreviewStore(root, [process.env.SWITCHBOARD_DATA_DIR!], 'synthetic-instance'), prior);
   assert.equal(files().length, 0);
   output.initOutputStore();
   assert.equal(output.readOutput(owner.id, id, true).state, 'unavailable');
@@ -298,4 +303,86 @@ test('missing restore capability omits capture; disable does not claim physical 
   assert.equal(files().length, 0);
   assert.equal(output.setOutputRetention(0).hours, 0);
   output.setOutputRetention(4);
+});
+
+test('admin writes require the loaded policy revision and conflicts never shorten or purge', async () => {
+  const id = await capture();
+  const originalExpiry = one('SELECT expires_at FROM audit_outputs WHERE audit_id = ?', id).expires_at;
+  const headers = { authorization: 'Bearer ' + createToken(owner.id, 'policy-admin', null).secret, 'content-type': 'application/json' };
+  const read = async () => (await app.request('/api/admin/activity-retention', { headers })).json() as Promise<any>;
+  const put = (body: unknown) => app.request('/api/admin/activity-retention', { method: 'PUT', headers, body: JSON.stringify(body) });
+  const adminA = await read(), adminB = await read();
+  assert.equal(adminA.hours, 4);
+  for (const revision of [undefined, null, -1, '0', 0.5]) {
+    assert.equal((await put({ hours: 1, revision })).status, 400);
+    assert.equal(output.outputPolicy().hours, 4);
+  }
+  assert.equal((await put({ hours: 8, revision: adminB.revision })).status, 200);
+  // Admin A still thinks 6 is an increase from 4. It must not silently shorten the new 8.
+  assert.equal((await put({ hours: 6, revision: adminA.revision })).status, 409);
+  assert.equal((await put({ hours: 0, revision: adminA.revision })).status, 409);
+  assert.equal(output.outputPolicy().hours, 8);
+  assert.equal(one('SELECT expires_at FROM audit_outputs WHERE audit_id = ?', id).expires_at, originalExpiry);
+  assert.equal(files().length, 1);
+  const refreshed = await read();
+  assert.equal((await put({ hours: 1, revision: refreshed.revision })).status, 200);
+  assert.equal(output.outputPolicy().hours, 1);
+});
+
+test('admin capture availability comes from server provisioning, regardless of client host', async () => {
+  const { config } = await import('../server/config.ts');
+  const headers = { authorization: 'Bearer ' + createToken(owner.id, 'availability-admin', null).secret };
+  const read = async (agent: string) => (await app.request('/api/admin/activity-retention', { headers: { ...headers, 'user-agent': agent } })).json() as Promise<any>;
+  assert.deepEqual((await read('Switchboard macOS manager')).capture, { available: true, reason: 'ready' });
+  assert.deepEqual((await read('Switchboard Windows manager')).capture, { available: true, reason: 'ready' });
+  config.previewRestoreSafe = false;
+  assert.deepEqual((await read('Chrome browser')).capture, { available: false, reason: 'restore-unsupported' });
+  config.previewRestoreSafe = true;
+  const rootBefore = config.previewRoot;
+  config.previewRoot = undefined;
+  assert.deepEqual((await read('Switchboard macOS manager')).capture, { available: false, reason: 'not-provisioned' });
+  config.previewRoot = rootBefore;
+  fs.renameSync(path.join(root, 'generation.json'), path.join(root, 'generation.unavailable'));
+  assert.deepEqual((await read('Chrome browser')).capture, { available: false, reason: 'storage-unavailable' });
+  fs.renameSync(path.join(root, 'generation.unavailable'), path.join(root, 'generation.json'));
+});
+
+test('periodic maintenance reopens failed startup storage and drains expired files without explicit init', async () => {
+  const id = await capture();
+  const marker = path.join(root, 'generation.json'), original = fs.readFileSync(marker, 'utf8');
+  fs.writeFileSync(marker, '{temporarily unreadable');
+  output.initOutputStore();
+  assert.equal(output.readOutput(owner.id, id, true).state, 'unavailable');
+  time += 4 * 3600_000;
+  output.maintainOutputs(); // Still offline: expire metadata and retain the physical unlink queue.
+  assert.equal(all('SELECT * FROM audit_outputs').length, 0);
+  assert.equal(all('SELECT * FROM audit_output_unlinks').length, 1);
+  assert.equal(files().length, 1);
+  fs.writeFileSync(marker, original);
+  // This is the exact callback invoked by the running minute timer, without explicit initialization.
+  output.maintainOutputs();
+  assert.equal(files().length, 0);
+  assert.equal(all('SELECT * FROM audit_output_unlinks').length, 0);
+  assert.equal(output.outputCaptureAvailability().available, true);
+});
+test('periodic cleanup leaves unknown files and directories in a verified root untouched', async () => {
+  const sentinel = path.join(root, 'unrelated-sentinel');
+  fs.writeFileSync(sentinel, 'must survive');
+  fs.mkdirSync(path.join(root, 'unrelated-folder'));
+  await capture();
+  output.sweepOutputs();
+  assert.equal(fs.readFileSync(sentinel, 'utf8'), 'must survive');
+  assert.ok(fs.statSync(path.join(root, 'unrelated-folder')).isDirectory());
+});
+
+test('policy approvals cannot survive a restored numeric revision or restore epoch', async () => {
+  const current = output.outputPolicy(), loaded = output.outputRetentionSettings();
+  run("UPDATE instance_settings SET value = ? WHERE key = 'activity-output-retention'", JSON.stringify({ hours: 12, revision: current.revision }));
+  assert.throws(() => output.setOutputRetention(10, loaded.revision), /retention changed/);
+  assert.equal(output.outputPolicy().hours, 12);
+  const beforeRestore = output.outputRetentionSettings(), oldEpoch = testConfig.previewEpoch;
+  testConfig.previewEpoch = 'restored-epoch';
+  assert.notEqual(output.outputRetentionSettings().revision, beforeRestore.revision);
+  assert.throws(() => output.setOutputRetention(1, beforeRestore.revision), /retention changed/);
+  testConfig.previewEpoch = oldEpoch;
 });

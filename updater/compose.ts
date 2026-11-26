@@ -6,12 +6,17 @@ const project = process.env.SWITCHBOARD_COMPOSE_PROJECT ?? 'switchboard';
 const file = '/state/settings.json';
 if (!directory || !path.isAbsolute(directory)) throw Error('Bundle directory required');
 if (!fs.existsSync(file)) atomic(file, { instance: project, mode: 'compose', dataDir: '/data', stateDir: '/state', appUrl: 'http://switchboard:8770', env: {}, compose: { directory, project, service: 'switchboard', files: [path.join(directory, 'compose.yaml')], privateNetwork: true, dataVolume: `${project}-app-data`, stateVolume: `${project}-updater-state`, previewVolume: `${project}-activity-previews`, sourceBuild: process.env.SWITCHBOARD_SOURCE_BUILD === 'true' } } satisfies Settings);
-if (['backup', 'restore'].includes(process.argv[2])) {
+if (['backup', 'restore', 'activate'].includes(process.argv[2])) {
   const s = readJson<Settings>(file)!; const unlock = acquireController(s);
   try {
     const c = new Controller(s);
-    if (process.argv[2] === 'backup') {
-      const image = await c.identifyCurrent(); await c.api('drain', {}); await c.stop();
+    if (process.argv[2] === 'activate') {
+      const image = await c.identifyCurrent();
+      atomic(file, c.s); // Validated migration for retained pre-feature settings.
+      await c.stop(); await c.start(image, false);
+      console.log('Switchboard started. Admin → Activity retention reports output storage availability.');
+    } else if (process.argv[2] === 'backup') {
+      const image = await c.identifyCurrent(); atomic(file, c.s); await c.api('drain', {}); await c.stop();
       const id = `manual-${Date.now()}`, dir = `/state/backups/${id}`;
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); await c.dataHelper('snapshot', dir, image);
       atomic(`${dir}.json`, { image }); await c.start(image, false); console.log(`Backup saved: ${id}`);
@@ -22,6 +27,7 @@ if (['backup', 'restore'].includes(process.argv[2])) {
       const history = readJson<{ previous: string; backup: string }>(`/state/history/${id}.json`);
       const image = saved?.image ?? (history?.backup === dir ? history.previous : undefined);
       if (!image || !fs.existsSync(dir)) throw Error('Backup not found; use an ID printed by backup or recorded in history');
+      await c.composeInfo(); atomic(file, c.s);
       await c.stop();
       await c.invalidateOutputs(image);
       const preserved = `/state/failed-data-manual-${Date.now()}`; fs.mkdirSync(preserved, { mode: 0o700 });

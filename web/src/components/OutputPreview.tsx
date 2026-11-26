@@ -1,3 +1,4 @@
+import { acceptDisplayGrant, displayGrantActive, type DisplayClock } from './output-display-grant';
 import { useEffect, useId, useRef, useState } from 'react';
 import { ApiError, api } from '../api';
 import { Button, Spinner } from './ui';
@@ -28,8 +29,8 @@ export function OutputPreview({ id, metadata }: { id: number; metadata: OutputMe
     if (!expanded) return;
     let live = true;
     let capture: string | undefined;
-    let grant = 0;
-    let wallGrant = 0;
+    let grant: DisplayClock | undefined;
+    const clock = () => ({ monotonic: performance.now(), wall: Date.now() });
     let deadline: ReturnType<typeof setTimeout>;
     const controller = new AbortController();
     const clear = (next: string) => {
@@ -42,8 +43,8 @@ export function OutputPreview({ id, metadata }: { id: number; metadata: OutputMe
       if (restoreFocus) requestAnimationFrame(() => (button.current ?? heading.current)?.focus());
     };
     const read = async (payload: boolean) => {
-      const sent = performance.now();
-      const wallSent = Date.now();
+      if (!payload && (!grant || !displayGrantActive(grant, clock()))) return clear('failed');
+      const sent = clock();
       try {
         const result = await api<OutputReply>(`/audit/${id}/output${payload ? '' : '/status'}`, {
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), cache: 'no-store',
@@ -52,12 +53,12 @@ export function OutputPreview({ id, metadata }: { id: number; metadata: OutputMe
         if (document.hidden || !navigator.onLine) return clear('failed');
         if (result.state !== 'retained') return clear(result.state);
         if (!result.captureId || (capture && capture !== result.captureId)) return clear('unavailable');
-        const duration = Math.min(15_000, result.displayForMs ?? 0);
-        grant = sent + duration; wallGrant = wallSent + duration;
-        if (performance.now() >= grant || Date.now() >= wallGrant) return clear('failed');
+        const next = acceptDisplayGrant(payload ? undefined : grant, sent, result.displayForMs ?? 0, clock());
+        if (!next) return clear('failed');
+        grant = next;
         capture = result.captureId;
         clearTimeout(deadline);
-        deadline = setTimeout(() => clear(result.expiresAt && result.expiresAt <= Date.now() ? 'expired' : 'failed'), Math.max(0, grant - performance.now()));
+        deadline = setTimeout(() => clear(result.expiresAt && result.expiresAt <= Date.now() ? 'expired' : 'failed'), Math.max(0, grant.monotonic - performance.now()));
         if (payload) { setData(result); setLoading(false); }
         else setData(previous => previous ? { ...previous, expiresAt: result.expiresAt } : previous);
       } catch (e) {
@@ -77,7 +78,7 @@ export function OutputPreview({ id, metadata }: { id: number; metadata: OutputMe
     // Check before paint on resume, even when timers were suspended.
     let frame = 0;
     const check = () => {
-      if (capture && (performance.now() >= grant || Date.now() >= wallGrant)) clear('failed');
+      if (capture && (grant && !displayGrantActive(grant, clock()))) clear('failed');
       if (live) frame = requestAnimationFrame(check);
     };
     frame = requestAnimationFrame(check);

@@ -14,7 +14,7 @@ const port = socket.address().port; await new Promise(r => socket.close(r));
 const base = 'http://127.0.0.1:' + port;
 Object.assign(process.env, {
   SWITCHBOARD_DATA_DIR: path.join(tmp, 'data'), SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: path.join(tmp, 'outputs'),
-  SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '1', SWITCHBOARD_PORT: String(port), SWITCHBOARD_HOST: '127.0.0.1',
+  SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '1', SWITCHBOARD_ACTIVITY_PREVIEW_INSTANCE: 'synthetic-ui', SWITCHBOARD_ACTIVITY_PREVIEW_EPOCH: 'synthetic-ui-epoch', SWITCHBOARD_PORT: String(port), SWITCHBOARD_HOST: '127.0.0.1',
   SWITCHBOARD_PUBLIC_URL: base, SWITCHBOARD_UPDATE_CHECKS: 'false', SWITCHBOARD_WATCH_PLUGINS: 'false',
 });
 fs.mkdirSync(process.env.SWITCHBOARD_DATA_DIR);
@@ -25,6 +25,11 @@ const users = await imp('server/users.ts');
 const owner = users.createUser('synthetic-ui-admin', 'admin');
 const session = users.createSession(owner.id);
 const audit = await imp('server/audit.ts');
+const shared = await imp('shared/activity-preview-store.ts');
+shared.openPreviewStore(process.env.SWITCHBOARD_ACTIVITY_PREVIEW_ROOT, [process.env.SWITCHBOARD_DATA_DIR], 'synthetic-ui');
+const identity = JSON.parse(fs.readFileSync(path.join(process.env.SWITCHBOARD_ACTIVITY_PREVIEW_ROOT, 'store.json'), 'utf8'));
+process.env.SWITCHBOARD_ACTIVITY_PREVIEW_STORE_ID = identity.storeId;
+(await imp('server/config.ts')).config.previewStoreId = identity.storeId;
 const outputs = await imp('server/activity-output.ts'); outputs.initOutputStore();
 const caller = { source: 'console', tokenId: null, tokenName: null, ip: null, userAgent: null };
 const ids = {};
@@ -180,7 +185,90 @@ try {
   await adminPage.getByRole('button', { name: 'Save changes' }).click();
   assert.equal(await adminPage.getByLabel('Output preview retention').getAttribute('aria-invalid'), 'true');
   assert.equal(await adminPage.locator(':focus').getAttribute('id'), 'output-hours');
-  console.log('PASS browser: on-demand fetch, keyboard reveal/hide/Escape/focus return, legacy/omitted/expired, failed-load Retry, failed status clearing, two-client shortening/disable, delayed reveal disposal, hung-check display bound, pagehide clearing, Cancel-first confirmation, validation, 320px dark and 200% captures');
+  // A failed GET leaves an editable draft, but Enter cannot write without a loaded policy.
+  const failedAdmin = await context.newPage();
+  let failedWrites = 0;
+  failedAdmin.on('request', req => { if (req.method() === 'PUT' && req.url().endsWith('/activity-retention')) failedWrites++; });
+  await failedAdmin.route('**/api/admin/activity-retention', route => route.request().method() === 'GET'
+    ? route.fulfill({ status: 503, json: { error: 'synthetic settings failure' } }) : route.continue());
+  await failedAdmin.goto(base + '/admin/activity-retention');
+  await failedAdmin.getByText('Couldn’t load activity retention.').waitFor();
+  await failedAdmin.getByLabel('Output preview retention').fill('1');
+  await failedAdmin.getByLabel('Output preview retention').press('Enter');
+  await failedAdmin.getByText('Load the current retention setting before saving.').waitFor();
+  assert.equal(failedWrites, 0);
+  await failedAdmin.close();
+
+  // Guard handlers independently of disabled controls while loading or saving.
+  const pendingAdmin = await context.newPage();
+  let releaseGet, releasePut, pendingWrites = 0;
+  await pendingAdmin.route('**/api/admin/activity-retention', async route => {
+    if (route.request().method() === 'GET') releaseGet = () => route.continue();
+    else {
+      pendingWrites++;
+      const response = await route.fetch();
+      releasePut = () => route.fulfill({ response });
+    }
+  });
+  await pendingAdmin.goto(base + '/admin/activity-retention');
+  await pendingAdmin.getByRole('button', { name: 'Loading setting…' }).waitFor();
+  await pendingAdmin.locator('form').evaluate(form => form.requestSubmit());
+  assert.equal(pendingWrites, 0);
+  await releaseGet();
+  await pendingAdmin.getByText('Current setting: 0 hours.').waitFor();
+  await pendingAdmin.getByLabel('Output preview retention').fill('4');
+  await pendingAdmin.getByRole('button', { name: 'Save changes' }).click();
+  const savingUntil = Date.now() + 3000;
+  while (!releasePut) { if (Date.now() > savingUntil) throw Error('Save was not held'); await new Promise(r => setTimeout(r, 10)); }
+  await pendingAdmin.locator('form').evaluate(form => { form.requestSubmit(); form.requestSubmit(); });
+  assert.equal(pendingWrites, 1);
+  await releasePut();
+  await pendingAdmin.getByText('Output preview retention saved.').waitFor();
+  await pendingAdmin.close();
+
+  const adminA = await context.newPage(), adminB = await context.newPage();
+  await Promise.all([adminA.goto(base + '/admin/activity-retention'), adminB.goto(base + '/admin/activity-retention')]);
+  await adminA.getByText('Current setting: 4 hours.').waitFor();
+  await adminB.getByText('Current setting: 4 hours.').waitFor();
+  await adminA.getByLabel('Output preview retention').fill('6');
+  await adminB.getByLabel('Output preview retention').fill('8');
+  await adminB.getByRole('button', { name: 'Save changes' }).click();
+  await adminB.getByText('Output preview retention saved.').waitFor();
+  await adminA.getByLabel('Output preview retention').press('Enter');
+  await adminA.getByText('Another administrator changed retention.', { exact: false }).waitFor();
+  await adminA.getByText('Current setting: 8 hours.').waitFor();
+  assert.equal(await adminA.getByLabel('Output preview retention').inputValue(), '6');
+  await adminA.getByRole('button', { name: 'Save changes' }).click();
+  await adminA.getByRole('dialog').waitFor();
+  await adminB.getByLabel('Output preview retention').fill('12');
+  await adminB.getByRole('button', { name: 'Save changes' }).click();
+  await adminB.getByText('Current setting: 12 hours.').waitFor();
+  // A previously confirmed intent is also stale: it cannot shorten the new 12 hours.
+  await adminA.getByRole('button', { name: 'Shorten retention', exact: true }).click();
+  await adminA.getByText('Current setting: 12 hours.').waitFor();
+  assert.equal(await adminA.getByLabel('Output preview retention').inputValue(), '6');
+  await adminA.getByRole('button', { name: 'Save changes' }).click();
+  await adminA.getByRole('button', { name: 'Shorten retention', exact: true }).click();
+  await adminA.getByText('Current setting: 6 hours.').waitFor();
+  await adminA.close(); await adminB.close();
+
+  // The shared page follows the server response rather than its desktop/browser user agent.
+  const desktop = await browser.newContext({ viewport: { width: 320, height: 700 }, userAgent: 'Switchboard macOS manager', colorScheme: 'dark' });
+  await desktop.addCookies([{ name: 'switchboard_session', value: session, url: base }]);
+  const availability = await desktop.newPage();
+  await availability.goto(base + '/admin/activity-retention');
+  await availability.getByText('Current setting: 6 hours.').waitFor();
+  assert.equal(await availability.getByText('this server is not capturing previews.', { exact: false }).count(), 0);
+  await availability.route('**/api/admin/activity-retention', async route => {
+    const response = await route.fetch();
+    const data = await response.json();
+    await route.fulfill({ response, json: { ...data, capture: { available: false, reason: 'restore-unsupported' } } });
+  });
+  await availability.reload();
+  await availability.getByText('This server’s installation needs an update', { exact: false }).waitFor();
+  await availability.screenshot({ path: path.join(artifacts, 'retention-unavailable-320.png') });
+  await desktop.close();
+  console.log('PASS browser: on-demand fetch, keyboard reveal/hide/Escape/focus return, legacy/omitted/expired, failed-load Retry, failed status clearing, two-client shortening/disable, delayed reveal disposal, hung-check display bound, pagehide clearing, Cancel-first confirmation, failed-GET Enter rejection, pending read/write guards, stale two-admin and confirmed-policy conflicts, server-derived availability, validation, 320px dark and 200% captures');
 } finally {
   if (browser) await browser.close();
   child.kill('SIGTERM');

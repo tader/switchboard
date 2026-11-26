@@ -25,7 +25,7 @@ stack() {
 }
 source=$(base config --format json | docker run --rm -i --entrypoint node "$image" -e 'let s="";for await(const c of process.stdin)s+=c;console.log(JSON.parse(s).services.updater.environment.SWITCHBOARD_SOURCE_BUILD)')
 case "$action" in
-  up) if [ "$source" = true ] && [ ! -s "$tmp/active.json" ]; then base -f compose.source.yaml build switchboard; base -f compose.source.yaml up -d; else stack up -d; fi ;;
+  up) if [ "$source" = true ] && [ ! -s "$tmp/active.json" ]; then base -f compose.source.yaml build switchboard; base -f compose.source.yaml up -d; else stack up -d; fi; stack stop updater; stack run --rm --no-deps updater node updater/compose.ts activate; read_active; stack up -d updater ;;
   down) stack down "$@" ;;
   restart) stack stop; stack up -d ;;
   stop) stack stop ;;
