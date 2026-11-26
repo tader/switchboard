@@ -4,7 +4,7 @@ import json, os, pathlib, re, shutil, socket, subprocess, tempfile, time, urllib
 root = pathlib.Path(__file__).resolve().parent.parent
 bundle = pathlib.Path(tempfile.mkdtemp(prefix='activity-compose-', dir=root.parent))
 project = 'activity-preview-qa-' + str(os.getpid())
-env = dict(os.environ, SWITCHBOARD_WRAPPER_IMAGE='switchboard-updater:activity-output-qa')
+env = dict(os.environ, SWITCHBOARD_WRAPPER_IMAGE='switchboard-updater:activity-output-qa', SWITCHBOARD_BUNDLE_DIR=str(bundle))
 owned_volumes = []
 def run(args):
     p = subprocess.run(args, cwd=bundle, env=env, capture_output=True, text=True)
@@ -12,10 +12,10 @@ def run(args):
         raise RuntimeError('Rehearsal command failed: ' + p.stderr[-3000:])
     return p.stdout.strip()
 def wrapper(*args): return run(['./switchboard', *args])
-def request(path, token, body=None):
+def request(path, token, body=None, method=None):
     headers = {'authorization': 'Bearer ' + token, 'content-type': 'application/json'}
     raw = None if body is None else json.dumps(body).encode()
-    with urllib.request.urlopen(urllib.request.Request(base + path, raw, headers), timeout=10) as response:
+    with urllib.request.urlopen(urllib.request.Request(base + path, raw, headers, method=method), timeout=10) as response:
         return json.load(response)
 def ready():
     deadline = time.monotonic() + 40
@@ -46,6 +46,7 @@ try:
     code = request('/api/admin/updates/enrollment', token, {})['code']
     wrapper('enroll', code)
     first = capture()
+    print('PASS healthy wrapper activation, enrollment and capture', flush=True)
     old_volume = project + '-activity-previews'; owned_volumes.append(old_volume)
     exec_node('switchboard', "const fs=await import('node:fs');fs.writeFileSync('/activity-previews/unrelated-sentinel','must survive',{mode:384})")
     backup = re.search(r'Backup saved: (manual-[0-9]+)', wrapper('backup')).group(1)
@@ -72,6 +73,54 @@ try:
     wrapper('up'); ready()
     assert request('/api/admin/activity-retention', token)['capture']['available']
     capture()
+    # Normal up must retire the previous store before moving to another volume.
+    ordinary = project + '-ordinary-previews'; owned_volumes.append(ordinary)
+    run(['docker', 'volume', 'create', ordinary])
+    (bundle/'compose.yaml').write_text((root/'distribution/compose/compose.yaml').read_text().replace(chr(36)+'{COMPOSE_PROJECT_NAME:-switchboard}-activity-previews', ordinary))
+    exec_node('updater', "const fs=await import('node:fs');const p='/state/settings.json',s=JSON.parse(fs.readFileSync(p));s.compose.previewVolume="+json.dumps(ordinary)+";fs.writeFileSync(p,JSON.stringify(s),{mode:384})")
+    def mutate_preview(volume, script):
+        return run(['docker','run','--rm','--network=none','--user','1000:1000','--entrypoint','node','--mount','type=volume,src='+volume+',dst=/activity-previews','switchboard:activity-output-qa','-e',script])
+    mutate_preview(old_volume, "require('fs').renameSync('/activity-previews/store.json','/activity-previews/store.unavailable')")
+    try:
+        wrapper('up')
+        raise AssertionError('An unavailable prior store did not block activation')
+    except RuntimeError as error:
+        assert 'Previous preview storage could not be retired' in str(error), str(error)
+    assert not run(compose+['ps','--status','running','-q','switchboard'])
+    assert inspect_preview(old_volume, "console.log(require('fs').readdirSync('/activity-previews').filter(n=>n.endsWith('.enc')).length)") != '0'
+    mutate_preview(old_volume, "require('fs').renameSync('/activity-previews/store.unavailable','/activity-previews/store.json')")
+    wrapper('up'); ready()
+    assert inspect_preview(old_volume, "const fs=require('fs');if(fs.readdirSync('/activity-previews').some(n=>n.endsWith('.enc')))throw Error('ordinary switch left ciphertext');console.log(fs.readFileSync('/activity-previews/unrelated-sentinel','utf8'))") == 'must survive'
+    policy = request('/api/admin/activity-retention', token)
+    request('/api/admin/activity-retention', token, {'hours':0,'revision':policy['revision']}, method='PUT')
+    assert inspect_preview(old_volume, "console.log(require('fs').readdirSync('/activity-previews').filter(n=>n.endsWith('.enc')).length)") == '0'
+    policy = request('/api/admin/activity-retention', token)
+    request('/api/admin/activity-retention', token, {'hours':4,'revision':policy['revision']}, method='PUT')
+
+    print('PASS ordinary store switch: closed on unavailable old store, physical deletion on retry, sentinel preserved, disable succeeds', flush=True)
+    shutil.copy2(root/'scripts/rehearse-wrapper-recovery.mjs', bundle/'rehearse-wrapper-recovery.mjs')
+    wrapper('stop')
+    # Healthy activation is controller-owned; the fixture then stages interruption under its lease.
+    wrapper('up'); ready()
+    run(compose+['stop','updater'])
+    run(compose+['run','--rm','--no-deps','updater','node',str(bundle/'rehearse-wrapper-recovery.mjs'),'preopen'])
+    wrapper('up'); ready()
+    journal = json.loads(exec_node('updater', "const fs=await import('node:fs');console.log(fs.readFileSync('/state/journal.json','utf8'))"))
+    assert journal['phase'] == 'rolled-back'
+    print('PASS wrapper recovered a pre-open journal', flush=True)
+    assert exec_node('updater', "const fs=await import('node:fs');if(!fs.existsSync('/state/failed-data-wrapper-preopen/plugins/wrapper-open-probe/index.ts'))throw Error('probe was not staged');console.log(fs.existsSync('/state/failed-data-wrapper-preopen/candidate-opened'))") == 'false'
+    run(compose+['stop','updater'])
+    run(compose+['run','--rm','--no-deps','updater','node',str(bundle/'rehearse-wrapper-recovery.mjs'),'required'])
+    try:
+        wrapper('up')
+        raise AssertionError('Recovery-required journal was opened')
+    except RuntimeError as error:
+        assert 'Owner recovery is required' in str(error), str(error)
+    assert not run(compose+['ps','--status','running','-q','switchboard'])
+    no_open = run(['docker','run','--rm','--network=none','--entrypoint','node','--mount','type=volume,src='+project+'-app-data,dst=/data,readonly','switchboard:activity-output-qa','-e',"console.log(require('fs').existsSync('/data/candidate-opened'))"])
+    assert no_open == 'false'
+    # Explicit owner-requested restore remains the recovery route.
+    wrapper('restore', backup2); ready()
     # Prove a differently named volume can still alias data: inspect backing, not just names.
     alias = project + '-ambiguous-previews'; owned_volumes.append(alias)
     data_mount = json.loads(run(['docker', 'volume', 'inspect', project+'-app-data']))[0]['Mountpoint']
@@ -88,7 +137,7 @@ try:
     except RuntimeError as error:
         assert 'driver options' in str(error), str(error)
     assert db_hash() == before
-    print('PASS released Compose wrapper: fresh up/enroll activates capture; snapshot excludes ciphertext/sidecars; backup preserves preview; missing/changed store settings restore safely using durable history; unrelated sentinel survives; retained settings migrate through normal up; actual bind-alias volume rejected before data replacement')
+    print('PASS released Compose wrapper: fresh up/enroll activates capture; snapshot excludes ciphertext/sidecars; backup preserves preview; missing/changed store settings restore safely using durable history; unrelated sentinel survives; retained settings migrate through normal up; actual bind-alias volume rejected before data replacement; normal store switch deletes prior ciphertext and recovers after transient failure; pre-open journals roll back without candidate initialization; recovery-required stays stopped')
 finally:
     subprocess.run(compose+['down','-v','--remove-orphans'],cwd=bundle,env=env,capture_output=True)
     for volume in owned_volumes: subprocess.run(['docker','volume','rm',volume],capture_output=True)

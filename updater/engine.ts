@@ -1,4 +1,4 @@
-import { provisionPreviews, boundPreviewEnvironment, retirePreviewStores, verifyComposePreviewBacking } from './activity-previews.ts';
+import { PreviewStoreSwitchError, provisionPreviews, boundPreviewEnvironment, retirePreviewStores, verifyComposePreviewBacking } from './activity-previews.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -282,12 +282,43 @@ export class Controller {
     await retirePreviewStores(this.s, this.s.mode === 'compose' ? restoreImage ?? this.journal?.previous ?? await this.identifyStoppedImage() : undefined,
       this.s.mode === 'compose' ? ['/data', '/state', '/app'] : this.previewExclusions(), command, atomic);
   }
+  assertUngatedStartAllowed() {
+    if (this.journal && !['succeeded', 'rolled-back', 'failed', 'cancelled'].includes(this.journal.phase)) throw Error('Journal recovery is required before opening the application');
+  }
+  /** Caller holds the controller lease; the wrapper must never start the app before this decision. */
+  async activateCompose() {
+    if (this.s.mode !== 'compose') throw Error('Compose activation required');
+    if (this.journal?.phase === 'recovery-required') {
+      await this.stop();
+      throw Error('Owner recovery is required; the application remains stopped');
+    }
+    if (this.journal && !['succeeded', 'rolled-back', 'failed', 'cancelled'].includes(this.journal.phase)) {
+      if (this.journal.opened) await this.stop();
+      await this.recover();
+      if (this.journal.phase === 'recovery-required') {
+        await this.stop();
+        throw Error('Owner recovery is required; the application remains stopped');
+      }
+      if (this.journal.phase === 'rolled-back') return;
+    }
+    this.assertUngatedStartAllowed();
+    await this.compose(['stop', '-t', '45', this.s.compose!.service]);
+    const source = this.s.compose!.sourceBuild && !fs.existsSync(path.join(this.s.stateDir, 'active-compose.json'))
+      ? path.join(this.s.compose!.directory, 'compose.source.yaml') : undefined;
+    // Create volumes/containers without executing application code, including on first install.
+    await this.compose(['create', '--no-build', this.s.compose!.service], source);
+    await this.composeInfo();
+    const image = await this.identifyStoppedImage();
+    await this.stop();
+    await this.start(image, false);
+  }
   async start(release: string, gated = true) {
+    if (!gated) this.assertUngatedStartAllowed();
     if (this.s.mode === 'compose') {
       await this.composeInfo();
       let previewEnv: Record<string, string>;
       try { previewEnv = await provisionPreviews(this.s, release, ['/data', '/state', '/app'], command, atomic); }
-      catch { previewEnv = boundPreviewEnvironment(this.s, ['/data', '/state', '/app']); }
+      catch (error) { if (error instanceof PreviewStoreSwitchError) throw error; previewEnv = boundPreviewEnvironment(this.s, ['/data', '/state', '/app']); }
       await this.compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', this.s.compose!.service], this.override(release, gated, { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0', ...previewEnv }));
     }
     else {

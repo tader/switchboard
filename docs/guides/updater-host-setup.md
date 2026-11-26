@@ -81,6 +81,8 @@ For the distributed Compose bundle, use the matching updater image and `./switch
 
 Preview store identities and a restore fence are retained in updater state, independently of application backups. Do not remove that control record when changing preview configuration. Restore retires previously bound stores even if the current volume setting is missing or changed. An unrelated nonempty directory is never adopted, and unknown files are preserved during cleanup. Keep updater state stable outside the release tree.
 
+Changing the preview volume also discards retained previews in the previous store. Keep the old volume available until activation completes. If it cannot be retired, activation remains closed; restore access and retry `./switchboard up`. Startup and restart resolve interrupted upgrade journals under the controller lock before opening the application. A recovery-required journal keeps the application stopped until explicit owner recovery.
+
 Set `sourceBuild` to `true` to build pinned source locally instead of pulling a prebuilt image. A source-built Compose upgrade does not depend on a published remote image. Preparation builds or pulls while the old service continues serving. Cutover uses an immutable image override saved in the updater state directory; it never runs `compose down`, rebuilds during outage, or recreates other services.
 
 Start the enrolled controller with:

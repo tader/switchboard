@@ -6,7 +6,7 @@ import type { Settings } from './engine.ts';
 
 type Run = (file: string, args: string[]) => Promise<string>;
 type Save = (file: string, value: unknown) => void;
-interface StoreBinding { kind: 'compose' | 'checkout'; location: string; storeId: string; mountpoint?: string }
+interface StoreBinding { kind: 'compose' | 'checkout'; location: string; storeId: string; mountpoint?: string; retired?: boolean }
 interface PreviewControl { instance: string; epoch: string; stores: StoreBinding[] }
 function controlFile(s: Settings) { return path.join(s.stateDir, 'activity-preview-control.json'); }
 function control(s: Settings, save: Save): PreviewControl {
@@ -48,9 +48,34 @@ async function composeStore(s: Settings, image: string, run: Run, instance: stri
   ].join('');
   return JSON.parse(await run('docker', ['run', '--rm', '--network=none', '--read-only', '--user', '0:0', '--entrypoint', 'node', '--mount', 'type=volume,src=' + volume + ',dst=/activity-previews', image, '--input-type=module', '-e', script, source, instance, operation, expected ?? '']));
 }
+export class PreviewStoreSwitchError extends Error {}
+async function retireBinding(binding: StoreBinding, s: Settings, image: string | undefined, state: PreviewControl, excluded: string[], run: Run) {
+  if (binding.kind === 'checkout') {
+    if (assertOwnedPreviewStore(binding.location, excluded, state.instance).storeId !== binding.storeId) throw Error('Bound preview store changed');
+    invalidatePreviews(binding.location, excluded, state.instance);
+  } else if (binding.kind === 'compose') {
+    if (!image) throw Error('Immutable helper image required');
+    const inspected = JSON.parse(await run('docker', ['volume', 'inspect', binding.location]));
+    validatePreviewVolumeBacking(inspected);
+    if (inspected[0].Mountpoint !== binding.mountpoint) throw Error('Bound preview backing changed');
+    await composeStore(s, image, run, state.instance, binding.location, 'retire', binding.storeId);
+  } else throw Error('Invalid preview store binding');
+}
 export async function provisionPreviews(s: Settings, release: string, excluded: string[], run: Run, save: Save): Promise<Record<string, string>> {
   const state = control(s, save);
   let binding: StoreBinding;
+  if (s.mode === 'compose' && s.compose?.previewVolume) {
+    for (const previous of state.stores) {
+      if ((previous.kind === 'compose' && previous.location === s.compose.previewVolume) || previous.retired) continue;
+      try {
+        await retireBinding(previous, s, release, state, excluded, run);
+        previous.retired = true;
+        save(controlFile(s), state); // Acknowledge only physical deletion in the previous store.
+      } catch {
+        throw new PreviewStoreSwitchError('Previous preview storage could not be retired; activation remains closed until storage recovers.');
+      }
+    }
+  }
   if (s.mode === 'checkout') {
     const root = s.stateDir + '.activity-previews';
     const old = state.stores.find(v => v.kind === 'checkout' && v.location === canonical(root));
@@ -64,7 +89,10 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
     const identity = await composeStore(s, release, run, state.instance, volume, 'open', old?.storeId);
     binding = { kind: 'compose', location: volume, storeId: identity.storeId, mountpoint };
   } else return {};
-  if (!state.stores.some(v => v.kind === binding.kind && v.location === binding.location)) { state.stores.push(binding); save(controlFile(s), state); }
+  const existing = state.stores.find(v => v.kind === binding.kind && v.location === binding.location);
+  if (existing) existing.retired = false;
+  else state.stores.push({ ...binding, retired: false });
+  save(controlFile(s), state); // Bind the active store before enabling any writer.
   return {
     SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: s.mode === 'compose' ? '/activity-previews' : binding.location,
     SWITCHBOARD_ACTIVITY_PREVIEW_INSTANCE: state.instance,
@@ -79,7 +107,7 @@ export function boundPreviewEnvironment(s: Settings, excluded: string[]): Record
   const state = JSON.parse(fs.readFileSync(controlFile(s), 'utf8')) as PreviewControl;
   const location = s.mode === 'compose' ? s.compose?.previewVolume : canonical(s.stateDir + '.activity-previews');
   const binding = state.stores.find(v => v.kind === s.mode && v.location === location);
-  if (!binding) return { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
+  if (!binding || binding.retired || state.stores.some(v => v !== binding && !v.retired)) return { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
   return {
     SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: s.mode === 'compose' ? '/activity-previews' : binding.location,
     SWITCHBOARD_ACTIVITY_PREVIEW_INSTANCE: state.instance,
@@ -94,15 +122,8 @@ export async function retirePreviewStores(s: Settings, image: string | undefined
   // Durable, independent of the restored DB and of current preview-volume settings.
   state.epoch = randomUUID(); save(controlFile(s), state);
   for (const binding of state.stores) {
-    if (binding.kind === 'checkout') {
-      if (assertOwnedPreviewStore(binding.location, excluded, state.instance).storeId !== binding.storeId) throw Error('Bound preview store changed');
-      invalidatePreviews(binding.location, excluded, state.instance);
-    } else if (binding.kind === 'compose') {
-      if (!image) throw Error('Immutable helper image required');
-      const inspected = JSON.parse(await run('docker', ['volume', 'inspect', binding.location]));
-      validatePreviewVolumeBacking(inspected);
-      if (inspected[0].Mountpoint !== binding.mountpoint) throw Error('Bound preview backing changed');
-      await composeStore(s, image, run, state.instance, binding.location, 'retire', binding.storeId);
-    } else throw Error('Invalid preview store binding');
+    if (binding.retired) continue;
+    await retireBinding(binding, s, image, state, excluded, run);
+    binding.retired = true; save(controlFile(s), state);
   }
 }

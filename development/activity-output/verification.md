@@ -7,7 +7,7 @@ Encrypted files and temporary files live in an isolated private root. Audit meta
 ## Verification performed
 
 - Server TypeScript check and production web build.
-- Full core suite: 285 tests pass, including proxy, HTTP MCP, native MCP, peers, WebSocket, security boundaries, gated startup and controller-death recovery.
+- Full core suite: 289 tests pass, including proxy, HTTP MCP, native MCP, peers, WebSocket, security boundaries, gated startup and controller-death recovery.
 - New synthetic output tests cover exact four-hour and one-hour deadlines before sweeping, shortening/increasing, zero/re-enable, independent unlimited request retention, encryption, restart, parent/user deletion queues, legacy/missing/unavailable states, scope/owner/session/token authorization, selected/unknown/nested fields, credential echoes, UTF-8 lengths, exact 16 KiB input/output boundaries, oversize, malformed/interrupted/cancelled streams, upstream errors/redirects, final 401 retry, all HTTP response consumers, policy fencing and numeric audit-ID reuse.
 - Migrated an archived previous core revision (0dbe759) against synthetic data: legacy audit rows survive without preview backfill.
 - Actual managed Compose containers: exact additional writable named volume, private encrypted capture, scan of snapshot files including database sidecars for exact ciphertext and payload, backup preserving the live file, generation retirement, restore and refusal to revive restored metadata. Backup/rehearsal helpers retain their original data/state-only mounts.
@@ -35,3 +35,11 @@ The interrupted-restore checks use durable-state injection plus the existing rea
 - The older managed-upgrade rehearsal was fixed to include shared source and rerun successfully for both bind/source and volume/image modes, covering migration rehearsal, pre-open rollback, successful upgrade and persistent data. The distributed source wrapper variant itself was not rerun in this follow-up.
 
 These are local regression results for re-review, not independent Designer or Architect approval. The release remains gated on both reviews.
+
+## Ordinary store switching and wrapper journal recovery
+
+Ordinary Compose activation now physically retires each previously live verified store before enabling a different store. Each retirement is acknowledged durably only after deletion succeeds in that store. A retirement failure blocks activation; the old binding remains pending for the next attempt. Already retired stores do not need to be available on every subsequent healthy restart. The application's current-root unlink queue is never the authority for acknowledging deletion in a detached store.
+
+The wrapper no longer starts application containers from a saved override before controller recovery. Up and restart call activation under the controller lease. Pre-open journals follow the existing rollback/recovery decision; recovery-required or uncertain opening keeps the app stopped. Healthy activation creates containers without executing app code, validates configuration, and only then opens the selected image. Ungated controller starts also reject unresolved journals. Backup/restore wrappers only restart the updater after their controller-owned application start.
+
+Regression coverage includes temporary prior-volume inspection failure and successful retry, physical deletion in the previous volume with sentinel preservation during normal up, and disable after switching. The Docker wrapper rehearsal stages an extension that would write a probe file if a candidate were opened: pre-open recovery rolls back without that file in preserved failed data, and a recovery-required journal remains stopped despite a saved ungated override. Unit tests also cover an uncertain opening journal and healthy activation order. The requester’s merge and release authorization remains conditional on independent technical approval.

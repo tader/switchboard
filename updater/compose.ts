@@ -11,9 +11,8 @@ if (['backup', 'restore', 'activate'].includes(process.argv[2])) {
   try {
     const c = new Controller(s);
     if (process.argv[2] === 'activate') {
-      const image = await c.identifyCurrent();
-      atomic(file, c.s); // Validated migration for retained pre-feature settings.
-      await c.stop(); await c.start(image, false);
+      await c.activateCompose();
+      atomic(file, c.s); // Persist only after recovery and validated activation.
       console.log('Switchboard started. Admin → Activity retention reports output storage availability.');
     } else if (process.argv[2] === 'backup') {
       const image = await c.identifyCurrent(); atomic(file, c.s); await c.api('drain', {}); await c.stop();
@@ -32,7 +31,7 @@ if (['backup', 'restore', 'activate'].includes(process.argv[2])) {
       await c.invalidateOutputs(image);
       const preserved = `/state/failed-data-manual-${Date.now()}`; fs.mkdirSync(preserved, { mode: 0o700 });
       await c.dataHelper('snapshot', preserved, image); await c.dataHelper('restore', dir, image);
-      if (c.journal) { atomic(`/state/history/recovered-${Date.now()}.json`, c.journal); fs.rmSync('/state/journal.json'); }
+      if (c.journal) { atomic(`/state/history/recovered-${Date.now()}.json`, c.journal); fs.rmSync('/state/journal.json'); c.journal = undefined; }
       atomic('/state/current.json', { release: image }); c.override(image, false); await c.start(image, false);
       console.log('Backup restored. Current data was preserved separately. Enroll the updater again from Admin → Updates if needed.');
     }

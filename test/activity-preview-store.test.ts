@@ -59,3 +59,37 @@ test('volume inspection rejects aliasing, nested mountpoints and ambiguous drive
   assert.throws(() => validatePreviewVolumeBacking([volume('p', '/volumes/p'), volume('d', '/volumes/p/data')]), /overlaps/);
   assert.throws(() => validatePreviewVolumeBacking([volume('p', '/volumes/p', { type: 'none', o: 'bind', device: '/managed-data' })]), /driver options/);
 });
+
+test('ordinary Compose store switch stays closed until old-store retirement succeeds', async () => {
+  const { PreviewStoreSwitchError, boundPreviewEnvironment } = await import('../updater/activity-previews.ts');
+  const stateDir = path.join(tmp, 'switch-state'); fs.mkdirSync(stateDir);
+  const instance = '11111111-1111-1111-1111-111111111111', epoch = '22222222-2222-2222-2222-222222222222';
+  const oldId = '33333333-3333-3333-3333-333333333333', newId = '44444444-4444-4444-4444-444444444444';
+  const file = path.join(stateDir, 'activity-preview-control.json');
+  atomic(file, { instance, epoch, stores: [{ kind: 'compose', location: 'old', storeId: oldId, mountpoint: '/volumes/old', retired: false }] });
+  const s: Settings = { instance: 'switch', dataDir: '/data', stateDir, mode: 'compose', appUrl: 'http://127.0.0.1:8770', env: {}, compose: { files: ['/fixture/compose.yaml'], directory: '/fixture', project: 'switch', service: 'app', dataVolume: 'data', stateVolume: 'state', previewVolume: 'new' } };
+  let unavailable = true, oldInspections = 0;
+  const operations: string[] = [];
+  const run = async (_file: string, args: string[]) => {
+    if (args[0] === 'volume') {
+      const names = args.slice(2);
+      if (names.includes('old')) { oldInspections++; if (unavailable) throw Error('old volume temporarily unavailable'); }
+      return JSON.stringify(names.map(Name => ({ Name, Driver: 'local', Options: null, Mountpoint: '/volumes/' + Name })));
+    }
+    const operation = args.at(-2)!; operations.push(operation);
+    return JSON.stringify({ storeId: operation === 'retire' ? oldId : newId });
+  };
+  const image = 'sha256:' + 'a'.repeat(64);
+  await assert.rejects(provisionPreviews(s, image, ['/data', '/state', '/app'], run, atomic), PreviewStoreSwitchError);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).stores[0].retired, false);
+  assert.equal(boundPreviewEnvironment(s, []).SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE, '0');
+  assert.deepEqual(operations, []);
+  unavailable = false;
+  const env = await provisionPreviews(s, image, ['/data', '/state', '/app'], run, atomic);
+  assert.deepEqual(operations, ['retire', 'open']);
+  assert.equal(env.SWITCHBOARD_ACTIVITY_PREVIEW_STORE_ID, newId);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).stores[0].retired, true);
+  unavailable = true; // Already retired volumes need not be mounted on every healthy restart.
+  await provisionPreviews(s, image, ['/data', '/state', '/app'], run, atomic);
+  assert.equal(oldInspections, 2);
+});

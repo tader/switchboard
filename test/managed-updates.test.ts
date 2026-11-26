@@ -235,3 +235,41 @@ test('checkout backup excludes preview files and rollback retires generation bef
   assert.equal(fs.readFileSync(path.join(c.previewRoot(), 'unrelated-sentinel'), 'utf8'), 'must survive');
   fs.rmSync(c.previewRoot(), { recursive: true, force: true });
 });
+
+class ActivationController extends Controller {
+  events: string[] = [];
+  override async compose(args: string[]) { this.events.push('compose:' + args[0]); return ''; }
+  override async composeInfo() { this.events.push('validate'); return {}; }
+  override async identifyStoppedImage() { return 'sha256:' + 'a'.repeat(64); }
+  override async stop() { this.events.push('stop'); }
+  override async start(_release: string, gated = true) { if (!gated) this.assertUngatedStartAllowed(); this.events.push('start:' + gated); }
+  override async api(endpoint: string) { this.events.push('api:' + endpoint); return {}; }
+  override async rollback() { this.events.push('recover-rollback'); this.journal!.phase = 'rolled-back'; this.save(); }
+}
+function activation(name: string) {
+  const s = settings(name); s.mode = 'compose';
+  s.compose = { files: ['/fixture/compose.yaml'], directory: '/fixture', project: 'fixture', service: 'app' };
+  return new ActivationController(s);
+}
+test('healthy activation creates without opening first and validates before ungated start', async () => {
+  const c = activation('activate-healthy');
+  await c.activateCompose();
+  assert.deepEqual(c.events, ['compose:stop', 'compose:create', 'validate', 'stop', 'start:false']);
+});
+test('pre-open wrapper activation follows journal recovery rather than opening the candidate', async () => {
+  const c = activation('activate-recover');
+  c.journal = { job: job(), phase: 'starting', previous: '/previous', target: '/candidate', startedAt: Date.now(), durations: {} };
+  await c.activateCompose();
+  assert.deepEqual(c.events, ['recover-rollback']);
+  assert.equal(c.journal.phase, 'rolled-back');
+});
+test('recovery-required and uncertain opening keep activation stopped', async () => {
+  for (const [phase, opened] of [['recovery-required', true], ['opening', true]] as const) {
+    const c = activation('activate-' + phase);
+    c.journal = { job: job(), phase, opened, previous: '/previous', target: '/candidate', startedAt: Date.now(), durations: {} };
+    await assert.rejects(c.activateCompose(), /Owner recovery/);
+    assert.equal(c.journal.phase, 'recovery-required');
+    assert.ok(!c.events.some(event => event.startsWith('start:') || event === 'compose:create'));
+    await assert.rejects(Controller.prototype.start.call(c, '/candidate', false), /Journal recovery/);
+  }
+});
