@@ -1,3 +1,4 @@
+import { outputPolicy, setOutputRetention } from '../activity-output.ts';
 import { Hono, type Context } from 'hono';
 import { type Env, requireAdmin, requireUser } from '../auth.ts';
 import { badRequest } from '../http.ts';
@@ -12,6 +13,12 @@ import { createPeerLink, hasConfiguredPeers } from '../peer-settings.ts';
 
 export const admin = new Hono<Env>();
 admin.use('*', requireUser, requireAdmin);
+
+admin.get('/activity-retention', c => { c.header('cache-control', 'no-store'); return c.json(outputPolicy()); });
+admin.put('/activity-retention', async c => {
+  c.header('cache-control', 'no-store');
+  return c.json(setOutputRetention((await c.req.json()).hours));
+});
 
 const view = (p: PluginRecord) => ({
   id: p.id,

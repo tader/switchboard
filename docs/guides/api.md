@@ -209,3 +209,13 @@ Connection errors clear after a confirmed successful HTTP request, MCP operation
 Failed requests and MCP tool errors do not count as recovery. An older in-flight success cannot erase a newer failure. Saving refreshed credentials alone does not clear an unresolved connection error; the operation must succeed.
 
 At startup, Switchboard also reconciles errors saved by older versions when the latest audit entry proves a successful operation started after the error. Errors without that evidence, newer failures, and revoked/expired shared credentials remain flagged. This updates current connection health; historical failures stay in Activity.
+
+## Activity output previews
+
+Open a request in [Activity](/activity) and choose **View output** to read a retained preview. Previews show only selected fields from reviewed operations. No preview is saved for most operations. Expired previews cannot be recovered; revealing or retrying a load never repeats the original service request.
+
+Full-access owners may use `GET /api/audit/:id/output`. It returns `state`, and only while retained, `preview`, `captureId`, `expiresAt` (epoch milliseconds), `decisionAt` and `displayForMs`. The payload-free `GET /api/audit/:id/output/status` uses the same authorization and expiry rules. Both are `Cache-Control: no-store`. Connection-limited tokens cannot read either endpoint, and administrators cannot reveal another owner's output through peer metadata visibility.
+
+For a custom viewer, anchor each display grant to monotonic time at request send, cap it at 15 seconds, and renew with status checks every five seconds. Clear output immediately on denial, changed capture, failed checks, offline or page hide; require fresh authorization after resume. Never persist or share a cached payload.
+
+Administrators can change retention in [Activity retention](/admin/activity-retention), or with `PUT /api/admin/activity-retention` and `{"hours":4}`. The default is four hours. Zero stops capture and clears stored previews; shorter values also shorten existing deadlines. Longer values affect future previews. Request retention is independent. Managed restore discards all live previews. Installations without isolated storage and compatible restore invalidation omit capture.

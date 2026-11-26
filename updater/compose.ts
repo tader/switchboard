@@ -5,7 +5,7 @@ const directory = process.env.SWITCHBOARD_BUNDLE_DIR!;
 const project = process.env.SWITCHBOARD_COMPOSE_PROJECT ?? 'switchboard';
 const file = '/state/settings.json';
 if (!directory || !path.isAbsolute(directory)) throw Error('Bundle directory required');
-if (!fs.existsSync(file)) atomic(file, { instance: project, mode: 'compose', dataDir: '/data', stateDir: '/state', appUrl: 'http://switchboard:8770', env: {}, compose: { directory, project, service: 'switchboard', files: [path.join(directory, 'compose.yaml')], privateNetwork: true, dataVolume: `${project}-app-data`, stateVolume: `${project}-updater-state`, sourceBuild: process.env.SWITCHBOARD_SOURCE_BUILD === 'true' } } satisfies Settings);
+if (!fs.existsSync(file)) atomic(file, { instance: project, mode: 'compose', dataDir: '/data', stateDir: '/state', appUrl: 'http://switchboard:8770', env: {}, compose: { directory, project, service: 'switchboard', files: [path.join(directory, 'compose.yaml')], privateNetwork: true, dataVolume: `${project}-app-data`, stateVolume: `${project}-updater-state`, previewVolume: `${project}-activity-previews`, sourceBuild: process.env.SWITCHBOARD_SOURCE_BUILD === 'true' } } satisfies Settings);
 if (['backup', 'restore'].includes(process.argv[2])) {
   const s = readJson<Settings>(file)!; const unlock = acquireController(s);
   try {
@@ -23,6 +23,7 @@ if (['backup', 'restore'].includes(process.argv[2])) {
       const image = saved?.image ?? (history?.backup === dir ? history.previous : undefined);
       if (!image || !fs.existsSync(dir)) throw Error('Backup not found; use an ID printed by backup or recorded in history');
       await c.stop();
+      await c.invalidateOutputs(image);
       const preserved = `/state/failed-data-manual-${Date.now()}`; fs.mkdirSync(preserved, { mode: 0o700 });
       await c.dataHelper('snapshot', preserved, image); await c.dataHelper('restore', dir, image);
       if (c.journal) { atomic(`/state/history/recovered-${Date.now()}.json`, c.journal); fs.rmSync('/state/journal.json'); }

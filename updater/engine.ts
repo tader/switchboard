@@ -1,3 +1,4 @@
+import { assertPreviewIsolation, invalidatePreviews, openPreviewStore } from '../shared/activity-preview-store.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -16,7 +17,7 @@ const IMAGE = 'ghcr.io/tader/switchboard@sha256:';
 export interface Settings {
   instance: string; mode: 'checkout' | 'compose' | 'runtime'; dataDir: string; stateDir: string; appUrl: string;
   initialRelease?: string; env: Record<string, string>; token?: string;
-  compose?: { files: string[]; project: string; service: string; directory: string; sourceBuild?: boolean; dataVolume?: string; stateVolume?: string; privateNetwork?: boolean };
+  compose?: { files: string[]; project: string; service: string; directory: string; sourceBuild?: boolean; dataVolume?: string; stateVolume?: string; privateNetwork?: boolean; previewVolume?: string };
 }
 export interface Journal {
   job: Job; phase: string; previous: string; target?: string; backup?: string; opened?: boolean;
@@ -141,13 +142,15 @@ export class Controller {
       ? v.type === 'volume' && info.volumes?.[v.source]?.name === this.s.compose!.dataVolume
       : v.type === 'bind' && path.resolve(v.source) === this.s.dataDir);
     if (!volumes.some((v: any) => dataMount(v) && !v.read_only)) throw Error('Compose /data mount does not match the exact configured host path or named volume');
-    if (volumes.some((v: any) => !v.read_only && !dataMount(v))) throw Error('All writable persistent mounts must be inside the managed /data mount');
+    const previewMount = (v: any) => !!this.s.compose!.previewVolume && v.target === '/activity-previews' && v.type === 'volume' && info.volumes?.[v.source]?.name === this.s.compose!.previewVolume && this.s.compose!.previewVolume !== this.s.compose!.dataVolume && this.s.compose!.previewVolume !== this.s.compose!.stateVolume;
+    if (this.s.compose!.previewVolume && (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(this.s.compose!.previewVolume) || !volumes.some((v: any) => previewMount(v) && !v.read_only))) throw Error('Exact isolated preview volume required');
+    if (volumes.some((v: any) => !v.read_only && !dataMount(v) && !previewMount(v))) throw Error('All writable persistent mounts must be inside the managed /data mount');
     if (service.privileged || volumes.some((v: any) => /docker\.sock/.test(v.source ?? '')) || service.use_api_socket) throw Error('Application must not have Docker control access');
     return service;
   }
   override(image: string, gated: boolean) {
     const p = path.join(this.s.stateDir, 'active-compose.json');
-    atomic(p, { services: { [this.s.compose!.service]: { image, pull_policy: 'never', environment: { SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: 'compose', SWITCHBOARD_DATA_DIR: '/data' } } } });
+    atomic(p, { services: { [this.s.compose!.service]: { image, pull_policy: 'never', environment: { SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: 'compose', SWITCHBOARD_DATA_DIR: '/data', SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: this.s.compose!.previewVolume ? '/activity-previews' : '', SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: this.s.compose!.previewVolume ? '1' : '0', SWITCHBOARD_ACTIVITY_PREVIEW_EXCLUDED_ROOTS: JSON.stringify(['/state']) } } } });
     return p;
   }
   current(): string { return readJson<{ release: string }>(path.join(this.s.stateDir, 'current.json'))?.release ?? this.s.initialRelease!; }
@@ -262,12 +265,36 @@ export class Controller {
     if (!child) return false;
     try { process.kill(child.pid, 0); return true; } catch (e: any) { if (e.code === 'ESRCH') return false; throw e; }
   }
+  previewRoot() { return this.s.stateDir + '.activity-previews'; }
+  previewExclusions(release = this.current()) { return [this.s.dataDir, this.s.stateDir, this.s.initialRelease!, release]; }
+  async invalidateOutputs(restoreImage?: string) {
+    if (this.s.mode === 'compose') {
+      const volume = this.s.compose?.previewVolume;
+      if (!volume) return; // Old installations have never enabled capture.
+      await this.composeInfo();
+      // Fixed helper from the controller, not code from a rollback image. No data/state mounts.
+      const image = restoreImage ?? this.journal?.previous ?? await this.identifyCurrent();
+      await command('docker', ['run', '--rm', '--network=none', '--read-only', '--user', '0:0', '--entrypoint', 'node', '--mount', `type=volume,src=${volume},dst=/activity-previews`, image, '-e',
+        `const fs=require('node:fs'),crypto=require('node:crypto');const root='/activity-previews';const sync=()=>{const d=fs.openSync(root,'r');fs.fsyncSync(d);fs.closeSync(d)};const write=s=>{const f=fs.openSync(root+'/generation.tmp','w',384);fs.writeFileSync(f,JSON.stringify(s));fs.fsyncSync(f);fs.closeSync(f);fs.renameSync(root+'/generation.tmp',root+'/generation.json');sync()};const generation=crypto.randomUUID();write({generation,retiring:true});for(const n of fs.readdirSync(root))if(n!=='generation.json')fs.rmSync(root+'/'+n,{recursive:true,force:true});sync();write({generation});`]);
+    } else if (this.s.mode === 'checkout') {
+      assertPreviewIsolation(this.previewRoot(), this.previewExclusions());
+      invalidatePreviews(this.previewRoot());
+    }
+    // Native runtime managers must first integrate their additional installer restore paths.
+  }
   async start(release: string, gated = true) {
     if (this.s.mode === 'compose') await this.compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', this.s.compose!.service], this.override(release, gated));
     else {
       if (fs.existsSync(path.join(this.s.dataDir, '.server-lock'))) throw Error('Server lock is still held');
       if (this.s.mode === 'runtime') await assertListenAvailable(this.s.env.SWITCHBOARD_HOST ?? '127.0.0.1', Number(this.s.env.SWITCHBOARD_PORT ?? (new URL(this.s.appUrl).port || 8770)));
-      const child = spawn(this.s.mode === 'runtime' ? runtimeNode(release) : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
+      const previewEnv = this.s.mode === 'checkout' ? {
+        SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: this.previewRoot(),
+        SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '1',
+        SWITCHBOARD_ACTIVITY_PREVIEW_EXCLUDED_ROOTS: JSON.stringify(this.previewExclusions(release)),
+      } : { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
+      if (this.s.mode === 'checkout') try { openPreviewStore(this.previewRoot(), this.previewExclusions(release)); }
+      catch { previewEnv.SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE = '0'; }
+      const child = spawn(this.s.mode === 'runtime' ? runtimeNode(release) : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, ...previewEnv, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
       this.child = child; child.on('message', message => this.onMessage?.(message));
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       atomic(path.join(this.s.stateDir, 'child.json'), { pid: child.pid }); child.unref();
@@ -330,6 +357,7 @@ export class Controller {
     try {
       await this.stop();
       if (j.backup) {
+        await this.invalidateOutputs();
         // Copy before replacing data; preserve failed candidate data for explicit recovery.
         const failed = path.join(this.s.stateDir, `failed-data-${j.job.id}`);
         if (this.s.mode === 'compose') {

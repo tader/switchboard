@@ -1,3 +1,4 @@
+import { observeOutput } from './activity-output.ts';
 import { authenticationFailed, authenticationRecovered } from './attention.ts';
 import { terminalAuthenticationError } from './auth-errors.ts';
 import { one } from './db.ts';
@@ -90,6 +91,12 @@ export interface SentRequest {
   retried: boolean;
 }
 
+const captureSecrets = new WeakMap<Response, string[]>();
+function secretStrings(value: unknown): string[] {
+  if (typeof value === 'string') return value ? [value] : [];
+  if (!value || typeof value !== 'object') return [];
+  return Object.values(value).flatMap(secretStrings);
+}
 const MASK = '••••••••';
 
 /** Masks a credential, keeping a scheme word like "Bearer" or "Basic" so the header stays readable. */
@@ -145,6 +152,13 @@ export async function execute(user: User, connectionRef: string, input: CallInpu
         requestHeaders: ex.sent.headers.map(([name, value, byHub]) => ({ name, value, byHub })),
         requestBody: redactBody(ex.sent.body, type),
       });
+    }
+    if (ex.auditId && !caller?.peerId && caller?.source !== 'plugin' && !one('SELECT peer_shadow FROM users WHERE id = ?', user.id)?.peer_shadow) {
+      try {
+        const rule = loaded.service.outputPreviews?.find(r => r.origin === ex.url.origin && r.path === ex.url.pathname && !ex.url.search && r.method === method && r.authMethods.includes(conn.methodId));
+        const secrets = captureSecrets.get(ex.response);
+        ex.response = observeOutput(ex.response, ex.auditId, user.id, secrets ? rule : undefined, secrets ?? []);
+      } catch { /* Capture is optional; never fail delivery. */ }
     }
     return ex;
   } catch (e: any) {
@@ -269,6 +283,11 @@ async function executeLoaded(loaded: ReturnType<typeof loadConnection>, user: Us
     } catch (e: any) {
       throw new HttpError(502, `Request to ${req.url.host} failed: ${e?.cause?.message ?? e?.message ?? e}`);
     }
+    if (service.outputPreviews?.length) try { captureSecrets.set(response, [
+      ...secretStrings(loadConnection(user.id, conn.id).conn.credentials),
+      ...[...req.headers].filter(([k, v]) => before.headers.get(k) !== v || /authorization|cookie|token|secret|api[-_]?key/i.test(k)).flatMap(([, v]) => [v, v.replace(/^[A-Za-z]+ +/, '')]),
+      ...[...req.url.searchParams].filter(([k, v]) => before.url.searchParams.get(k) !== v || /password|token|secret|api[-_]?key|authorization/i.test(k)).map(([, v]) => v),
+    ]); } catch { /* Missing secret inventory omits capture, never delivery. */ }
     return { response, url: req.url, durationMs: Math.round(performance.now() - started), sent: describeSent(method, before, req, body, force) };
   };
 

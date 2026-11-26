@@ -62,6 +62,16 @@ export function openapiDocument() {
     components: { securitySchemes: { token: { type: 'http', scheme: 'bearer' } } },
     security: [{ token: [] }],
     paths: {
+      '/api/audit/{id}/output': { get: op('Activity', 'Reveal a retained redacted output preview', {
+        parameters: [id('Audit entry id')], description: 'Full-access owner only. No-store. Returns state; retained responses include preview, captureId, expiresAt, decisionAt and displayForMs (at most 15000). Never reruns the service request.',
+      }) },
+      '/api/audit/{id}/output/status': { get: op('Activity', 'Renew output display without fetching its payload', {
+        parameters: [id('Audit entry id')], description: 'Same owner authorization and deadline as reveal. No preview field. Anchor displayForMs to monotonic time at request send. Poll every 5 seconds; clear on failed checks or page hide.',
+      }) },
+      '/api/admin/activity-retention': {
+        get: op('Admin', 'Read output preview retention'),
+        put: op('Admin', 'Set output preview retention', { requestBody: json({ type: 'object', required: ['hours'], properties: { hours: { type: 'integer', minimum: 0, default: 4 } } }), description: 'Zero disables and removes stored previews. Shorter values clamp existing deadlines; increases apply to future captures. Request retention is independent.' }),
+      },
       '/api/credentials': {
         get: op('Credentials', 'List reusable credentials owned by the full-access caller'),
         post: op('Credentials', 'Promote a connection credential without revealing its secret', { requestBody: json({ type: 'object', required: ['connection', 'name'], properties: { connection: { type: 'string' }, name: { type: 'string' } } }) }),

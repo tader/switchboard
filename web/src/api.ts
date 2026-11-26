@@ -12,13 +12,14 @@ export class ApiError extends Error {
 
 export const unauthorized = new EventTarget();
 
-export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
+export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; signal?: AbortSignal; cache?: RequestCache } = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method: opts.method ?? (opts.body === undefined ? 'GET' : 'POST'),
     headers: opts.body === undefined ? {} : { 'content-type': 'application/json' },
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     credentials: 'same-origin',
     signal: opts.signal,
+    cache: opts.cache,
   });
   const text = await res.text();
   let data: any = null;

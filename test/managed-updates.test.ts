@@ -212,3 +212,22 @@ test('old server rejects a future database schema before any normal startup', ()
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, SWITCHBOARD_DATA_DIR: s.dataDir }, encoding: 'utf8' });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /schema is newer/);
 });
+
+test('checkout backup excludes preview files and rollback retires generation before restart', async () => {
+  const { openPreviewStore } = await import('../shared/activity-preview-store.ts');
+  const c = new FakeController(settings('preview-rollback')); c.failReady = true;
+  const generation = openPreviewStore(c.previewRoot(), c.previewExclusions());
+  fs.writeFileSync(path.join(c.previewRoot(), 'synthetic.enc'), 'synthetic-ciphertext', { mode: 0o600 });
+  fs.writeFileSync(path.join(c.s.dataDir, 'synthetic.db'), 'metadata-only');
+  const invalidate = c.invalidateOutputs.bind(c);
+  c.invalidateOutputs = async () => { c.events.push('invalidate-previews'); await invalidate(); };
+  await c.execute(job());
+  assert.equal(c.journal!.phase, 'rolled-back');
+  assert.equal(fs.readFileSync(path.join(c.journal!.backup!, 'synthetic.db'), 'utf8'), 'metadata-only');
+  assert.ok(!fs.existsSync(path.join(c.journal!.backup!, 'synthetic.enc')));
+  assert.ok(!fs.existsSync(path.join(c.s.stateDir, 'failed-data-synthetic-job', 'synthetic.enc')));
+  assert.ok(!fs.existsSync(path.join(c.previewRoot(), 'synthetic.enc')));
+  assert.notEqual(JSON.parse(fs.readFileSync(path.join(c.previewRoot(), 'generation.json'), 'utf8')).generation, generation);
+  assert.ok(c.events.indexOf('invalidate-previews') < c.events.indexOf('start:/synthetic/previous'));
+  fs.rmSync(c.previewRoot(), { recursive: true, force: true });
+});
