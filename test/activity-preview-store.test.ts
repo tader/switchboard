@@ -93,3 +93,35 @@ test('ordinary Compose store switch stays closed until old-store retirement succ
   await provisionPreviews(s, image, ['/data', '/state', '/app'], run, atomic);
   assert.equal(oldInspections, 2);
 });
+
+test('removing the last Compose store retires live history and retains failure for retry', async () => {
+  const { PreviewStoreSwitchError, hasRetiredPreviewStores } = await import('../updater/activity-previews.ts');
+  const stateDir = path.join(tmp, 'detach-state'); fs.mkdirSync(stateDir);
+  const file = path.join(stateDir, 'activity-preview-control.json');
+  atomic(file, { instance: '11111111-1111-1111-1111-111111111111', epoch: '22222222-2222-2222-2222-222222222222', stores: [{ kind: 'compose', location: 'old', storeId: '33333333-3333-3333-3333-333333333333', mountpoint: '/volumes/old', retired: false }] });
+  const s: Settings = { instance: 'detach', dataDir: '/data', stateDir, mode: 'compose', appUrl: 'http://127.0.0.1:8770', env: {}, compose: { files: ['/fixture/compose.yaml'], directory: '/fixture', project: 'detach', service: 'app', dataVolume: 'data', stateVolume: 'state' } };
+  let unavailable = true;
+  const calls: string[] = [];
+  const run = async (_file: string, args: string[]) => {
+    calls.push(args[0]);
+    if (unavailable) throw Error('old volume unavailable');
+    return args[0] === 'volume' ? JSON.stringify([{ Name: 'old', Driver: 'local', Options: null, Mountpoint: '/volumes/old' }]) : '{}';
+  };
+  const image = 'sha256:' + 'a'.repeat(64);
+  await assert.rejects(provisionPreviews(s, image, ['/data', '/state', '/app'], run, atomic), PreviewStoreSwitchError);
+  assert.equal(hasRetiredPreviewStores(s), false);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).stores[0].retired, false);
+  unavailable = false;
+  assert.deepEqual(await provisionPreviews(s, image, ['/data', '/state', '/app'], run, atomic), {});
+  assert.deepEqual(calls, ['volume', 'volume', 'run']);
+  assert.equal(hasRetiredPreviewStores(s), true);
+  await provisionPreviews(s, image, ['/data', '/state', '/app'], async () => { throw Error('retired stores need not be available'); }, atomic);
+});
+
+test('fresh Compose startup without a store does not require storage or claim deletion', async () => {
+  const { hasRetiredPreviewStores } = await import('../updater/activity-previews.ts');
+  const stateDir = path.join(tmp, 'fresh-no-store'); fs.mkdirSync(stateDir);
+  const s: Settings = { instance: 'fresh', dataDir: '/data', stateDir, mode: 'compose', appUrl: 'http://127.0.0.1:8770', env: {}, compose: { files: ['/fixture/compose.yaml'], directory: '/fixture', project: 'fresh', service: 'app' } };
+  assert.deepEqual(await provisionPreviews(s, 'sha256:' + 'a'.repeat(64), ['/data', '/state', '/app'], async () => { throw Error('no Docker storage operations expected'); }, atomic), {});
+  assert.equal(hasRetiredPreviewStores(s), false);
+});

@@ -1,4 +1,4 @@
-import { PreviewStoreSwitchError, provisionPreviews, boundPreviewEnvironment, retirePreviewStores, verifyComposePreviewBacking } from './activity-previews.ts';
+import { PreviewStoreSwitchError, provisionPreviews, hasRetiredPreviewStores, boundPreviewEnvironment, retirePreviewStores, verifyComposePreviewBacking } from './activity-previews.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -319,6 +319,11 @@ export class Controller {
       let previewEnv: Record<string, string>;
       try { previewEnv = await provisionPreviews(this.s, release, ['/data', '/state', '/app'], command, atomic); }
       catch (error) { if (error instanceof PreviewStoreSwitchError) throw error; previewEnv = boundPreviewEnvironment(this.s, ['/data', '/state', '/app']); }
+      if (!this.s.compose!.previewVolume && hasRetiredPreviewStores(this.s)) {
+        // The writer is stopped and every recorded store has acknowledged physical deletion.
+        if (await this.compose(['ps', '--status', 'running', '-q', this.s.compose!.service])) throw Error('Stop the writer before acknowledging retired preview metadata');
+        await this.dataHelper('retired-outputs', this.s.stateDir, release);
+      }
       await this.compose(['up', '-d', '--no-deps', '--no-build', '--pull', 'never', this.s.compose!.service], this.override(release, gated, { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0', ...previewEnv }));
     }
     else {
@@ -343,7 +348,7 @@ export class Controller {
     }
     throw Error('Server failed readiness before opening');
   }
-  async dataHelper(operation: 'rehearse' | 'snapshot' | 'restore' | 'unlock' | 'identity', directory: string, image: string) {
+  async dataHelper(operation: 'rehearse' | 'snapshot' | 'restore' | 'unlock' | 'identity' | 'retired-outputs', directory: string, image: string) {
     if (!/^sha256:[a-f0-9]{64}$/.test(image) && !/^ghcr\.io\/tader\/switchboard@sha256:[a-f0-9]{64}$/.test(image)) throw Error('Helper requires a fixed immutable image');
     // Fixed code, paths and operations. No application env, networking, shell or Docker socket.
     const script = `
@@ -362,6 +367,7 @@ export class Controller {
       const own=(p)=>{if(fs.lstatSync(p).isSymbolicLink())return;fs.chownSync(p,+uid,+gid);if(fs.statSync(p).isDirectory()){fs.chmodSync(p,448);for(const n of fs.readdirSync(p))own(path.join(p,n));}else fs.chmodSync(p,384|(fs.statSync(p).mode&64));};
       (async()=>{
         if(op==='identity')console.log(fs.readFileSync('/managed-data/update-instance-id','utf8'));
+        if(op==='retired-outputs'&&fs.existsSync('/managed-data/switchboard.db')){const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync('/managed-data/switchboard.db');try{if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='audit_outputs'").get()){db.exec("PRAGMA foreign_keys=ON; BEGIN IMMEDIATE; UPDATE audit_log SET output_state='expired' WHERE id IN (SELECT audit_id FROM audit_outputs); DELETE FROM audit_outputs; DELETE FROM audit_output_unlinks; COMMIT;");}}finally{db.close();}}
         if(op==='unlock')fs.rmSync('/managed-data/.server-lock',{force:true});
         if(op==='snapshot'){check('/managed-data');for(const n of fs.readdirSync('/managed-data'))copy('/managed-data/'+n,'/transfer/'+n);own('/transfer');}
         if(op==='restore'){for(const n of fs.readdirSync('/managed-data'))fs.rmSync('/managed-data/'+n,{recursive:true,force:true});for(const n of fs.readdirSync('/transfer'))copy('/transfer/'+n,'/managed-data/'+n);fs.rmSync('/managed-data/.server-lock',{force:true});const p='/managed-data/update-control.json';if(fs.existsSync(p)){const s=JSON.parse(fs.readFileSync(p));if(s.job)s.job.state='rolled-back';fs.writeFileSync(p,JSON.stringify(s),{mode:384});}}

@@ -64,9 +64,9 @@ async function retireBinding(binding: StoreBinding, s: Settings, image: string |
 export async function provisionPreviews(s: Settings, release: string, excluded: string[], run: Run, save: Save): Promise<Record<string, string>> {
   const state = control(s, save);
   let binding: StoreBinding;
-  if (s.mode === 'compose' && s.compose?.previewVolume) {
+  if (s.mode === 'compose') {
     for (const previous of state.stores) {
-      if ((previous.kind === 'compose' && previous.location === s.compose.previewVolume) || previous.retired) continue;
+      if ((previous.kind === 'compose' && previous.location === s.compose?.previewVolume) || previous.retired) continue;
       try {
         await retireBinding(previous, s, release, state, excluded, run);
         previous.retired = true;
@@ -101,6 +101,12 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
     SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '1',
     SWITCHBOARD_ACTIVITY_PREVIEW_EXCLUDED_ROOTS: JSON.stringify(excluded),
   };
+}
+export function hasRetiredPreviewStores(s: Settings): boolean {
+  const file = controlFile(s);
+  if (!fs.existsSync(file)) return false;
+  const state = JSON.parse(fs.readFileSync(file, 'utf8')) as PreviewControl;
+  return state.stores.length > 0 && state.stores.every(binding => binding.retired === true);
 }
 export function boundPreviewEnvironment(s: Settings, excluded: string[]): Record<string, string> {
   if (!fs.existsSync(controlFile(s))) return { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };

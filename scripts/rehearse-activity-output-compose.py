@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Exercise the released wrapper with fresh and retained settings and synthetic data."""
-import json, os, pathlib, re, shutil, socket, subprocess, tempfile, time, urllib.request
+import json, os, sys, pathlib, re, shutil, socket, subprocess, tempfile, time, urllib.request
 root = pathlib.Path(__file__).resolve().parent.parent
 bundle = pathlib.Path(tempfile.mkdtemp(prefix='activity-compose-', dir=root.parent))
 project = 'activity-preview-qa-' + str(os.getpid())
 env = dict(os.environ, SWITCHBOARD_WRAPPER_IMAGE='switchboard-updater:activity-output-qa', SWITCHBOARD_BUNDLE_DIR=str(bundle))
 owned_volumes = []
+without_store = '--without-store' in sys.argv
 def run(args):
     p = subprocess.run(args, cwd=bundle, env=env, capture_output=True, text=True)
     if p.returncode:
@@ -27,6 +28,8 @@ def ready():
         time.sleep(.1)
     raise RuntimeError('Disposable server did not become ready')
 shutil.copytree(root/'distribution/compose', bundle, dirs_exist_ok=True)
+if without_store:
+    (bundle/'compose.yaml').write_text((bundle/'compose.yaml').read_text().replace('      - activity-previews:/activity-previews\n', ''))
 with socket.socket() as sock: sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
 base = 'http://127.0.0.1:' + str(port)
 (bundle/'.env').write_text(f'COMPOSE_PROJECT_NAME={project}\nSWITCHBOARD_IMAGE=switchboard:activity-output-qa\nSWITCHBOARD_UPDATER_IMAGE=switchboard-updater:activity-output-qa\nSWITCHBOARD_PORT={port}\nSWITCHBOARD_PUBLIC_URL={base}\n')
@@ -42,6 +45,10 @@ try:
     wrapper('up'); ready()
     seed = """const d=await import('./server/db.ts');d.initDb();const c=await import('./server/crypto.ts');c.initKey();const u=await import('./server/users.ts');const owner=u.createUser('synthetic-preview-owner','admin');console.log(u.createToken(owner.id,'synthetic-admin',null).secret);d.db.close();"""
     token = exec_node('switchboard', seed)
+    if without_store:
+        assert not request('/api/admin/activity-retention', token)['capture']['available']
+        print('PASS fresh wrapper startup without a preview store: application healthy, no capture', flush=True)
+        raise SystemExit(0)
     assert request('/api/admin/activity-retention', token)['capture']['available']
     code = request('/api/admin/updates/enrollment', token, {})['code']
     wrapper('enroll', code)
@@ -97,6 +104,33 @@ try:
     policy = request('/api/admin/activity-retention', token)
     request('/api/admin/activity-retention', token, {'hours':4,'revision':policy['revision']}, method='PUT')
 
+    # Detaching the last mount is also a store transition, including failure and retry.
+    detached = capture()
+    exec_node('switchboard', "const fs=await import('node:fs');fs.writeFileSync('/activity-previews/detach-sentinel','must survive',{mode:384})")
+    mounted_configuration = (bundle/'compose.yaml').read_text()
+    (bundle/'compose.yaml').write_text(mounted_configuration.replace('      - activity-previews:/activity-previews\n', ''))
+    exec_node('updater', "const fs=await import('node:fs');const p='/state/settings.json',s=JSON.parse(fs.readFileSync(p));delete s.compose.previewVolume;fs.writeFileSync(p,JSON.stringify(s),{mode:384})")
+    mutate_preview(ordinary, "require('fs').renameSync('/activity-previews/store.json','/activity-previews/store.unavailable')")
+    try:
+        wrapper('up')
+        raise AssertionError('Unavailable last store did not block detachment')
+    except RuntimeError as error:
+        assert 'Previous preview storage could not be retired' in str(error), str(error)
+    assert not run(compose+['ps','--status','running','-q','switchboard'])
+    assert inspect_preview(ordinary, "console.log(require('fs').readdirSync('/activity-previews').filter(n=>n.endsWith('.enc')).length)") != '0'
+    mutate_preview(ordinary, "require('fs').renameSync('/activity-previews/store.unavailable','/activity-previews/store.json')")
+    wrapper('up'); ready()
+    assert not request('/api/admin/activity-retention', token)['capture']['available']
+    assert inspect_preview(ordinary, "const fs=require('fs');if(fs.readdirSync('/activity-previews').some(n=>n.endsWith('.enc')))throw Error('last store left ciphertext');console.log(fs.readFileSync('/activity-previews/detach-sentinel','utf8'))") == 'must survive'
+    assert request('/api/audit/'+str(detached['id'])+'/output', token)['state'] == 'expired'
+    policy = request('/api/admin/activity-retention', token)
+    request('/api/admin/activity-retention', token, {'hours':0,'revision':policy['revision']}, method='PUT')
+    policy = request('/api/admin/activity-retention', token)
+    request('/api/admin/activity-retention', token, {'hours':4,'revision':policy['revision']}, method='PUT')
+    print('PASS last store removal: pending on failure, retry deletes ciphertext and preserves sentinel, metadata reconciled, disable succeeds', flush=True)
+    (bundle/'compose.yaml').write_text(mounted_configuration)
+    exec_node('updater', "const fs=await import('node:fs');const p='/state/settings.json',s=JSON.parse(fs.readFileSync(p));s.compose.previewVolume="+json.dumps(ordinary)+";fs.writeFileSync(p,JSON.stringify(s),{mode:384})")
+    wrapper('up'); ready()
     print('PASS ordinary store switch: closed on unavailable old store, physical deletion on retry, sentinel preserved, disable succeeds', flush=True)
     shutil.copy2(root/'scripts/rehearse-wrapper-recovery.mjs', bundle/'rehearse-wrapper-recovery.mjs')
     wrapper('stop')
