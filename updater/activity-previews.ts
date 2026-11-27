@@ -8,6 +8,7 @@ type Run = (file: string, args: string[]) => Promise<string>;
 type Save = (file: string, value: unknown) => void;
 interface StoreBinding { kind: 'compose' | 'checkout'; location: string; storeId: string; mountpoint?: string; retired?: boolean }
 interface PreviewControl { instance: string; epoch: string; stores: StoreBinding[] }
+export function localPreviewRoot(stateDir: string) { return canonical(stateDir) + '.activity-previews'; }
 function controlFile(s: Settings) { return path.join(s.stateDir, 'activity-preview-control.json'); }
 function control(s: Settings, save: Save): PreviewControl {
   const file = controlFile(s);
@@ -76,8 +77,12 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
       }
     }
   }
-  if (s.mode === 'checkout') {
-    const root = s.stateDir + '.activity-previews';
+  if (s.mode !== 'compose') {
+    const root = s.mode === 'runtime' ? localPreviewRoot(s.stateDir) : s.stateDir + '.activity-previews';
+    if (s.mode === 'runtime' && canonical(root) !== root) throw Error('Runtime preview root must be a canonical sibling directory');
+    if (s.mode === 'runtime' && state.stores.some(v => !v.retired && (v.kind !== 'checkout' || v.location !== root))) {
+      throw new PreviewStoreSwitchError('Previous preview storage must be retired before activating a different store.');
+    }
     const old = state.stores.find(v => v.kind === 'checkout' && v.location === canonical(root));
     if (old && assertOwnedPreviewStore(root, excluded, state.instance).storeId !== old.storeId) throw Error('Bound preview store changed');
     openPreviewStore(root, excluded, state.instance);
@@ -102,6 +107,13 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
     SWITCHBOARD_ACTIVITY_PREVIEW_EXCLUDED_ROOTS: JSON.stringify(excluded),
   };
 }
+export function hasLivePreviewStores(s: Settings): boolean {
+  const file = controlFile(s);
+  if (!fs.existsSync(file)) return false;
+  const state = JSON.parse(fs.readFileSync(file, 'utf8')) as PreviewControl;
+  return state.stores.some(binding => binding.retired !== true);
+}
+
 export function hasRetiredPreviewStores(s: Settings): boolean {
   const file = controlFile(s);
   if (!fs.existsSync(file)) return false;
@@ -111,8 +123,9 @@ export function hasRetiredPreviewStores(s: Settings): boolean {
 export function boundPreviewEnvironment(s: Settings, excluded: string[]): Record<string, string> {
   if (!fs.existsSync(controlFile(s))) return { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
   const state = JSON.parse(fs.readFileSync(controlFile(s), 'utf8')) as PreviewControl;
-  const location = s.mode === 'compose' ? s.compose?.previewVolume : canonical(s.stateDir + '.activity-previews');
-  const binding = state.stores.find(v => v.kind === s.mode && v.location === location);
+  const location = s.mode === 'compose' ? s.compose?.previewVolume
+    : canonical(s.mode === 'runtime' ? localPreviewRoot(s.stateDir) : s.stateDir + '.activity-previews');
+  const binding = state.stores.find(v => v.kind === (s.mode === 'compose' ? 'compose' : 'checkout') && v.location === location);
   if (!binding || binding.retired || state.stores.some(v => v !== binding && !v.retired)) return { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
   return {
     SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: s.mode === 'compose' ? '/activity-previews' : binding.location,

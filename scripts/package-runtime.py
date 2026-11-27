@@ -30,12 +30,13 @@ with tempfile.TemporaryDirectory(prefix='switchboard-runtime-') as tmp:
     node_license = pathlib.Path(a.node).resolve().parent / 'LICENSE' if a.platform == 'win32' else pathlib.Path(a.node).resolve().parent.parent / 'LICENSE'
     if not node_license.exists(): raise SystemExit('Node distribution LICENSE is required')
     shutil.copy2(node_license, license_dir / 'Node-LICENSE')
-    (stage / 'build-info.json').write_text(json.dumps({'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch}))
+    preview_capability = {'activityPreviewStore': 1} if a.platform == 'darwin' else {}
+    (stage / 'build-info.json').write_text(json.dumps({'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch, **preview_capability}))
     # Actual independent dependency-resolution/startup check on the matching runner.
     subprocess.run([str(stage / ('bin/node.exe' if a.platform == 'win32' else 'bin/node')), '--input-type=module', '-e', "await import('./updater/engine.ts');await import('hono');console.log('Independent runtime imports passed')"], cwd=stage, check=True)
     archive = out / f'switchboard-runtime-{a.platform}-{a.arch}.tar.gz'
     with tarfile.open(archive, 'w:gz', format=tarfile.USTAR_FORMAT) as tar:
         for child in sorted(stage.iterdir()): tar.add(child, arcname=child.name, recursive=True)
-    manifest = {'origin': 'tader/switchboard', 'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch, 'archive': archive.name, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}
+    manifest = {'origin': 'tader/switchboard', 'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch, 'archive': archive.name, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(), **preview_capability}
     (out / f'runtime-{a.platform}-{a.arch}.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(archive)

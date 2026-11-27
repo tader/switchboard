@@ -1,4 +1,4 @@
-import { PreviewStoreSwitchError, provisionPreviews, hasRetiredPreviewStores, boundPreviewEnvironment, retirePreviewStores, verifyComposePreviewBacking } from './activity-previews.ts';
+import { PreviewStoreSwitchError, provisionPreviews, hasRetiredPreviewStores, hasLivePreviewStores, localPreviewRoot, boundPreviewEnvironment, retirePreviewStores, verifyComposePreviewBacking } from './activity-previews.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -6,7 +6,7 @@ import net from 'node:net';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { DatabaseSync, backup } from 'node:sqlite';
-import { prepareRuntime, runtimeNode } from './runtime.ts';
+import { prepareRuntime, runtimeNode, runtimeSupportsPreviews } from './runtime.ts';
 import { randomBytes } from 'node:crypto';
 import type { Job } from '../server/updates/control.ts';
 import type { Target } from '../server/updates/releases.ts';
@@ -16,7 +16,7 @@ const UPSTREAM = 'https://github.com/tader/switchboard.git';
 const IMAGE = 'ghcr.io/tader/switchboard@sha256:';
 export interface Settings {
   instance: string; mode: 'checkout' | 'compose' | 'runtime'; dataDir: string; stateDir: string; appUrl: string;
-  initialRelease?: string; env: Record<string, string>; token?: string;
+  initialRelease?: string; runtimePreviewLifecycle?: boolean; env: Record<string, string>; token?: string;
   compose?: { files: string[]; project: string; service: string; directory: string; sourceBuild?: boolean; dataVolume?: string; stateVolume?: string; privateNetwork?: boolean; previewVolume?: string };
 }
 export interface Journal {
@@ -276,11 +276,13 @@ export class Controller {
     if (!child) return false;
     try { process.kill(child.pid, 0); return true; } catch (e: any) { if (e.code === 'ESRCH') return false; throw e; }
   }
-  previewRoot() { return this.s.stateDir + '.activity-previews'; }
-  previewExclusions(release = this.current()) { return [this.s.dataDir, this.s.stateDir, this.s.initialRelease!, release]; }
-  async invalidateOutputs(restoreImage?: string) {
+  previewRoot() { return this.s.mode === 'runtime' ? localPreviewRoot(this.s.stateDir) : this.s.stateDir + '.activity-previews'; }
+  previewExclusions(release = this.current()) {
+    return [this.s.dataDir, this.s.stateDir, this.s.initialRelease!, release, this.current()];
+  }
+  async invalidateOutputs(restoreImage?: string, excluded = this.previewExclusions()) {
     await retirePreviewStores(this.s, this.s.mode === 'compose' ? restoreImage ?? this.journal?.previous ?? await this.identifyStoppedImage() : undefined,
-      this.s.mode === 'compose' ? ['/data', '/state', '/app'] : this.previewExclusions(), command, atomic);
+      this.s.mode === 'compose' ? ['/data', '/state', '/app'] : excluded, command, atomic);
   }
   assertUngatedStartAllowed() {
     if (this.journal && !['succeeded', 'rolled-back', 'failed', 'cancelled'].includes(this.journal.phase)) throw Error('Journal recovery is required before opening the application');
@@ -329,10 +331,30 @@ export class Controller {
     else {
       if (fs.existsSync(path.join(this.s.dataDir, '.server-lock'))) throw Error('Server lock is still held');
       if (this.s.mode === 'runtime') await assertListenAvailable(this.s.env.SWITCHBOARD_HOST ?? '127.0.0.1', Number(this.s.env.SWITCHBOARD_PORT ?? (new URL(this.s.appUrl).port || 8770)));
+      const env = { ...process.env, ...this.s.env };
+      for (const key of Object.keys(env)) {
+        if (/^(SWITCHBOARD|HUB)_ACTIVITY_PREVIEW_/i.test(key)) delete env[key];
+      }
+      const excluded = this.previewExclusions(release);
       let previewEnv: Record<string, string> = { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
-      if (this.s.mode === 'checkout') try { previewEnv = { ...previewEnv, ...await provisionPreviews(this.s, release, this.previewExclusions(release), command, atomic) }; }
-      catch { previewEnv = boundPreviewEnvironment(this.s, this.previewExclusions(release)); }
-      const child = spawn(this.s.mode === 'runtime' ? runtimeNode(release) : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...process.env, ...this.s.env, ...previewEnv, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
+      if (this.s.mode === 'checkout') {
+        try { previewEnv = { ...previewEnv, ...await provisionPreviews(this.s, release, excluded, command, atomic) }; }
+        catch { previewEnv = boundPreviewEnvironment(this.s, excluded); }
+      } else {
+        const supportsPreviews = this.s.runtimePreviewLifecycle === true
+          && process.platform === 'darwin' && runtimeSupportsPreviews(release);
+        if (supportsPreviews) {
+          try { previewEnv = { ...previewEnv, ...await provisionPreviews(this.s, release, excluded, command, atomic) }; }
+          catch (error) {
+            if (error instanceof PreviewStoreSwitchError || hasLivePreviewStores(this.s)) throw error;
+          }
+        } else if (hasLivePreviewStores(this.s)) {
+          // The current supervisor is still capable of retiring the store before
+          // an older release can be selected and run with an older supervisor.
+          await this.invalidateOutputs(undefined, excluded);
+        }
+      }
+      const child = spawn(this.s.mode === 'runtime' ? runtimeNode(release) : process.execPath, ['--disable-warning=ExperimentalWarning', 'server/main.ts'], { cwd: release, env: { ...env, ...previewEnv, SWITCHBOARD_DATA_DIR: this.s.dataDir, SWITCHBOARD_START_GATED: gated ? '1' : '0', SWITCHBOARD_INSTALL_MODE: this.s.mode }, detached: this.s.mode !== 'runtime', stdio: this.s.mode === 'runtime' ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore' });
       this.child = child; child.on('message', message => this.onMessage?.(message));
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       atomic(path.join(this.s.stateDir, 'child.json'), { pid: child.pid }); child.unref();
