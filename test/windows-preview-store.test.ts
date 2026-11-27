@@ -15,7 +15,7 @@ test('native Windows preview store verifies objects and keeps operations bound t
   const parent = path.join(base, 'parent'); fs.mkdirSync(parent);
   const root = path.join(parent, 'previews'), excluded = [path.join(base, 'data'), path.join(base, 'state'), runtime];
   const instance = '11111111-1111-1111-1111-111111111111';
-  const ps = (file: string, code: string) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop';$p=$env:PREVIEW_TEST_PATH;" + code], { env: { ...process.env, PREVIEW_TEST_PATH: file }, encoding: 'utf8' }).trim();
+  const ps = (file: string, code: string) => execFileSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop';$p=$env:PREVIEW_TEST_PATH;" + code], { env: { ...process.env, PREVIEW_TEST_PATH: file }, encoding: 'utf8' }).trim();
   const acl = (file: string) => ps(file, '(Get-Acl -LiteralPath $p).Sddl');
   const restore = (file: string, sddl: string) => ps(file, `$a=Get-Acl -LiteralPath $p;$a.SetSecurityDescriptorSddlForm('${sddl}');Set-Acl -LiteralPath $p -AclObject $a`);
   const broaden = (file: string) => ps(file, "$a=Get-Acl -LiteralPath $p;$sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0');$a.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'));Set-Acl -LiteralPath $p -AclObject $a");
