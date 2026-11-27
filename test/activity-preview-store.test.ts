@@ -26,6 +26,37 @@ test('first publication resumes a verified intent and preserves unrelated entrie
   assert.throws(() => openPreviewStore(foreign, excluded, identity.instance), /identity/);
   assert.equal(fs.existsSync(path.join(foreign, 'store.tmp')), true);
   assert.equal(fs.existsSync(path.join(foreign, 'store.json')), false);
+  const unknown = path.join(tmp, 'unclaimed-partial');
+  withPreviewIO(unknown, true, io => io.write('writing.tmp', 'store.tmp', ''));
+  assert.throws(() => openPreviewStore(unknown, excluded, identity.instance));
+  assert.deepEqual(fs.readdirSync(unknown), ['store.tmp']);
+});
+test('durable creation claim recovers empty and truncated first writes without adopting foreign files', async () => {
+  for (const partial of [undefined, '', '{"version":1,']) {
+    const stateDir = path.join(tmp, 'claim-state-' + (partial?.length ?? 'before-write')), dataDir = stateDir + '-data';
+    fs.mkdirSync(stateDir); fs.mkdirSync(dataDir);
+    const s: Settings = { instance: 'fixture', mode: 'runtime', stateDir, dataDir, initialRelease: path.join(tmp, 'release'), appUrl: 'http://localhost', env: {} };
+    const excluded = [dataDir, stateDir, s.initialRelease!];
+    const file = path.join(stateDir, 'activity-preview-control.json');
+    await assert.rejects(provisionPreviews(s, s.initialRelease!, excluded, async () => '', (file, value: any) => {
+      atomic(file, value);
+      if (value.stores.some((v: any) => v.pending)) throw Error('Interrupted after durable claim');
+    }), /durable claim/);
+    const pending = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const binding = pending.stores[0], root = binding.location;
+    assert.equal(binding.pending, true); assert.equal(binding.retired, true);
+    if (partial !== undefined) withPreviewIO(root, false, io => io.write('writing.tmp', 'store.tmp', partial));
+    fs.writeFileSync(path.join(root, 'sentinel'), 'unrelated');
+    const env = await provisionPreviews(s, s.initialRelease!, excluded, async () => '', atomic);
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(env.SWITCHBOARD_ACTIVITY_PREVIEW_STORE_ID, binding.storeId);
+    assert.equal(env.SWITCHBOARD_ACTIVITY_PREVIEW_EPOCH, pending.epoch);
+    assert.equal(saved.stores[0].pending, undefined); assert.equal(saved.stores[0].retired, false);
+    assert.equal(fs.readFileSync(path.join(root, 'sentinel'), 'utf8'), 'unrelated');
+    const retained = fs.readdirSync(root).filter(name => name.startsWith('unpublished-'));
+    assert.equal(retained.length, partial === undefined ? 0 : 1);
+    if (partial !== undefined) assert.equal(fs.readFileSync(path.join(root, retained[0]), 'utf8'), partial);
+  }
 });
 test('unrecognized nonempty roots survive open and retirement without adoption', () => {
   const root = path.join(tmp, 'unrecognized'); fs.mkdirSync(root, { mode: 0o700 });

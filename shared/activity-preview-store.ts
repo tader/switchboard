@@ -77,22 +77,35 @@ function retireIn(io: PreviewIO, identity: PreviewIdentity) {
   generationFile(io, identity, { generation });
   return generation;
 }
-export function openPreviewStore(root: string, excluded: string[], instance = canonical(excluded[0])): string {
+interface PreviewCreation {
+  storeId?: string;
+  claim?: (identity: PreviewIdentity) => void;
+}
+export function openPreviewStore(root: string, excluded: string[], instance = canonical(excluded[0]), creation: PreviewCreation = {}): string {
+  if (creation.storeId !== undefined && !/^[a-f0-9-]{36}$/.test(creation.storeId)) throw Error('Invalid preview creation binding');
   assertPreviewIsolation(root, excluded);
   return withPreviewIO(root, true, io => {
     if (!io.exists('store.json')) {
+      let identity: PreviewIdentity = { version: 1, instance, location: canonical(root), storeId: creation.storeId ?? randomUUID() };
       if (io.exists('store.tmp')) {
-        // Only a complete, owner-verified intent bound to this installation is recoverable.
-        // A foreign/malformed intent and unrelated entries are never removed or adopted.
-        identityIn(io, root, instance, 'store.tmp');
-        io.publish('store.tmp', 'store.json');
-      } else {
-        if (io.list().length) throw Error('Refusing to adopt a nonempty unrecognized preview directory');
-        const identity: PreviewIdentity = { version: 1, instance, location: canonical(root), storeId: randomUUID() };
-        io.write('store.tmp', 'store.json', JSON.stringify(identity));
+        try {
+          identity = identityIn(io, root, instance, 'store.tmp');
+          if (creation.storeId && identity.storeId !== creation.storeId) throw Error('Preview creation binding changed');
+        } catch (error) {
+          // Only a durable controller claim permits recovering a truncated first write.
+          // Ownership/type/ACL errors and complete foreign identities still fail closed.
+          if (!(error instanceof SyntaxError) || !creation.storeId) throw error;
+          io.publish('store.tmp', 'unpublished-' + randomUUID() + '.tmp');
+        }
+      } else if (!creation.storeId && io.list().length) {
+        throw Error('Refusing to adopt a nonempty unrecognized preview directory');
       }
+      if (!creation.storeId) creation.claim?.(identity); // Persist before the first temporary file can exist.
+      if (io.exists('store.tmp')) io.publish('store.tmp', 'store.json');
+      else io.write('store.tmp', 'store.json', JSON.stringify(identity));
     }
     const identity = identityIn(io, root, instance);
+    if (creation.storeId && identity.storeId !== creation.storeId) throw Error('Preview creation binding changed');
     if (!io.exists('generation.json')) return retireIn(io, identity);
     const state = JSON.parse(io.read('generation.json', 4096));
     if (state.storeId !== identity.storeId || !/^[a-f0-9-]{36}$/.test(state.generation)) throw Error('Invalid preview generation');

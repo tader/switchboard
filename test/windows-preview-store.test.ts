@@ -33,6 +33,19 @@ test('native Windows preview store verifies objects and keeps operations bound t
     assert.deepEqual(m.assertOwnedPreviewStore(pendingRoot, excluded, instance), pending);
     assert.equal(fs.readFileSync(path.join(pendingRoot, 'sentinel'), 'utf8'), 'unrelated');
     assert.equal(fs.existsSync(path.join(pendingRoot, 'store.tmp')), false);
+    for (const partial of [undefined, '', '{"version":1,']) {
+      const interrupted = path.join(parent, 'partial-' + (partial?.length ?? 'before-write'));
+      let claimed: any;
+      assert.throws(() => m.openPreviewStore(interrupted, excluded, instance, { claim: (identity: any) => { claimed = identity; throw Error('simulated interruption'); } }), /simulated interruption/);
+      if (partial !== undefined) withPreviewIO(interrupted, false, (io: any) => io.write('writing.tmp', 'store.tmp', partial));
+      fs.writeFileSync(path.join(interrupted, 'sentinel'), 'unrelated');
+      m.openPreviewStore(interrupted, excluded, instance, { storeId: claimed.storeId });
+      assert.equal(m.assertOwnedPreviewStore(interrupted, excluded, instance).storeId, claimed.storeId);
+      assert.equal(fs.readFileSync(path.join(interrupted, 'sentinel'), 'utf8'), 'unrelated');
+      const retained = fs.readdirSync(interrupted).filter(name => name.startsWith('unpublished-'));
+      assert.equal(retained.length, partial === undefined ? 0 : 1);
+      if (partial !== undefined) assert.equal(fs.readFileSync(path.join(interrupted, retained[0]), 'utf8'), partial);
+    }
     const generation = m.openPreviewStore(root, excluded, instance);
     const identity = m.assertOwnedPreviewStore(root, excluded, instance);
     const name = `preview-${identity.storeId}-22222222-2222-2222-2222-222222222222.enc`;

@@ -6,7 +6,7 @@ import type { Settings } from './engine.ts';
 
 type Run = (file: string, args: string[]) => Promise<string>;
 type Save = (file: string, value: unknown) => void;
-interface StoreBinding { kind: 'compose' | 'checkout'; location: string; storeId: string; mountpoint?: string; retired?: boolean }
+interface StoreBinding { kind: 'compose' | 'checkout'; location: string; storeId: string; mountpoint?: string; retired?: boolean; pending?: boolean }
 interface PreviewControl { instance: string; epoch: string; stores: StoreBinding[] }
 export function localPreviewRoot(stateDir: string) { return canonical(stateDir) + '.activity-previews'; }
 function controlFile(s: Settings) { return path.join(s.stateDir, 'activity-preview-control.json'); }
@@ -88,8 +88,14 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
       throw new PreviewStoreSwitchError('Previous preview storage must be retired before activating a different store.');
     }
     const old = state.stores.find(v => v.kind === 'checkout' && v.location === canonical(root));
-    if (old && assertOwnedPreviewStore(root, excluded, state.instance).storeId !== old.storeId) throw Error('Bound preview store changed');
-    openPreviewStore(root, excluded, state.instance);
+    if (old && !old.pending && assertOwnedPreviewStore(root, excluded, state.instance).storeId !== old.storeId) throw Error('Bound preview store changed');
+    openPreviewStore(root, excluded, state.instance, {
+      storeId: old?.storeId,
+      claim: identity => {
+        state.stores.push({ kind: 'checkout', location: canonical(root), storeId: identity.storeId, pending: true, retired: true });
+        save(controlFile(s), state);
+      },
+    });
     binding = { kind: 'checkout', location: canonical(root), storeId: assertOwnedPreviewStore(root, excluded, state.instance).storeId };
   } else if (s.mode === 'compose' && s.compose?.previewVolume) {
     const mountpoint = await verifyComposePreviewBacking(s, run), volume = s.compose.previewVolume;
@@ -99,7 +105,7 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
     binding = { kind: 'compose', location: volume, storeId: identity.storeId, mountpoint };
   } else return {};
   const existing = state.stores.find(v => v.kind === binding.kind && v.location === binding.location);
-  if (existing) existing.retired = false;
+  if (existing) { existing.retired = false; delete existing.pending; }
   else state.stores.push({ ...binding, retired: false });
   save(controlFile(s), state); // Bind the active store before enabling any writer.
   return {
