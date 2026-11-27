@@ -6,8 +6,9 @@ import type { Settings } from './engine.ts';
 
 type Run = (file: string, args: string[]) => Promise<string>;
 type Save = (file: string, value: unknown) => void;
-interface StoreBinding { kind: 'compose' | 'checkout'; location: string; storeId: string; mountpoint?: string; retired?: boolean }
+interface StoreBinding { kind: 'compose' | 'checkout'; location: string; storeId: string; mountpoint?: string; retired?: boolean; pending?: boolean }
 interface PreviewControl { instance: string; epoch: string; stores: StoreBinding[] }
+export function localPreviewRoot(stateDir: string) { return canonical(stateDir) + '.activity-previews'; }
 function controlFile(s: Settings) { return path.join(s.stateDir, 'activity-preview-control.json'); }
 function control(s: Settings, save: Save): PreviewControl {
   const file = controlFile(s);
@@ -38,13 +39,17 @@ export async function verifyComposePreviewBacking(s: Settings, run: Run) {
 async function composeStore(s: Settings, image: string, run: Run, instance: string, volume: string, operation: 'open' | 'retire', expected?: string) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(volume) || !/^sha256:[a-f0-9]{64}$|^ghcr\.io\/tader\/switchboard@sha256:[a-f0-9]{64}$/.test(image)) throw Error('Fixed preview volume and immutable helper image required');
   // Current controller-owned code, including when the selected rollback image is older.
-  const source = fs.readFileSync(path.join(import.meta.dirname, '../shared/activity-preview-store.ts'), 'utf8');
+  // The Compose helper runs as a data module; inline the local I/O dependency.
+  const io = fs.readFileSync(path.join(import.meta.dirname, '../shared/activity-preview-io.ts'), 'utf8')
+    .replace("import fs from 'node:fs';", '').replace("import path from 'node:path';", '');
+  const source = fs.readFileSync(path.join(import.meta.dirname, '../shared/activity-preview-store.ts'), 'utf8')
+    .replace("import { withPreviewIO, type PreviewIO } from './activity-preview-io.ts';", io);
   const script = [
     "const fs=await import('node:fs');const {stripTypeScriptTypes}=await import('node:module');",
     "const [source,instance,operation,expected]=process.argv.slice(1);const m=await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64'));",
     "const root='/activity-previews',excluded=['/data','/state','/app'];",
-    "if(fs.readdirSync(root).length){const id=m.assertOwnedPreviewStore(root,excluded,instance);if(expected&&id.storeId!==expected)throw Error('Store binding changed');}else{if(expected)throw Error('Bound store is missing');fs.chmodSync(root,448);fs.chownSync(root,1000,1000);}",
-    "process.setgid(1000);process.setuid(1000);m.openPreviewStore(root,excluded,instance);if(operation==='retire')m.invalidatePreviews(root,excluded,instance);console.log(JSON.stringify(m.assertOwnedPreviewStore(root,excluded,instance)));",
+    "const populated=fs.readdirSync(root).length;if(!populated){if(expected)throw Error('Bound store is missing');fs.chmodSync(root,448);fs.chownSync(root,1000,1000);}",
+    "process.setgid(1000);process.setuid(1000);if(populated){const id=m.assertOwnedPreviewStore(root,excluded,instance);if(expected&&id.storeId!==expected)throw Error('Store binding changed');}m.openPreviewStore(root,excluded,instance);if(operation==='retire')m.invalidatePreviews(root,excluded,instance);console.log(JSON.stringify(m.assertOwnedPreviewStore(root,excluded,instance)));",
   ].join('');
   return JSON.parse(await run('docker', ['run', '--rm', '--network=none', '--read-only', '--user', '0:0', '--entrypoint', 'node', '--mount', 'type=volume,src=' + volume + ',dst=/activity-previews', image, '--input-type=module', '-e', script, source, instance, operation, expected ?? '']));
 }
@@ -76,11 +81,21 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
       }
     }
   }
-  if (s.mode === 'checkout') {
-    const root = s.stateDir + '.activity-previews';
+  if (s.mode !== 'compose') {
+    const root = s.mode === 'runtime' ? localPreviewRoot(s.stateDir) : s.stateDir + '.activity-previews';
+    if (s.mode === 'runtime' && canonical(root) !== root) throw Error('Runtime preview root must be a canonical sibling directory');
+    if (s.mode === 'runtime' && state.stores.some(v => !v.retired && (v.kind !== 'checkout' || v.location !== root))) {
+      throw new PreviewStoreSwitchError('Previous preview storage must be retired before activating a different store.');
+    }
     const old = state.stores.find(v => v.kind === 'checkout' && v.location === canonical(root));
-    if (old && assertOwnedPreviewStore(root, excluded, state.instance).storeId !== old.storeId) throw Error('Bound preview store changed');
-    openPreviewStore(root, excluded, state.instance);
+    if (old && !old.pending && assertOwnedPreviewStore(root, excluded, state.instance).storeId !== old.storeId) throw Error('Bound preview store changed');
+    openPreviewStore(root, excluded, state.instance, {
+      storeId: old?.storeId,
+      claim: identity => {
+        state.stores.push({ kind: 'checkout', location: canonical(root), storeId: identity.storeId, pending: true, retired: true });
+        save(controlFile(s), state);
+      },
+    });
     binding = { kind: 'checkout', location: canonical(root), storeId: assertOwnedPreviewStore(root, excluded, state.instance).storeId };
   } else if (s.mode === 'compose' && s.compose?.previewVolume) {
     const mountpoint = await verifyComposePreviewBacking(s, run), volume = s.compose.previewVolume;
@@ -90,7 +105,7 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
     binding = { kind: 'compose', location: volume, storeId: identity.storeId, mountpoint };
   } else return {};
   const existing = state.stores.find(v => v.kind === binding.kind && v.location === binding.location);
-  if (existing) existing.retired = false;
+  if (existing) { existing.retired = false; delete existing.pending; }
   else state.stores.push({ ...binding, retired: false });
   save(controlFile(s), state); // Bind the active store before enabling any writer.
   return {
@@ -102,6 +117,13 @@ export async function provisionPreviews(s: Settings, release: string, excluded: 
     SWITCHBOARD_ACTIVITY_PREVIEW_EXCLUDED_ROOTS: JSON.stringify(excluded),
   };
 }
+export function hasLivePreviewStores(s: Settings): boolean {
+  const file = controlFile(s);
+  if (!fs.existsSync(file)) return false;
+  const state = JSON.parse(fs.readFileSync(file, 'utf8')) as PreviewControl;
+  return state.stores.some(binding => binding.retired !== true);
+}
+
 export function hasRetiredPreviewStores(s: Settings): boolean {
   const file = controlFile(s);
   if (!fs.existsSync(file)) return false;
@@ -111,8 +133,9 @@ export function hasRetiredPreviewStores(s: Settings): boolean {
 export function boundPreviewEnvironment(s: Settings, excluded: string[]): Record<string, string> {
   if (!fs.existsSync(controlFile(s))) return { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
   const state = JSON.parse(fs.readFileSync(controlFile(s), 'utf8')) as PreviewControl;
-  const location = s.mode === 'compose' ? s.compose?.previewVolume : canonical(s.stateDir + '.activity-previews');
-  const binding = state.stores.find(v => v.kind === s.mode && v.location === location);
+  const location = s.mode === 'compose' ? s.compose?.previewVolume
+    : canonical(s.mode === 'runtime' ? localPreviewRoot(s.stateDir) : s.stateDir + '.activity-previews');
+  const binding = state.stores.find(v => v.kind === (s.mode === 'compose' ? 'compose' : 'checkout') && v.location === location);
   if (!binding || binding.retired || state.stores.some(v => v !== binding && !v.retired)) return { SWITCHBOARD_ACTIVITY_PREVIEW_RESTORE_SAFE: '0' };
   return {
     SWITCHBOARD_ACTIVITY_PREVIEW_ROOT: s.mode === 'compose' ? '/activity-previews' : binding.location,

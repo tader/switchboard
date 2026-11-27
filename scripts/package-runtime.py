@@ -16,6 +16,11 @@ with tempfile.TemporaryDirectory(prefix='switchboard-runtime-') as tmp:
     stage = pathlib.Path(tmp) / 'runtime'; stage.mkdir()
     for name in ['server', 'plugins', 'docs', 'updater', 'shared']:
         shutil.copytree(root / name, stage / name, symlinks=False)
+    if a.platform == 'win32':
+        adapter = root / 'native/activity-preview-store/build/Release/preview_store.node'
+        if not adapter.is_file(): raise SystemExit('Build the Windows preview filesystem adapter on the matching runner first')
+        target = stage / 'native/activity-preview-store/build/Release/preview_store.node'
+        target.parent.mkdir(parents=True); shutil.copy2(adapter, target)
     shutil.copytree(root / 'web/dist', stage / 'web/dist')
     for name in ['package.json', 'package-lock.json']:
         shutil.copy2(root / name, stage / name)
@@ -30,12 +35,16 @@ with tempfile.TemporaryDirectory(prefix='switchboard-runtime-') as tmp:
     node_license = pathlib.Path(a.node).resolve().parent / 'LICENSE' if a.platform == 'win32' else pathlib.Path(a.node).resolve().parent.parent / 'LICENSE'
     if not node_license.exists(): raise SystemExit('Node distribution LICENSE is required')
     shutil.copy2(node_license, license_dir / 'Node-LICENSE')
-    (stage / 'build-info.json').write_text(json.dumps({'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch}))
+    preview_capability = {'activityPreviewStore': 1}
+    (stage / 'build-info.json').write_text(json.dumps({'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch, **preview_capability}))
     # Actual independent dependency-resolution/startup check on the matching runner.
     subprocess.run([str(stage / ('bin/node.exe' if a.platform == 'win32' else 'bin/node')), '--input-type=module', '-e', "await import('./updater/engine.ts');await import('hono');console.log('Independent runtime imports passed')"], cwd=stage, check=True)
+    if a.platform == 'win32':
+        # Exercise the packaged binary, not the build-tree copy, before advertising readiness.
+        subprocess.run([str(stage / 'bin/node.exe'), '--input-type=module', '-e', "const {createRequire}=await import('node:module');createRequire(import.meta.url)('./native/activity-preview-store/build/Release/preview_store.node');console.log('Packaged preview adapter loaded')"], cwd=stage, check=True)
     archive = out / f'switchboard-runtime-{a.platform}-{a.arch}.tar.gz'
     with tarfile.open(archive, 'w:gz', format=tarfile.USTAR_FORMAT) as tar:
         for child in sorted(stage.iterdir()): tar.add(child, arcname=child.name, recursive=True)
-    manifest = {'origin': 'tader/switchboard', 'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch, 'archive': archive.name, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}
+    manifest = {'origin': 'tader/switchboard', 'version': version, 'revision': a.revision, 'protocol': 1, 'platform': a.platform, 'arch': a.arch, 'archive': archive.name, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(), **preview_capability}
     (out / f'runtime-{a.platform}-{a.arch}.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(archive)

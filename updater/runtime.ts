@@ -4,6 +4,12 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { x as extract } from 'tar';
 export const runtimeNode = (root: string) => path.join(root, 'bin', process.platform === 'win32' ? 'node.exe' : 'node');
+export function runtimeSupportsPreviews(root: string): boolean {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, 'build-info.json'), 'utf8')).activityPreviewStore === 1;
+  } catch { return false; }
+}
+
 import type { Target } from '../server/updates/releases.ts';
 
 export interface RuntimeManifest { origin: 'tader/switchboard'; version: string; revision: string; protocol: 1; platform: 'darwin' | 'win32'; arch: 'arm64' | 'x64'; archive: string; sha256: string }

@@ -1,0 +1,1 @@
+{"targets":[{"target_name":"preview_store","sources":["store.cc"],"libraries":["Advapi32.lib"],"defines":["NAPI_VERSION=8","NOMINMAX","WIN32_LEAN_AND_MEAN"],"msvs_settings":{"VCCLCompilerTool":{"ExceptionHandling":1,"AdditionalOptions":["/std:c++17"]}}}]}

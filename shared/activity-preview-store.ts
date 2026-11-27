@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { withPreviewIO, type PreviewIO } from './activity-preview-io.ts';
 
 export interface PreviewIdentity { version: 1; instance: string; location: string; storeId: string }
 const uuid = '[a-f0-9-]{36}';
@@ -21,71 +22,98 @@ export function syncDirectory(root: string) {
   if (process.platform === 'win32') return;
   const fd = fs.openSync(root, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
-function readJson(file: string) {
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    if (!fs.fstatSync(fd).isFile() || fs.fstatSync(fd).size > 4096) throw Error('Invalid preview marker');
-    return JSON.parse(fs.readFileSync(fd, 'utf8'));
-  } finally { fs.closeSync(fd); }
-}
-export function assertOwnedPreviewStore(root: string, excluded: string[], instance = canonical(excluded[0])): PreviewIdentity {
-  assertPreviewIsolation(root, excluded);
-  const stat = fs.statSync(root), marker = path.join(root, 'store.json');
-  const identity = readJson(marker) as PreviewIdentity;
-  if (stat.mode & 0o077 || fs.lstatSync(marker).uid !== stat.uid || identity.version !== 1 || identity.instance !== instance || identity.location !== canonical(root) || !/^[a-f0-9-]{36}$/.test(identity.storeId)) throw Error('Preview store identity mismatch');
+function identityIn(io: PreviewIO, root: string, instance: string, marker = 'store.json'): PreviewIdentity {
+  const identity = JSON.parse(io.read(marker, 4096)) as PreviewIdentity;
+  if (identity.version !== 1 || identity.instance !== instance || identity.location !== canonical(root) || !/^[a-f0-9-]{36}$/.test(identity.storeId)) throw Error('Preview store identity mismatch');
   return identity;
 }
-export function previewGeneration(root: string, excluded: string[], instance = canonical(excluded[0])) {
-  const identity = assertOwnedPreviewStore(root, excluded, instance);
-  const state = readJson(path.join(root, 'generation.json'));
-  if (state.storeId !== identity.storeId || !/^[a-f0-9-]{36}$/.test(state.generation)) throw Error('Invalid preview generation');
-  return { ...state, identity } as { generation: string; retiring?: boolean; identity: PreviewIdentity };
+function owned<T>(root: string, excluded: string[], instance: string, operation: (io: PreviewIO, identity: PreviewIdentity) => T): T {
+  assertPreviewIsolation(root, excluded);
+  return withPreviewIO(root, false, io => operation(io, identityIn(io, root, instance)));
 }
-function generationFile(root: string, identity: PreviewIdentity, value: { generation: string; retiring?: boolean }) {
-  const temp = path.join(root, 'generation.tmp');
-  const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW, 0o600);
-  try { fs.writeFileSync(fd, JSON.stringify({ ...value, storeId: identity.storeId })); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  fs.renameSync(temp, path.join(root, 'generation.json')); syncDirectory(root);
+export function assertOwnedPreviewStore(root: string, excluded: string[], instance = canonical(excluded[0])): PreviewIdentity {
+  return owned(root, excluded, instance, (_io, identity) => identity);
+}
+export function previewGeneration(root: string, excluded: string[], instance = canonical(excluded[0])) {
+  return owned(root, excluded, instance, (io, identity) => {
+    const state = JSON.parse(io.read('generation.json', 4096));
+    if (state.storeId !== identity.storeId || !/^[a-f0-9-]{36}$/.test(state.generation)) throw Error('Invalid preview generation');
+    return { ...state, identity } as { generation: string; retiring?: boolean; identity: PreviewIdentity };
+  });
+}
+function generationFile(io: PreviewIO, identity: PreviewIdentity, value: { generation: string; retiring?: boolean }) {
+  io.write('generation.tmp', 'generation.json', JSON.stringify({ ...value, storeId: identity.storeId }), true);
+}
+function recognized(name: string, identity: PreviewIdentity) {
+  if (!(previewFilePattern.test(name) && name.startsWith('preview-' + identity.storeId + '-')) && name !== 'generation.tmp') throw Error('Unrecognized preview file');
+}
+/** Every Windows operation holds the verified directory and file handles until completion. */
+export function readPreviewFile(root: string, name: string, excluded: string[], instance: string, storeId: string, limit: number) {
+  return owned(root, excluded, instance, (io, identity) => {
+    if (identity.storeId !== storeId) throw Error('Preview store binding changed');
+    recognized(name, identity); return io.read(name, limit);
+  });
+}
+export function writePreviewFile(root: string, name: string, value: string, excluded: string[], instance: string, storeId: string) {
+  return owned(root, excluded, instance, (io, identity) => {
+    if (identity.storeId !== storeId) throw Error('Preview store binding changed');
+    recognized(name, identity); io.write(name + '.tmp', name, value);
+  });
+}
+export function listPreviewFiles(root: string, excluded: string[], instance: string) {
+  return owned(root, excluded, instance, io => io.list());
+}
+export function previewFileExists(root: string, name: string, excluded: string[], instance: string) {
+  return owned(root, excluded, instance, (io, identity) => { recognized(name, identity); return io.exists(name); });
 }
 /** Only recognized regular files in a verified store are ours to remove. Never recurse. */
 export function removePreviewFile(root: string, name: string, excluded: string[], instance = canonical(excluded[0])) {
-  const identity = assertOwnedPreviewStore(root, excluded, instance);
-  if (!(previewFilePattern.test(name) && name.startsWith('preview-' + identity.storeId + '-')) && name !== 'generation.tmp') throw Error('Unrecognized preview file');
-  const file = path.join(root, name);
-  try {
-    if (!fs.lstatSync(file).isFile()) throw Error('Preview file is not a regular file');
-    fs.unlinkSync(file);
-  } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
+  return owned(root, excluded, instance, (io, identity) => { recognized(name, identity); io.remove(name); });
 }
-function retire(root: string, excluded: string[], instance: string) {
-  const identity = assertOwnedPreviewStore(root, excluded, instance);
+function retireIn(io: PreviewIO, identity: PreviewIdentity) {
   const generation = randomUUID();
-  generationFile(root, identity, { generation, retiring: true });
-  for (const name of fs.readdirSync(root)) if (previewFilePattern.test(name) && name.startsWith('preview-' + identity.storeId + '-')) removePreviewFile(root, name, excluded, instance);
-  syncDirectory(root);
-  generationFile(root, identity, { generation });
+  generationFile(io, identity, { generation, retiring: true });
+  for (const name of io.list()) if (previewFilePattern.test(name) && name.startsWith('preview-' + identity.storeId + '-')) io.remove(name);
+  generationFile(io, identity, { generation });
   return generation;
 }
-export function openPreviewStore(root: string, excluded: string[], instance = canonical(excluded[0])): string {
+interface PreviewCreation {
+  storeId?: string;
+  claim?: (identity: PreviewIdentity) => void;
+}
+export function openPreviewStore(root: string, excluded: string[], instance = canonical(excluded[0]), creation: PreviewCreation = {}): string {
+  if (creation.storeId !== undefined && !/^[a-f0-9-]{36}$/.test(creation.storeId)) throw Error('Invalid preview creation binding');
   assertPreviewIsolation(root, excluded);
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  const stat = fs.statSync(root);
-  if (process.platform === 'win32' || stat.mode & 0o077 || stat.uid !== process.getuid?.()) throw Error('Owner-private preview storage required');
-  const marker = path.join(root, 'store.json');
-  if (!fs.existsSync(marker)) {
-    if (fs.readdirSync(root).length) throw Error('Refusing to adopt a nonempty unrecognized preview directory');
-    const identity: PreviewIdentity = { version: 1, instance, location: canonical(root), storeId: randomUUID() };
-    const fd = fs.openSync(marker, 'wx', 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify(identity)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    syncDirectory(root);
-  }
-  assertOwnedPreviewStore(root, excluded, instance);
-  if (!fs.existsSync(path.join(root, 'generation.json'))) return retire(root, excluded, instance);
-  const state = previewGeneration(root, excluded, instance);
-  return state.retiring ? retire(root, excluded, instance) : state.generation;
+  return withPreviewIO(root, true, io => {
+    if (!io.exists('store.json')) {
+      let identity: PreviewIdentity = { version: 1, instance, location: canonical(root), storeId: creation.storeId ?? randomUUID() };
+      if (io.exists('store.tmp')) {
+        try {
+          identity = identityIn(io, root, instance, 'store.tmp');
+          if (creation.storeId && identity.storeId !== creation.storeId) throw Error('Preview creation binding changed');
+        } catch (error) {
+          // Only a durable controller claim permits recovering a truncated first write.
+          // Ownership/type/ACL errors and complete foreign identities still fail closed.
+          if (!(error instanceof SyntaxError) || !creation.storeId) throw error;
+          io.publish('store.tmp', 'unpublished-' + randomUUID() + '.tmp');
+        }
+      } else if (!creation.storeId && io.list().length) {
+        throw Error('Refusing to adopt a nonempty unrecognized preview directory');
+      }
+      if (!creation.storeId) creation.claim?.(identity); // Persist before the first temporary file can exist.
+      if (io.exists('store.tmp')) io.publish('store.tmp', 'store.json');
+      else io.write('store.tmp', 'store.json', JSON.stringify(identity));
+    }
+    const identity = identityIn(io, root, instance);
+    if (creation.storeId && identity.storeId !== creation.storeId) throw Error('Preview creation binding changed');
+    if (!io.exists('generation.json')) return retireIn(io, identity);
+    const state = JSON.parse(io.read('generation.json', 4096));
+    if (state.storeId !== identity.storeId || !/^[a-f0-9-]{36}$/.test(state.generation)) throw Error('Invalid preview generation');
+    return state.retiring ? retireIn(io, identity) : state.generation;
+  });
 }
 /** Writer stopped; verified identity required before retirement, including interrupted restores. */
 export function invalidatePreviews(root: string, excluded: string[], instance = canonical(excluded[0])) {
   openPreviewStore(root, excluded, instance);
-  return retire(root, excluded, instance);
+  return owned(root, excluded, instance, (io, identity) => retireIn(io, identity));
 }

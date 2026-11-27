@@ -6,7 +6,7 @@ import { all, db, one, run } from './db.ts';
 import { encrypt, decrypt } from './crypto.ts';
 import { badRequest, notFound, HttpError } from './http.ts';
 import type { OutputPreviewRule } from './plugins/api.ts';
-import { openPreviewStore, syncDirectory, previewGeneration, removePreviewFile, previewFilePattern, assertOwnedPreviewStore } from '../shared/activity-preview-store.ts';
+import { openPreviewStore, syncDirectory, previewGeneration, removePreviewFile, previewFilePattern, assertOwnedPreviewStore, readPreviewFile, writePreviewFile, listPreviewFiles, previewFileExists } from '../shared/activity-preview-store.ts';
 
 export const OUTPUT_LIMIT = 16 * 1024;
 let store: { root: string; generation: string; excluded: string[]; instance: string; storeId: string } | undefined;
@@ -59,7 +59,7 @@ export function sweepOutputs(time = Date.now()) {
     removePreviewFile(store.root, path.basename(file(row.capture_id)), store.excluded, store.instance);
     run('DELETE FROM audit_output_unlinks WHERE capture_id = ?', row.capture_id);
   }
-  for (const name of fs.readdirSync(store.root)) {
+  for (const name of listPreviewFiles(store.root, store.excluded, store.instance)) {
     const match = name.match(previewFilePattern);
     if (!match || match[1] !== store.storeId) continue; // Unknown sentinels/directories are never ours to delete.
     const capture = match[2];
@@ -68,7 +68,7 @@ export function sweepOutputs(time = Date.now()) {
     }
   }
   // Missing files also revoke metadata (including files removed outside the app).
-  for (const r of all('SELECT audit_id, capture_id FROM audit_outputs')) if (!fs.existsSync(file(r.capture_id))) {
+  for (const r of all('SELECT audit_id, capture_id FROM audit_outputs')) if (!previewFileExists(store.root, path.basename(file(r.capture_id)), store.excluded, store.instance)) {
     run("UPDATE audit_log SET output_state = 'unavailable' WHERE id = ?", r.audit_id);
     run('DELETE FROM audit_outputs WHERE audit_id = ?', r.audit_id);
   }
@@ -129,12 +129,9 @@ export function readOutput(userId: string, id: number, payload: boolean, time = 
   try {
     // Even status checks verify the file/generation; never decrypt for status.
     const location = file(r.capture_id);
-    const fd = fs.openSync(location, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    let bound: any;
-    try {
-      if (!fs.fstatSync(fd).isFile() || fs.fstatSync(fd).size > OUTPUT_LIMIT * 2 + 2048) throw Error('Invalid preview');
-      if (payload) bound = decrypt(fs.readFileSync(fd, 'utf8'));
-    } finally { fs.closeSync(fd); }
+    if (!store) throw Error('Preview storage unavailable');
+    const ciphertext = readPreviewFile(store.root, path.basename(location), store.excluded, store.instance, store.storeId, OUTPUT_LIMIT * 2 + 2048);
+    const bound = payload ? decrypt(ciphertext) : undefined;
     const decisionAt = Math.max(time, Date.now());
     const checked = outputMetadata(userId, id, decisionAt);
     if (checked.state !== 'retained' || checked.captureId !== meta.captureId) return { ...checked, decisionAt };
@@ -183,10 +180,8 @@ export function observeOutput(response: Response, id: number, owner: string, rul
         const preview = projectOutput(Buffer.concat(chunks), rule, secrets);
         if (!preview || outputPolicy().revision !== policy.revision || !one('SELECT 1 FROM audit_log WHERE id = ? AND user_id = ? AND output_nonce = ?', id, owner, nonce) || store?.generation !== generation) return;
         const capturedAt = Date.now();
-        const destination = file(captureId), temp = destination + '.tmp';
-        const fd = fs.openSync(temp, 'wx', 0o600);
-        try { fs.writeFileSync(fd, encrypt({ preview, owner, auditId: id, captureId, generation })); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        fs.renameSync(temp, destination); syncDirectory(store.root);
+        const destination = file(captureId);
+        writePreviewFile(store.root, path.basename(destination), encrypt({ preview, owner, auditId: id, captureId, generation }), store.excluded, store.instance, store.storeId);
         transaction(() => {
           if (outputPolicy().revision !== policy.revision) return;
           run('INSERT INTO audit_outputs VALUES(?,?,?,?,?)', id, captureId, generation, capturedAt, capturedAt + policy.hours * 3600_000);
