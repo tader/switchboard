@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process';
 test('native Windows preview store verifies objects and keeps operations bound to handles', { skip: process.platform !== 'win32' }, async () => {
   const runtime = path.resolve(process.env.SWITCHBOARD_TEST_RUNTIME ?? import.meta.dirname + '/..');
   const m = await import(pathToFileURL(path.join(runtime, 'shared/activity-preview-store.ts')).href);
+  const { withPreviewIO } = await import(pathToFileURL(path.join(runtime, 'shared/activity-preview-io.ts')).href);
   const adapter = createRequire(import.meta.url)(path.join(runtime, 'native/activity-preview-store/build/Release/preview_store.node'));
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'preview-ntfs-'));
   const parent = path.join(base, 'parent'); fs.mkdirSync(parent);
@@ -20,6 +21,18 @@ test('native Windows preview store verifies objects and keeps operations bound t
   const restore = (file: string, sddl: string) => ps(file, `$a=Get-Acl -LiteralPath $p;$a.SetSecurityDescriptorSddlForm('${sddl}');Set-Acl -LiteralPath $p -AclObject $a`);
   const broaden = (file: string) => ps(file, "$a=Get-Acl -LiteralPath $p;$sid=[System.Security.Principal.SecurityIdentifier]::new('S-1-1-0');$a.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'));Set-Acl -LiteralPath $p -AclObject $a");
   try {
+    const pendingRoot = path.join(parent, 'pending');
+    const pending = { version: 1, instance, location: m.canonical(pendingRoot), storeId: '33333333-3333-3333-3333-333333333333' };
+    withPreviewIO(pendingRoot, true, (io: any) => io.write('writing.tmp', 'store.tmp', JSON.stringify(pending)));
+    fs.writeFileSync(path.join(pendingRoot, 'sentinel'), 'unrelated');
+    const pendingAcl = acl(path.join(pendingRoot, 'store.tmp'));
+    broaden(path.join(pendingRoot, 'store.tmp'));
+    assert.throws(() => m.openPreviewStore(pendingRoot, excluded, instance));
+    restore(path.join(pendingRoot, 'store.tmp'), pendingAcl);
+    m.openPreviewStore(pendingRoot, excluded, instance);
+    assert.deepEqual(m.assertOwnedPreviewStore(pendingRoot, excluded, instance), pending);
+    assert.equal(fs.readFileSync(path.join(pendingRoot, 'sentinel'), 'utf8'), 'unrelated');
+    assert.equal(fs.existsSync(path.join(pendingRoot, 'store.tmp')), false);
     const generation = m.openPreviewStore(root, excluded, instance);
     const identity = m.assertOwnedPreviewStore(root, excluded, instance);
     const name = `preview-${identity.storeId}-22222222-2222-2222-2222-222222222222.enc`;

@@ -6,9 +6,27 @@ import path from 'node:path';
 import { openPreviewStore, invalidatePreviews } from '../shared/activity-preview-store.ts';
 import { provisionPreviews, retirePreviewStores, validatePreviewVolumeBacking } from '../updater/activity-previews.ts';
 import { atomic, type Settings } from '../updater/engine.ts';
+import { withPreviewIO } from '../shared/activity-preview-io.ts';
+import { canonical, assertOwnedPreviewStore } from '../shared/activity-preview-store.ts';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'preview-store-'));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+test('first publication resumes a verified intent and preserves unrelated entries', () => {
+  const root = path.join(tmp, 'interrupted-publication'), excluded = [path.join(tmp, 'data')];
+  const identity = { version: 1, instance: 'fixture-instance', location: canonical(root), storeId: '11111111-1111-1111-1111-111111111111' };
+  withPreviewIO(root, true, io => io.write('writing.tmp', 'store.tmp', JSON.stringify(identity)));
+  fs.writeFileSync(path.join(root, 'sentinel'), 'unrelated');
+  const generation = openPreviewStore(root, excluded, identity.instance);
+  assert.deepEqual(assertOwnedPreviewStore(root, excluded, identity.instance), identity);
+  assert.equal(openPreviewStore(root, excluded, identity.instance), generation);
+  assert.equal(fs.existsSync(path.join(root, 'store.tmp')), false);
+  assert.equal(fs.readFileSync(path.join(root, 'sentinel'), 'utf8'), 'unrelated');
+  const foreign = path.join(tmp, 'foreign-intent');
+  withPreviewIO(foreign, true, io => io.write('writing.tmp', 'store.tmp', JSON.stringify(identity)));
+  assert.throws(() => openPreviewStore(foreign, excluded, identity.instance), /identity/);
+  assert.equal(fs.existsSync(path.join(foreign, 'store.tmp')), true);
+  assert.equal(fs.existsSync(path.join(foreign, 'store.json')), false);
+});
 test('unrecognized nonempty roots survive open and retirement without adoption', () => {
   const root = path.join(tmp, 'unrecognized'); fs.mkdirSync(root, { mode: 0o700 });
   fs.writeFileSync(path.join(root, 'sentinel'), 'unrelated');

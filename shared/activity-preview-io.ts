@@ -7,6 +7,7 @@ interface WindowsAdapter {
   close(handle: unknown): void;
   read(handle: unknown, name: string, limit: number): Buffer;
   write(handle: unknown, temp: string, target: string, bytes: Buffer, replace: boolean): void;
+  publish(handle: unknown, temp: string, target: string): void;
   remove(handle: unknown, name: string): void;
   list(handle: unknown): string[];
 }
@@ -16,6 +17,7 @@ export interface PreviewIO {
   exists(name: string): boolean;
   list(): string[];
   write(temp: string, target: string, value: string, replace?: boolean): void;
+  publish(temp: string, target: string): void;
   remove(name: string): void;
 }
 export function withPreviewIO<T>(root: string, create: boolean, operation: (io: PreviewIO) => T): T {
@@ -28,6 +30,7 @@ export function withPreviewIO<T>(root: string, create: boolean, operation: (io: 
       exists: name => { try { adapter.read(handle, name, 65536); return true; } catch (e: any) { if (e.code === 'ENOENT') return false; throw e; } },
       list: () => adapter.list(handle),
       write: (temp, target, value, replace = false) => adapter.write(handle, temp, target, Buffer.from(value), replace),
+      publish: (temp, target) => adapter.publish(handle, temp, target),
       remove: name => adapter.remove(handle, name),
     };
     try { return operation(io); } finally { adapter.close(handle); }
@@ -50,6 +53,13 @@ export function withPreviewIO<T>(root: string, create: boolean, operation: (io: 
     },
     exists: name => fs.existsSync(location(name)),
     list: () => fs.readdirSync(root),
+    publish(temp, target) {
+      // Validate the staged object before publishing it. Never replace an existing marker.
+      io.read(temp, 4096);
+      fs.linkSync(location(temp), location(target));
+      fs.unlinkSync(location(temp));
+      const dir = fs.openSync(root, 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
+    },
     write(temp, target, value, replace = false) {
       const fd = fs.openSync(location(temp), fs.constants.O_WRONLY | fs.constants.O_CREAT | (replace ? fs.constants.O_TRUNC : fs.constants.O_EXCL) | fs.constants.O_NOFOLLOW, 0o600);
       try { fs.writeFileSync(fd, value); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }

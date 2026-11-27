@@ -22,8 +22,8 @@ export function syncDirectory(root: string) {
   if (process.platform === 'win32') return;
   const fd = fs.openSync(root, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
-function identityIn(io: PreviewIO, root: string, instance: string): PreviewIdentity {
-  const identity = JSON.parse(io.read('store.json', 4096)) as PreviewIdentity;
+function identityIn(io: PreviewIO, root: string, instance: string, marker = 'store.json'): PreviewIdentity {
+  const identity = JSON.parse(io.read(marker, 4096)) as PreviewIdentity;
   if (identity.version !== 1 || identity.instance !== instance || identity.location !== canonical(root) || !/^[a-f0-9-]{36}$/.test(identity.storeId)) throw Error('Preview store identity mismatch');
   return identity;
 }
@@ -81,9 +81,16 @@ export function openPreviewStore(root: string, excluded: string[], instance = ca
   assertPreviewIsolation(root, excluded);
   return withPreviewIO(root, true, io => {
     if (!io.exists('store.json')) {
-      if (io.list().length) throw Error('Refusing to adopt a nonempty unrecognized preview directory');
-      const identity: PreviewIdentity = { version: 1, instance, location: canonical(root), storeId: randomUUID() };
-      io.write('store.tmp', 'store.json', JSON.stringify(identity));
+      if (io.exists('store.tmp')) {
+        // Only a complete, owner-verified intent bound to this installation is recoverable.
+        // A foreign/malformed intent and unrelated entries are never removed or adopted.
+        identityIn(io, root, instance, 'store.tmp');
+        io.publish('store.tmp', 'store.json');
+      } else {
+        if (io.list().length) throw Error('Refusing to adopt a nonempty unrecognized preview directory');
+        const identity: PreviewIdentity = { version: 1, instance, location: canonical(root), storeId: randomUUID() };
+        io.write('store.tmp', 'store.json', JSON.stringify(identity));
+      }
     }
     const identity = identityIn(io, root, instance);
     if (!io.exists('generation.json')) return retireIn(io, identity);

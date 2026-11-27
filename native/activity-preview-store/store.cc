@@ -183,6 +183,19 @@ napi_value Read(napi_env env, napi_callback_info info) { return call(env, [&] {
 napi_value Remove(napi_env env, napi_callback_info info) { return call(env, [&] {
   auto a = args(env, info, 2); store(env, a[0])->remove(string(env, a[1])); return undefined(env);
 }); }
+void publish(Store* s, HANDLE handle, const std::wstring& target) {
+  auto destination = s->file(target); DWORD size = static_cast<DWORD>(sizeof(FILE_RENAME_INFO) + destination.size() * sizeof(wchar_t));
+  std::vector<char> buffer(size, 0); auto rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
+  rename->ReplaceIfExists = FALSE; rename->FileNameLength = static_cast<DWORD>(destination.size() * sizeof(wchar_t));
+  memcpy(rename->FileName, destination.data(), rename->FileNameLength);
+  check(SetFileInformationByHandle(handle, FileRenameInfo, rename, size), "Cannot publish preview");
+  check(FlushFileBuffers(handle), "Cannot flush published preview");
+}
+napi_value Publish(napi_env env, napi_callback_info info) { return call(env, [&] {
+  auto a = args(env, info, 3); auto s = store(env, a[0]);
+  auto h = s->open(string(env, a[1]), GENERIC_READ | GENERIC_WRITE | DELETE);
+  publish(s, h->value, string(env, a[2])); return undefined(env);
+}); }
 napi_value Write(napi_env env, napi_callback_info info) { return call(env, [&] {
   auto a = args(env, info, 5); auto s = store(env, a[0]); auto temp = string(env, a[1]), target = string(env, a[2]);
   bool replace; napiCheck(napi_get_value_bool(env, a[4], &replace));
@@ -195,12 +208,7 @@ napi_value Write(napi_env env, napi_callback_info info) { return call(env, [&] {
   check(FlushFileBuffers(h->value), "Cannot flush preview");
   // Delete only an opened and verified destination. A crash in this gap fails closed.
   if (replace) s->remove(target);
-  auto destination = s->file(target); DWORD size = static_cast<DWORD>(sizeof(FILE_RENAME_INFO) + destination.size() * sizeof(wchar_t));
-  std::vector<char> buffer(size, 0); auto rename = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
-  rename->ReplaceIfExists = FALSE; rename->FileNameLength = static_cast<DWORD>(destination.size() * sizeof(wchar_t));
-  memcpy(rename->FileName, destination.data(), rename->FileNameLength);
-  check(SetFileInformationByHandle(h->value, FileRenameInfo, rename, size), "Cannot publish preview");
-  check(FlushFileBuffers(h->value), "Cannot flush published preview");
+  publish(s, h->value, target);
   return undefined(env);
 }); }
 napi_value List(napi_env env, napi_callback_info info) { return call(env, [&] {
@@ -226,6 +234,7 @@ napi_value Init(napi_env env, napi_value exports) {
     {"open",0,Open,0,0,0,napi_default,0}, {"close",0,Close,0,0,0,napi_default,0},
     {"read",0,Read,0,0,0,napi_default,0}, {"write",0,Write,0,0,0,napi_default,0},
     {"remove",0,Remove,0,0,0,napi_default,0}, {"list",0,List,0,0,0,napi_default,0}
+    ,{"publish",0,Publish,0,0,0,napi_default,0}
   };
   napi_define_properties(env, exports, sizeof(methods)/sizeof(methods[0]), methods); return exports;
 }
