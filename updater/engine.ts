@@ -342,7 +342,7 @@ export class Controller {
         catch { previewEnv = boundPreviewEnvironment(this.s, excluded); }
       } else {
         const supportsPreviews = this.s.runtimePreviewLifecycle === true
-          && process.platform === 'darwin' && runtimeSupportsPreviews(release);
+          && ['darwin', 'win32'].includes(process.platform) && runtimeSupportsPreviews(release);
         if (supportsPreviews) {
           try { previewEnv = { ...previewEnv, ...await provisionPreviews(this.s, release, excluded, command, atomic) }; }
           catch (error) {

@@ -56,6 +56,10 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix web
       - run: npm run build --prefix web
+      - name: Build native preview adapter
+        run: npm exec --yes --package=node-gyp@13.1.0 -- node-gyp rebuild --directory native/activity-preview-store
+      - name: Verify native preview storage
+        run: node --test test/windows-preview-store.test.ts
       - name: Download verified runtime Node
         shell: pwsh
         run: |
@@ -72,6 +76,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/prepared" | Out-Null
           tar -xzf artifacts/switchboard-runtime-win32-${{ matrix.arch }}.tar.gz -C "$env:RUNNER_TEMP/prepared"
+          $env:SWITCHBOARD_TEST_RUNTIME = "$env:RUNNER_TEMP/prepared"
+          node --test test/windows-preview-store.test.ts
+          if ($LASTEXITCODE) { throw 'Packaged preview adapter verification failed' }
           node scripts/rehearse-local-manager.ts "$env:RUNNER_TEMP/prepared"
           if ($LASTEXITCODE) { throw 'Runtime lifecycle rehearsal failed' }
           node scripts/rehearse-windows-browser.ts

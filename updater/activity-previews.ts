@@ -39,13 +39,17 @@ export async function verifyComposePreviewBacking(s: Settings, run: Run) {
 async function composeStore(s: Settings, image: string, run: Run, instance: string, volume: string, operation: 'open' | 'retire', expected?: string) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(volume) || !/^sha256:[a-f0-9]{64}$|^ghcr\.io\/tader\/switchboard@sha256:[a-f0-9]{64}$/.test(image)) throw Error('Fixed preview volume and immutable helper image required');
   // Current controller-owned code, including when the selected rollback image is older.
-  const source = fs.readFileSync(path.join(import.meta.dirname, '../shared/activity-preview-store.ts'), 'utf8');
+  // The Compose helper runs as a data module; inline the local I/O dependency.
+  const io = fs.readFileSync(path.join(import.meta.dirname, '../shared/activity-preview-io.ts'), 'utf8')
+    .replace("import fs from 'node:fs';", '').replace("import path from 'node:path';", '');
+  const source = fs.readFileSync(path.join(import.meta.dirname, '../shared/activity-preview-store.ts'), 'utf8')
+    .replace("import { withPreviewIO, type PreviewIO } from './activity-preview-io.ts';", io);
   const script = [
     "const fs=await import('node:fs');const {stripTypeScriptTypes}=await import('node:module');",
     "const [source,instance,operation,expected]=process.argv.slice(1);const m=await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64'));",
     "const root='/activity-previews',excluded=['/data','/state','/app'];",
-    "if(fs.readdirSync(root).length){const id=m.assertOwnedPreviewStore(root,excluded,instance);if(expected&&id.storeId!==expected)throw Error('Store binding changed');}else{if(expected)throw Error('Bound store is missing');fs.chmodSync(root,448);fs.chownSync(root,1000,1000);}",
-    "process.setgid(1000);process.setuid(1000);m.openPreviewStore(root,excluded,instance);if(operation==='retire')m.invalidatePreviews(root,excluded,instance);console.log(JSON.stringify(m.assertOwnedPreviewStore(root,excluded,instance)));",
+    "const populated=fs.readdirSync(root).length;if(!populated){if(expected)throw Error('Bound store is missing');fs.chmodSync(root,448);fs.chownSync(root,1000,1000);}",
+    "process.setgid(1000);process.setuid(1000);if(populated){const id=m.assertOwnedPreviewStore(root,excluded,instance);if(expected&&id.storeId!==expected)throw Error('Store binding changed');}m.openPreviewStore(root,excluded,instance);if(operation==='retire')m.invalidatePreviews(root,excluded,instance);console.log(JSON.stringify(m.assertOwnedPreviewStore(root,excluded,instance)));",
   ].join('');
   return JSON.parse(await run('docker', ['run', '--rm', '--network=none', '--read-only', '--user', '0:0', '--entrypoint', 'node', '--mount', 'type=volume,src=' + volume + ',dst=/activity-previews', image, '--input-type=module', '-e', script, source, instance, operation, expected ?? '']));
 }
