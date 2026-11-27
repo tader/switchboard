@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/tader/switchboard/compare/v0.17.0...v0.17.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* restore Activity output previews after desktop server updates ([#73](https://github.com/tader/switchboard/issues/73)) ([b3bc7bd](https://github.com/tader/switchboard/commit/b3bc7bd3cf1c4aafbf3432e9cff662eea420d274))
+
 ## [0.17.0](https://github.com/tader/switchboard/compare/v0.16.0...v0.17.0) (2026-11-26)
 
 
